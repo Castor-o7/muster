@@ -23,10 +23,11 @@ tokio-tungstenite = "0.29"
 # Myko stack — pulled from crates.io. Stock (no fork patch): ships the
 # HTTP MCP router (POST /myko/mcp request/response + SSE) and the
 # `mcp::filter` tool-visibility allowlist the pull model relies on.
-myko = "6.5.1"
-myko-macros = "6.5.1"
-myko-server = "6.5.1"
-myko-leptos = "6.5.1"
+# Keep the core and code-generating macros on the same release.
+myko = "=6.8.0"
+myko-macros = "=6.8.0"
+myko-server = "=6.8.0"
+myko-leptos = "=6.8.0"
 hyphae = "3.1.2"
 
 # Local crates. `version` is required so `cargo publish` accepts the
