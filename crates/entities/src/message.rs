@@ -1,7 +1,8 @@
 use myko::myko_item;
 use myko::prelude::{EventPublishing as _, Querying as _, RegistryScoped as _, RequestScoped as _};
 
-use crate::session::SessionId;
+use crate::room::Room;
+use crate::session::{Session, SessionId};
 
 /// Maximum body size placed directly into a model-facing notification.
 ///
@@ -60,7 +61,7 @@ pub struct Message {
     /// Direct recipient — set for 1:1 sends, `None` for broadcasts.
     /// Cascade-DELs the message when the recipient session is DEL'd.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[belongs_to(Session, optional)]
+    #[belongs_to(Session)]
     pub to_session_id: Option<SessionId>,
 
     /// Broadcast recipient — set for room sends, `None` for direct
@@ -68,7 +69,7 @@ pub struct Message {
     /// `everyone` and `host:*` are never DEL'd, so broadcasts to them
     /// effectively persist forever.)
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[belongs_to(Room, optional)]
+    #[belongs_to(Room)]
     pub to_room_id: Option<crate::room::RoomId>,
 
     /// When this direct message was addressed to a *human* — via their operator
