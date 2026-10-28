@@ -255,9 +255,9 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "autosocket"
-version = "6.8.0"
+version = "6.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43315ac3b9ae863d0d94c01f8f9ef81105916ef798de49fbcfb255fe6184ccfe"
+checksum = "1c0cfa2f2337cd0661c47126a31ecd4b8b73c5a0a5c8a4b2b7c481c522c05477"
 dependencies = [
  "flume",
  "futures-util",
@@ -2880,9 +2880,9 @@ dependencies = [
 
 [[package]]
 name = "myko"
-version = "6.8.0"
+version = "6.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae604a1ffe5ee79016635d169d73b4a7f11e31f01785651e708b9cef7707ea1f"
+checksum = "5d590c0bf7e1e387041be2fe31aec4e7aa058828f7d816e71606de50a049e8a8"
 dependencies = [
  "ahash 0.8.12",
  "anyhow",
@@ -2926,9 +2926,9 @@ dependencies = [
 
 [[package]]
 name = "myko-leptos"
-version = "6.8.0"
+version = "6.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "90685253abb990c1cf6e45e66212f8377e790289b70a0943d4b690b5bd1ef4ff"
+checksum = "b77bfbdf9fc4b09dea447286646e7d03dee210b81c0d31428767f764ab074561"
 dependencies = [
  "hyphae-leptos",
  "leptos",
@@ -2938,9 +2938,9 @@ dependencies = [
 
 [[package]]
 name = "myko-macros"
-version = "6.8.0"
+version = "6.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c96b42012f60f1272d52f7d6fc39b9f84d3df6b3d115bbf72c1ad360b98797f0"
+checksum = "38f5289ac67b2d08f6e725b775c0a8a2c28a3dc1f24865bfd0e53b9a2e7776a7"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2950,9 +2950,9 @@ dependencies = [
 
 [[package]]
 name = "myko-server"
-version = "6.8.0"
+version = "6.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "404758851db332da5f907af7791ba797e431b45b8f705c71087af80af3ec9315"
+checksum = "92041e5c6adad3c1520a8d443dc06d5760d6760eb327b91093d7f28e2b65d951"
 dependencies = [
  "chrono",
  "ciborium",
@@ -2981,9 +2981,9 @@ dependencies = [
 
 [[package]]
 name = "myko-telemetry"
-version = "6.8.0"
+version = "6.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34ed9adacbb3065e8631f77ff5423ea382650e217b506ebfc9ff98a49a736b95"
+checksum = "3d29e207cfe8a1266f50612c04f7102476fab222a30e0ad455c2c9236968ec97"
 dependencies = [
  "opentelemetry",
  "opentelemetry-appender-tracing",
