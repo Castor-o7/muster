@@ -3,6 +3,6 @@
 Cargo.lock.bak
 .claude/
 
-# marshal-pi plugin
-plugins/marshal-pi/node_modules/
-plugins/marshal-pi/src/generated/
+# muster-pi plugin
+plugins/muster-pi/node_modules/
+plugins/muster-pi/src/generated/

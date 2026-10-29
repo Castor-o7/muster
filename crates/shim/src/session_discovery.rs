@@ -57,7 +57,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
-use marshal_entities::SessionId;
+use muster_entities::SessionId;
 
 const MAX_WAIT: Duration = Duration::from_secs(10);
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
@@ -92,7 +92,7 @@ pub fn resolve(cwd: &str) -> Option<SessionId> {
     // stack below.
     if let Some(sid) = sid_from_env(std::env::var(SESSION_ID_ENV).ok()) {
         log::info!(
-            "[marshal-shim] session discovery: {SESSION_ID_ENV} → session_id {}",
+            "[muster-shim] session discovery: {SESSION_ID_ENV} → session_id {}",
             sid.0
         );
         return Some(sid);
@@ -135,14 +135,14 @@ where
     let projects = home.join(".claude").join("projects");
     if !projects.is_dir() {
         log::warn!(
-            "[marshal-shim] session discovery: {:?} does not exist",
+            "[muster-shim] session discovery: {:?} does not exist",
             projects
         );
         return None;
     }
     let parent = parent_info()?;
     log::info!(
-        "[marshal-shim] session discovery: parent pid={} started_at={:?} argv_len={}",
+        "[muster-shim] session discovery: parent pid={} started_at={:?} argv_len={}",
         parent.pid,
         parent.started_at,
         parent.cmdline.len()
@@ -168,7 +168,7 @@ where
         // Tier 0: Claude's own per-PID session manifest. Authoritative.
         if let Some(sid) = sid_from_claude_sessions_file(home, parent.pid) {
             log::info!(
-                "[marshal-shim] session discovery: ~/.claude/sessions/{}.json → session_id {}",
+                "[muster-shim] session discovery: ~/.claude/sessions/{}.json → session_id {}",
                 parent.pid,
                 sid.0
             );
@@ -180,7 +180,7 @@ where
         // cheap to recheck and keeps the precedence order explicit.
         if let Some(stem) = sid_from_cmdline(&parent.cmdline) {
             log::info!(
-                "[marshal-shim] session discovery: parent cmdline → session_id {}",
+                "[muster-shim] session discovery: parent cmdline → session_id {}",
                 stem
             );
             let _ = verify_cwd_for_session_id(&projects, &stem, cwd);
@@ -194,7 +194,7 @@ where
 
         if Instant::now() >= deadline {
             log::warn!(
-                "[marshal-shim] session discovery: no manifest, cmdline id, or .jsonl matched \
+                "[muster-shim] session discovery: no manifest, cmdline id, or .jsonl matched \
                  parent (pid={}) within {:?}; giving up",
                 parent.pid,
                 max_wait
@@ -243,7 +243,7 @@ fn sid_from_claude_sessions_file(home: &Path, parent_pid: u32) -> Option<Session
     Some(SessionId(Arc::from(sid)))
 }
 
-/// The live fields marshal scrapes from Claude's per-PID manifest
+/// The live fields muster scrapes from Claude's per-PID manifest
 /// (`<home>/.claude/sessions/<parent_pid>.json`). Best-effort: any absent
 /// field is `None`, and the whole struct is `None` only when the manifest is
 /// missing (older Claude / Codex, which has none) or unparseable.
@@ -421,7 +421,7 @@ fn scan_by_parent_correlation(
     let (delta, path) = best?;
     let stem = path.file_stem()?.to_str()?;
     log::info!(
-        "[marshal-shim] session discovery: parent-correlation matched {} (Δ {:?}) → session_id {}",
+        "[muster-shim] session discovery: parent-correlation matched {} (Δ {:?}) → session_id {}",
         path.display(),
         delta,
         stem
@@ -866,7 +866,7 @@ mod tests {
             "--session-id".to_string(),
             "8c1175c7-40ea-44c7-8c1d-784f6e3d3dc1".to_string(),
             "--dangerously-load-development-channels".to_string(),
-            "server:marshal".to_string(),
+            "server:muster".to_string(),
         ];
         assert_eq!(
             sid_from_cmdline(&args).as_deref(),
@@ -927,7 +927,7 @@ mod tests {
         let args = vec![
             "claude".to_string(),
             "--dangerously-load-development-channels".to_string(),
-            "server:marshal".to_string(),
+            "server:muster".to_string(),
         ];
         assert_eq!(sid_from_cmdline(&args), None);
     }
@@ -1106,7 +1106,7 @@ mod tests {
             .map(|d| d.subsec_nanos())
             .unwrap_or(0);
         let base = std::env::temp_dir().join(format!(
-            "marshal-shim-discover-{}-{n}-{nanos:x}",
+            "muster-shim-discover-{}-{n}-{nanos:x}",
             std::process::id()
         ));
         std::fs::create_dir_all(&base).unwrap();

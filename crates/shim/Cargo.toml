@@ -1,15 +1,15 @@
 [package]
-name = "marshal-shim"
+name = "muster-shim"
 version = "0.53.6"
 edition.workspace = true
 license.workspace = true
-description = "Stdio MCP shim that bridges Claude Code sessions to the marshal coordination daemon."
-repository = "https://github.com/ignition-is-go/marshal"
-keywords = ["marshal", "agent", "mcp", "claude", "myko"]
+description = "Stdio MCP shim that bridges Claude Code sessions to the muster coordination daemon."
+repository = "https://github.com/Castor-o7/muster"
+keywords = ["muster", "agent", "mcp", "claude", "myko"]
 categories = ["network-programming", "command-line-utilities"]
 
 [[bin]]
-name = "marshal-shim"
+name = "muster-shim"
 path = "src/main.rs"
 
 [package.metadata.flux]
@@ -29,7 +29,7 @@ chrono = { workspace = true }
 uuid = { version = "1", features = ["v4"] }
 myko = { workspace = true }
 hyphae = { workspace = true }
-marshal-entities = { workspace = true }
+muster-entities = { workspace = true }
 gethostname = "1"
 # Event-driven git-branch refresh: OS fs-watch on the repo's HEAD (no polling).
 notify-debouncer-mini = { workspace = true }

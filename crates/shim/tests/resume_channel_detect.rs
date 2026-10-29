@@ -1,5 +1,5 @@
-//! Integration test: the statusline's marshal warning must reflect whether the
-//! session can ACTUALLY receive — i.e. whether the marshal daemon is
+//! Integration test: the statusline's muster warning must reflect whether the
+//! session can ACTUALLY receive — i.e. whether the muster daemon is
 //! reachable — NOT whether the live-channel launch flag is present.
 //!
 //! History this guards against: an earlier warning keyed on the
@@ -8,7 +8,7 @@
 //! bare `claude`) even though the flag-independent inbox was delivering fine,
 //! and a resume variant raced the `bg-pty-host` relaunch. Delivery has two
 //! paths (live channel + inbox); both require the daemon, so "can't receive"
-//! means "daemon unreachable". This test drives the REAL `marshal-shim
+//! means "daemon unreachable". This test drives the REAL `muster-shim
 //! statusline` binary against a REAL TCP listener (reachable) and a dead
 //! address (unreachable) — no parent-process / spawn-path assumptions, which
 //! is what made the previous test give false confidence.
@@ -17,23 +17,23 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::process::{Command, Stdio};
 
-const SHIM: &str = env!("CARGO_BIN_EXE_marshal-shim");
+const SHIM: &str = env!("CARGO_BIN_EXE_muster-shim");
 const PAYLOAD: &str = r#"{"session_id":"itest-session","workspace":{"current_dir":"/tmp"}}"#;
-const WARNING: &str = "marshal UNREACHABLE";
+const WARNING: &str = "muster UNREACHABLE";
 
-/// Run `marshal-shim statusline` with `MARSHAL_DAEMON_ADDRESS=daemon_addr` and
+/// Run `muster-shim statusline` with `MUSTER_DAEMON_ADDRESS=daemon_addr` and
 /// the standard status payload on stdin; return its stdout. Env is the highest-
 /// priority address source, so this exercises the real reachability probe
 /// without touching any on-disk config.
 fn statusline_with_daemon(daemon_addr: &str) -> String {
     let mut child = Command::new(SHIM)
         .arg("statusline")
-        .env("MARSHAL_DAEMON_ADDRESS", daemon_addr)
+        .env("MUSTER_DAEMON_ADDRESS", daemon_addr)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
-        .expect("spawn marshal-shim statusline");
+        .expect("spawn muster-shim statusline");
     child
         .stdin
         .take()

@@ -1,18 +1,18 @@
 [package]
-name = "marshal-daemon"
+name = "muster-daemon"
 version = "0.53.6"
 edition.workspace = true
 license.workspace = true
-description = "Coordination daemon for the marshal multi-agent service. Owns the live roster and routes messages between Claude Code sessions."
-repository = "https://github.com/ignition-is-go/marshal"
-keywords = ["marshal", "agent", "coordination", "myko", "daemon"]
+description = "Coordination daemon for the muster multi-agent service. Owns the live roster and routes messages between Claude Code sessions."
+repository = "https://github.com/Castor-o7/muster"
+keywords = ["muster", "agent", "coordination", "myko", "daemon"]
 categories = ["network-programming", "command-line-utilities"]
 
 [lib]
 name = "daemon"
 
 [[bin]]
-name = "marshal-daemon"
+name = "muster-daemon"
 path = "src/main.rs"
 
 [package.metadata.flux]
@@ -27,7 +27,7 @@ tokio = { workspace = true }
 myko = { workspace = true }
 myko-server = { workspace = true }
 hyphae = { workspace = true }
-marshal-entities = { workspace = true }
+muster-entities = { workspace = true }
 notify-debouncer-mini = { workspace = true }
 uuid = { version = "1", features = ["v4"] }
 chrono = { workspace = true }

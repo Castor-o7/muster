@@ -1,7 +1,7 @@
 //! MCP tool + resource dispatch.
 //!
-//! Read paths are MCP resources (`marshal://whoami`, `marshal://roster`,
-//! `marshal://rooms`, `marshal://messages?...`); they're idempotent
+//! Read paths are MCP resources (`muster://whoami`, `muster://roster`,
+//! `muster://rooms`, `muster://messages?...`); they're idempotent
 //! fetches with no side effects. Write paths are MCP tools
 //! (`send_message`, `broadcast`, `join_room`, `leave_room`,
 //! `set_status`, `ack_messages`); they mutate.
@@ -16,7 +16,7 @@ use crate::mcp::{
     ResourceFuture, ToolDef, ToolError, ToolFuture, ToolOutcome,
 };
 use hyphae::{Cell, CellImmutable, Gettable, Signal, Watchable};
-use marshal_entities::{
+use muster_entities::{
     AckMessages, AckMessagesResult, BroadcastMessage, BroadcastMessageResult, JoinRoom,
     JoinRoomResult, LeaveRoom, LeaveRoomResult, MessageId, ReadMessages, ReadMessagesResult, Room,
     RoomId, RoomMember, SendMessage, SendMessageResult, Session, SessionId, SetSessionCurrentTask,
@@ -48,7 +48,7 @@ pub struct ToolHost {
     pub members_cell: Cell<Vec<Arc<RoomMember>>, CellImmutable>,
     /// Daemon-assigned handles, keyed by session id. Read instead of
     /// recomputing so a wordlist change never desyncs the shim from the roster.
-    pub nicknames_cell: Cell<Vec<Arc<marshal_entities::SessionNickname>>, CellImmutable>,
+    pub nicknames_cell: Cell<Vec<Arc<muster_entities::SessionNickname>>, CellImmutable>,
 }
 
 /// The daemon-assigned handle for `session_id`, read from the SessionNickname
@@ -59,12 +59,12 @@ fn handle_for(host: &ToolHost, session_id: &str) -> String {
     handle_from(&host.nicknames_cell.get(), session_id)
 }
 
-fn handle_from(nicknames: &[Arc<marshal_entities::SessionNickname>], session_id: &str) -> String {
+fn handle_from(nicknames: &[Arc<muster_entities::SessionNickname>], session_id: &str) -> String {
     nicknames
         .iter()
         .find(|n| n.id.0.as_ref() == session_id)
         .map(|n| n.nickname.clone())
-        .unwrap_or_else(|| marshal_entities::nickname(session_id))
+        .unwrap_or_else(|| muster_entities::nickname(session_id))
 }
 
 /// Resolve a nickname against the exact session/nickname snapshot used by the
@@ -74,7 +74,7 @@ fn handle_from(nicknames: &[Arc<marshal_entities::SessionNickname>], session_id:
 /// id prefix).
 fn resolve_visible_nickname(
     sessions: &[Arc<Session>],
-    nicknames: &[Arc<marshal_entities::SessionNickname>],
+    nicknames: &[Arc<muster_entities::SessionNickname>],
     token: &str,
 ) -> Result<Option<SessionId>, String> {
     let matches: Vec<_> = sessions
@@ -135,7 +135,7 @@ impl Handler for CoordHandler {
                 "messages" => read_messages(&host, &uri, &parsed.query).await,
                 other => Err(ResourceError {
                     code: METHOD_NOT_FOUND,
-                    message: format!("no resource at 'marshal://{other}'"),
+                    message: format!("no resource at 'muster://{other}'"),
                     data: None,
                 }),
             }
@@ -155,7 +155,7 @@ fn read_whoami(
     // Under Codex the shim holds no connection identity — `host.session` is a
     // placeholder id, so reporting it here would tell the agent the WRONG roster
     // nickname. The authoritative identity is the one the SessionStart hook
-    // injected in the <marshal_session> block; the agent names it via ?asSession=,
+    // injected in the <muster_session> block; the agent names it via ?asSession=,
     // exactly as it does on write tools. With the id we return the live roster row.
     if host.is_codex {
         let as_session = query
@@ -200,7 +200,7 @@ fn read_whoami(
                     "session_id": null,
                     "nickname": null,
                     "harness": "codex",
-                    "note": "Under Codex this MCP server isn't told which session it serves. Your identity is the session_id in your <marshal_session> block — pass it as ?asSession=<id> here (marshal://whoami?asSession=<id>) and as asSession=<id> on every write tool.",
+                    "note": "Under Codex this MCP server isn't told which session it serves. Your identity is the session_id in your <muster_session> block — pass it as ?asSession=<id> here (muster://whoami?asSession=<id>) and as asSession=<id> on every write tool.",
                 }),
             ),
         };
@@ -317,9 +317,9 @@ async fn read_messages(
             Some(sid) => Some(SessionId(Arc::from(sid))),
             None => {
                 return Err(ResourceError::invalid_params(
-                    "Under Codex, marshal://messages needs your session id: pass \
-                     ?asSession=<the id from your <marshal_session> block>, e.g. \
-                     marshal://messages?asSession=<id>&inbox=true. (This MCP server \
+                    "Under Codex, muster://messages needs your session id: pass \
+                     ?asSession=<the id from your <muster_session> block>, e.g. \
+                     muster://messages?asSession=<id>&inbox=true. (This MCP server \
                      isn't told which Codex session it serves.)",
                 ));
             }
@@ -362,7 +362,7 @@ async fn read_messages(
 
 /// The session a write command acts AS. Under Codex the shim holds no
 /// connection identity, so the agent names its own session explicitly via
-/// `asSession` (the id the SessionStart hook injected in the `<marshal_session>`
+/// `asSession` (the id the SessionStart hook injected in the `<muster_session>`
 /// block) and the shim forwards it. Every other harness resolves the caller
 /// from the WS connection, so this is `None`.
 fn caller(host: &ToolHost, args: &Value) -> Result<Option<SessionId>, ToolError> {
@@ -377,8 +377,8 @@ fn caller(host: &ToolHost, args: &Value) -> Result<Option<SessionId>, ToolError>
         .filter(|s| !s.is_empty())
         .ok_or_else(|| {
             ToolError::invalid_params(
-                "missing `asSession`: pass your own marshal session id (shown in the \
-                 <marshal_session> block at session start) so peers know who sent this",
+                "missing `asSession`: pass your own muster session id (shown in the \
+                 <muster_session> block at session start) so peers know who sent this",
             )
         })?;
     Ok(Some(SessionId(Arc::from(s))))
@@ -596,7 +596,7 @@ fn write_schema(is_codex: bool, mut properties: Value, required: &[&str]) -> Val
                 "asSession".into(),
                 json!({
                     "type": "string",
-                    "description": "Your session id from <marshal_session>."
+                    "description": "Your session id from <muster_session>."
                 }),
             );
         }
@@ -634,7 +634,7 @@ pub fn tools_def(is_codex: bool) -> Vec<ToolDef> {
             description: "Ambient room update, preferred for FYI/progress because it is not injected into members' turns. An @mention also creates a direct interrupt, so use one only when that peer needs to act or reply. Returns counts plus bounded failure and mention details.".into(),
             input_schema: write_schema(is_codex,
                 json!({
-                    "to_room": { "type": "string", "description": "Room id from marshal://rooms — `everyone`, `op:*`, `project:*`, or any ad-hoc room id." },
+                    "to_room": { "type": "string", "description": "Room id from muster://rooms — `everyone`, `op:*`, `project:*`, or any ad-hoc room id." },
                     "body":    { "type": "string", "description": "Message body." }
                 }),
                 &["to_room", "body"],
@@ -669,7 +669,7 @@ pub fn tools_def(is_codex: bool) -> Vec<ToolDef> {
                     "message_ids": {
                         "type": "array",
                         "items": { "type": "string" },
-                        "description": "Message ids returned by marshal://messages."
+                        "description": "Message ids returned by muster://messages."
                     }
                 }),
                 &["message_ids"],
@@ -681,35 +681,35 @@ pub fn tools_def(is_codex: bool) -> Vec<ToolDef> {
 pub fn resources_def(is_codex: bool) -> Vec<ResourceDef> {
     // Under Codex the shim isn't told which session it serves, so the two
     // caller-relative reads take the agent's own id as a `?asSession=` query
-    // param (the id from the <marshal_session> block). Claude resolves the
+    // param (the id from the <muster_session> block). Claude resolves the
     // caller from its WS connection, so this note is Codex-only. roster/rooms
     // need no caller and are unaffected.
     let codex_as = if is_codex {
-        " Under Codex, add `?asSession=<id>` using <marshal_session>."
+        " Under Codex, add `?asSession=<id>` using <muster_session>."
     } else {
         ""
     };
     vec![
         ResourceDef {
-            uri: "marshal://whoami".into(),
+            uri: "muster://whoami".into(),
             name: "whoami".into(),
             description: format!("This session's id, pid, cwd, operator, and host info.{codex_as}"),
             mime_type: "application/json".into(),
         },
         ResourceDef {
-            uri: "marshal://roster".into(),
+            uri: "muster://roster".into(),
             name: "roster".into(),
             description: "Every live session with its id, cwd, git branch, status, operator, host, project, and room memberships.".into(),
             mime_type: "application/json".into(),
         },
         ResourceDef {
-            uri: "marshal://rooms".into(),
+            uri: "muster://rooms".into(),
             name: "rooms".into(),
             description: "Every room (auto and ad-hoc) with its members.".into(),
             mime_type: "application/json".into(),
         },
         ResourceDef {
-            uri: "marshal://messages".into(),
+            uri: "muster://messages".into(),
             name: "messages".into(),
             description: format!("Message history. Query params: room=ID, from=SID, to_session=SID, inbox=true, sent=true, unread=true, since=MILLIS, limit=N. Default returns the 50 most recent messages visible to you (sent, direct-recipient, or via room membership).{codex_as}"),
             mime_type: "application/json".into(),
@@ -740,9 +740,9 @@ fn json_resource(uri: &str, value: Value) -> ResourceContent {
     }
 }
 
-/// Parse an MCP resource URI like `marshal://messages?inbox=true&unread=true`
+/// Parse an MCP resource URI like `muster://messages?inbox=true&unread=true`
 /// into its path + query components. Rejects URIs without the
-/// `marshal://` scheme so we don't accidentally serve resources from
+/// `muster://` scheme so we don't accidentally serve resources from
 /// other schemes a future host might invent.
 struct ParsedUri {
     path: String,
@@ -751,15 +751,13 @@ struct ParsedUri {
 
 impl ParsedUri {
     fn parse(uri: &str) -> Result<Self, ResourceError> {
-        let rest = uri
-            .strip_prefix("marshal://")
-            .ok_or_else(|| ResourceError {
-                code: 0,
-                message: format!(
-                    "unsupported resource scheme in '{uri}'; marshal serves marshal:// URIs only",
-                ),
-                data: None,
-            })?;
+        let rest = uri.strip_prefix("muster://").ok_or_else(|| ResourceError {
+            code: 0,
+            message: format!(
+                "unsupported resource scheme in '{uri}'; muster serves muster:// URIs only",
+            ),
+            data: None,
+        })?;
         let (path, query_str) = match rest.split_once('?') {
             Some((p, q)) => (p, q),
             None => (rest, ""),
@@ -849,7 +847,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use marshal_entities::{
+    use muster_entities::{
         DeliveredRecipient, FailedRecipient, LivePushStatus, SessionNickname, SessionNicknameId,
         WakeStatus,
     };

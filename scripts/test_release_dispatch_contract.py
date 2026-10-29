@@ -30,7 +30,7 @@ class ReleaseDispatchContractTests(unittest.TestCase):
             "source_run_id", "source_run_attempt", "published_at",
         ):
             self.assertIn(f"{field}:", self.workflow)
-        self.assertIn('event_type: "marshal-release.v1"', self.workflow)
+        self.assertIn('event_type: "muster-release.v1"', self.workflow)
 
 
 if __name__ == "__main__":

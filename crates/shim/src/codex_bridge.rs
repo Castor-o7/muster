@@ -5,7 +5,7 @@
 //! issue `turn/start` for a thread, and every frontend attached to that server
 //! receives the resulting turn events.
 //!
-//! `marshal-shim codex-run` opts into that topology:
+//! `muster-shim codex-run` opts into that topology:
 //!
 //! 1. start a local Codex app-server;
 //! 2. subscribe this bridge to app-server lifecycle events;
@@ -15,10 +15,10 @@
 //! have that daemon, so the launcher supervises one app-server process on an
 //! ephemeral loopback-only WebSocket port and tears it down with the TUI.
 //!
-//! The bridge watches marshal's durable message/read views. When a direct
+//! The bridge watches muster's durable message/read views. When a direct
 //! unread message targets a hook-owned session on this host, it asks the local
 //! app-server to start that thread. The existing `UserPromptSubmit` hook then
-//! injects and acknowledges the `<marshal_inbox>` block before the model runs.
+//! injects and acknowledges the `<muster_inbox>` block before the model runs.
 //! Room broadcasts remain ambient, and a failed wake leaves the message unread.
 //! On Unix, per-TUI bridges attached to the shared app-server elect one
 //! host-local wake leader; every bridge still observes lifecycle events.
@@ -55,7 +55,7 @@ use std::{
 use anyhow::{Context, Result};
 use futures_util::{SinkExt, StreamExt};
 use hyphae::Gettable;
-use marshal_entities::{
+use muster_entities::{
     GetAllMessageReads, GetAllMessages, GetAllSessions, Message, MessageRead, Session, SessionId,
 };
 use myko::client::MykoClient;
@@ -88,8 +88,8 @@ const BRIDGE_START_TIMEOUT: Duration = Duration::from_secs(10);
 const TUI_RECOVERY_TIMEOUT: Duration = Duration::from_secs(30);
 const REGISTRATION_RETRY: Duration = Duration::from_secs(2);
 const APP_SERVER_START_TIMEOUT: Duration = Duration::from_secs(10);
-const WAKE_PROMPT: &str = "Handle the injected <marshal_inbox>; if absent, read unread direct \
-Marshal messages. Then continue your current task.";
+const WAKE_PROMPT: &str = "Handle the injected <muster_inbox>; if absent, read unread direct \
+Muster messages. Then continue your current task.";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum AppServerEndpoint {
@@ -107,7 +107,7 @@ impl std::fmt::Display for AppServerEndpoint {
 }
 
 /// Coordinates wake ownership among bridges attached to the same Unix
-/// app-server and Marshal daemon. Lifecycle registration remains active in
+/// app-server and Muster daemon. Lifecycle registration remains active in
 /// every bridge; only model-turn creation is elected.
 ///
 /// Unix `codex-run` launchers share one managed app-server, so without this
@@ -189,7 +189,7 @@ fn wake_lock_path(app_server: &AppServerEndpoint, daemon: &str) -> PathBuf {
             .to_path_buf(),
         AppServerEndpoint::WebSocket(_) => std::env::temp_dir(),
     };
-    directory.join(format!(".marshal-codex-wake-{suffix}.lock"))
+    directory.join(format!(".muster-codex-wake-{suffix}.lock"))
 }
 
 #[cfg(not(unix))]
@@ -282,25 +282,25 @@ struct LaunchedAppServer {
 }
 
 /// Launch a normal interactive Codex TUI against a shared local app-server while
-/// a local bridge watches for direct Marshal messages.
+/// a local bridge watches for direct Muster messages.
 pub fn run_codex(args: &[String]) -> Result<()> {
     if matches!(
         args.first().map(String::as_str),
         Some("-h") | Some("--help")
     ) {
         println!(
-            "usage: marshal-shim codex-run [CODEX_ARGS...]\n\
+            "usage: muster-shim codex-run [CODEX_ARGS...]\n\
              \n\
-             Starts a local Codex app-server plus the Marshal wake bridge, then\n\
-             attaches the TUI to it. Direct Marshal messages can start an idle\n\
+             Starts a local Codex app-server plus the Muster wake bridge, then\n\
+             attaches the TUI to it. Direct Muster messages can start an idle\n\
              turn; plain Codex remains inbox-at-next-boundary.\n\
              \n\
-             Set MARSHAL_CODEX_BIN to override the `codex` executable."
+             Set MUSTER_CODEX_BIN to override the `codex` executable."
         );
         return Ok(());
     }
 
-    let codex = std::env::var("MARSHAL_CODEX_BIN").unwrap_or_else(|_| "codex".to_string());
+    let codex = std::env::var("MUSTER_CODEX_BIN").unwrap_or_else(|_| "codex".to_string());
     run_codex_binary(&codex, args)
 }
 
@@ -310,11 +310,11 @@ fn run_codex_binary(codex: &str, args: &[String]) -> Result<()> {
         Err(error) => return run_native_codex(codex, args, &error),
     };
     let ready_file = std::env::temp_dir().join(format!(
-        "marshal-codex-bridge-{}.ready",
+        "muster-codex-bridge-{}.ready",
         uuid::Uuid::new_v4()
     ));
     let launcher_state_file = std::env::temp_dir().join(format!(
-        "marshal-codex-launcher-{}.json",
+        "muster-codex-launcher-{}.json",
         uuid::Uuid::new_v4()
     ));
     let cwd = std::env::current_dir().context("getting codex-run cwd")?;
@@ -331,7 +331,7 @@ fn run_codex_binary(codex: &str, args: &[String]) -> Result<()> {
         bridge_args.push(thread_id);
     }
 
-    let this = std::env::current_exe().context("locating marshal-shim executable")?;
+    let this = std::env::current_exe().context("locating muster-shim executable")?;
     let mut bridge_command = Command::new(this);
     bridge_command
         .arg("codex-bridge")
@@ -889,7 +889,7 @@ fn launch_app_server(codex: &str) -> Result<LaunchedAppServer> {
         );
     }
     let proxy_path =
-        std::env::temp_dir().join(format!("marshal-codex-tui-{}.sock", uuid::Uuid::new_v4()));
+        std::env::temp_dir().join(format!("muster-codex-tui-{}.sock", uuid::Uuid::new_v4()));
     Ok(LaunchedAppServer {
         remote: format!("unix://{}", proxy_path.display()),
         bridge_args: vec![
@@ -1002,7 +1002,7 @@ pub async fn run(args: &[String]) -> Result<()> {
         println!("{turn_id}");
         return Ok(());
     }
-    marshal_entities::link();
+    muster_entities::link();
 
     let local_host = short_host();
     let hook_base = crate::codex_hook::registration_base(&args.daemon);
@@ -1214,7 +1214,7 @@ fn parse_args(args: &[String]) -> Result<BridgeArgs> {
             "--launcher-stdin" => launcher_stdin = true,
             "-h" | "--help" => {
                 println!(
-                    "usage: marshal-shim codex-bridge [--daemon WS_URL] \
+                    "usage: muster-shim codex-bridge [--daemon WS_URL] \
                      [--socket PATH | --endpoint LOOPBACK_WS_URL] \
                      [--poll-ms N] [--wake-thread THREAD_ID] [--ready-file PATH]\n\
                      \n\
@@ -1238,7 +1238,7 @@ fn parse_args(args: &[String]) -> Result<BridgeArgs> {
     let endpoint = endpoint.or_else(|| {
         socket
             .is_none()
-            .then(|| std::env::var("MARSHAL_CODEX_APP_SERVER_ENDPOINT").ok())
+            .then(|| std::env::var("MUSTER_CODEX_APP_SERVER_ENDPOINT").ok())
             .flatten()
     });
     let app_server = if let Some(url) = endpoint {
@@ -1246,7 +1246,7 @@ fn parse_args(args: &[String]) -> Result<BridgeArgs> {
         AppServerEndpoint::WebSocket(url)
     } else {
         let socket = socket
-            .or_else(|| std::env::var_os("MARSHAL_CODEX_APP_SERVER_SOCKET").map(PathBuf::from))
+            .or_else(|| std::env::var_os("MUSTER_CODEX_APP_SERVER_SOCKET").map(PathBuf::from))
             .unwrap_or_else(default_socket);
         AppServerEndpoint::Unix(socket)
     };
@@ -1319,7 +1319,7 @@ fn loopback_address(endpoint: &str) -> Result<SocketAddr> {
 }
 
 fn short_host() -> String {
-    std::env::var("MARSHAL_HOST")
+    std::env::var("MUSTER_HOST")
         .ok()
         .filter(|value| !value.is_empty())
         .or_else(|| {
@@ -1855,7 +1855,7 @@ where
     if launcher.lock().await.state.thread_id.as_deref() != Some(&decoration.thread_id) {
         return None;
     }
-    let desired = marshal_decorated_thread_name(current_name, &decoration.nickname)?;
+    let desired = muster_decorated_thread_name(current_name, &decoration.nickname)?;
     if current_name == Some(desired.as_str()) {
         return None;
     }
@@ -1953,8 +1953,8 @@ where
     Ok((registration, notifications))
 }
 
-fn marshal_decorated_thread_name(current_name: Option<&str>, nickname: &str) -> Option<String> {
-    let base = strip_marshal_thread_name_prefix(current_name?.trim(), nickname).trim();
+fn muster_decorated_thread_name(current_name: Option<&str>, nickname: &str) -> Option<String> {
+    let base = strip_muster_thread_name_prefix(current_name?.trim(), nickname).trim();
     if base.is_empty() {
         return None;
     }
@@ -1962,10 +1962,10 @@ fn marshal_decorated_thread_name(current_name: Option<&str>, nickname: &str) -> 
     Some(format!("{marker} {base}"))
 }
 
-fn strip_marshal_thread_name_prefix<'a>(name: &'a str, nickname: &str) -> &'a str {
+fn strip_muster_thread_name_prefix<'a>(name: &'a str, nickname: &str) -> &'a str {
     let mut base = name;
     loop {
-        if let Some(rest) = base.strip_prefix("[marshal:") {
+        if let Some(rest) = base.strip_prefix("[muster:") {
             let Some(end) = rest.find(']') else {
                 break;
             };
@@ -2116,7 +2116,7 @@ where
             "method": "initialize",
             "params": {
                 "clientInfo": {
-                    "name": "marshal-codex-bridge",
+                    "name": "muster-codex-bridge",
                     "version": env!("CARGO_PKG_VERSION"),
                 },
                 "capabilities": { "experimentalApi": true },
@@ -2234,7 +2234,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use marshal_entities::{HostInfo, MessageId, MessageReadId};
+    use muster_entities::{HostInfo, MessageId, MessageReadId};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio_tungstenite::{accept_async, connect_async};
 
@@ -2495,7 +2495,7 @@ mod tests {
     #[test]
     fn unix_bridges_elect_one_wake_leader_and_fail_over() {
         let path = std::env::temp_dir().join(format!(
-            "marshal-codex-leader-test-{}.lock",
+            "muster-codex-leader-test-{}.lock",
             uuid::Uuid::new_v4()
         ));
         let now = Instant::now();
@@ -2610,25 +2610,25 @@ mod tests {
     #[test]
     fn thread_name_decoration_preserves_the_codex_title() {
         assert_eq!(
-            marshal_decorated_thread_name(Some("auth refactor"), "sunny-summit"),
+            muster_decorated_thread_name(Some("auth refactor"), "sunny-summit"),
             Some("[sunny-summit] auth refactor".into())
         );
-        assert_eq!(marshal_decorated_thread_name(None, "sunny-summit"), None);
+        assert_eq!(muster_decorated_thread_name(None, "sunny-summit"), None);
         assert_eq!(
-            marshal_decorated_thread_name(Some("[sunny-summit] auth refactor"), "sunny-summit"),
+            muster_decorated_thread_name(Some("[sunny-summit] auth refactor"), "sunny-summit"),
             Some("[sunny-summit] auth refactor".into())
         );
         assert_eq!(
-            marshal_decorated_thread_name(Some("[marshal:old-nick] auth refactor"), "new-nick"),
+            muster_decorated_thread_name(Some("[muster:old-nick] auth refactor"), "new-nick"),
             Some("[new-nick] auth refactor".into())
         );
         assert_eq!(
-            marshal_decorated_thread_name(Some("[draft] auth refactor"), "sunny-summit"),
+            muster_decorated_thread_name(Some("[draft] auth refactor"), "sunny-summit"),
             Some("[sunny-summit] [draft] auth refactor".into())
         );
         assert_eq!(
-            marshal_decorated_thread_name(
-                Some("[marshal:old] [marshal:older] auth refactor"),
+            muster_decorated_thread_name(
+                Some("[muster:old] [muster:older] auth refactor"),
                 "new-nick"
             ),
             Some("[new-nick] auth refactor".into())
@@ -2719,8 +2719,7 @@ mod tests {
     async fn unix_app_server_rpc_initializes_then_starts_the_target_thread() {
         use tokio::net::UnixListener;
 
-        let temp =
-            std::env::temp_dir().join(format!("marshal-codex-{}.sock", uuid::Uuid::new_v4()));
+        let temp = std::env::temp_dir().join(format!("muster-codex-{}.sock", uuid::Uuid::new_v4()));
         let listener = UnixListener::bind(&temp).expect("bind fake app-server");
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.expect("accept bridge");
@@ -2773,7 +2772,7 @@ mod tests {
             .map(|session_id| {
                 json!({
                     "session_id": session_id,
-                    "nickname": marshal_entities::nickname(&session_id),
+                    "nickname": muster_entities::nickname(&session_id),
                 })
                 .to_string()
             })
@@ -2803,7 +2802,7 @@ mod tests {
             .expect("bind fake hook listener");
         let hook_address = hook_listener.local_addr().unwrap();
         let ready_file = std::env::temp_dir().join(format!(
-            "marshal-codex-registration-test-{}.ready",
+            "muster-codex-registration-test-{}.ready",
             uuid::Uuid::new_v4()
         ));
         let launcher_directory = tempfile::tempdir().unwrap();
@@ -2843,7 +2842,7 @@ mod tests {
                                 "id": "thread-before-prompt",
                                 "sessionId": "session-before-prompt",
                                 "cwd": "/work/before-prompt",
-                                "name": "[marshal:old-nickname] auth refactor"
+                                "name": "[muster:old-nickname] auth refactor"
                             }
                         }
                     })
@@ -2860,7 +2859,7 @@ mod tests {
                 name_set["params"]["name"],
                 format!(
                     "[{}] auth refactor",
-                    marshal_entities::nickname("session-before-prompt")
+                    muster_entities::nickname("session-before-prompt")
                 )
             );
             websocket
@@ -2893,7 +2892,7 @@ mod tests {
                 renamed["params"]["name"],
                 format!(
                     "[{}] generated follow-up",
-                    marshal_entities::nickname("session-before-prompt")
+                    muster_entities::nickname("session-before-prompt")
                 )
             );
             websocket

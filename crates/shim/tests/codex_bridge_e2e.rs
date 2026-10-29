@@ -1,6 +1,6 @@
 //! Process-level Codex wake canaries.
 //!
-//! These tests deliberately launch the real `marshal-shim codex-bridge`
+//! These tests deliberately launch the real `muster-shim codex-bridge`
 //! executable. A real in-process Myko cell supplies Session/Message views and
 //! fake loopback app-servers speak Codex's WebSocket protocol. This catches
 //! failures that an in-process lock unit test cannot:
@@ -21,7 +21,7 @@ use std::{
 };
 
 use futures_util::{SinkExt, StreamExt};
-use marshal_entities::{
+use muster_entities::{
     GetAllSessions, HostInfo, Message, MessageId, MessageRead, MessageReadId, Session, SessionId,
 };
 use myko::prelude::EventPublishing as _;
@@ -40,10 +40,10 @@ use tokio::{
 };
 use tokio_tungstenite::{accept_async, tungstenite::Message as WebSocketMessage};
 
-const TEST_HOST: &str = "marshal-wake-canary";
+const TEST_HOST: &str = "muster-wake-canary";
 const POLL: Duration = Duration::from_millis(25);
 const WAIT: Duration = Duration::from_secs(8);
-const SHIM: &str = env!("CARGO_BIN_EXE_marshal-shim");
+const SHIM: &str = env!("CARGO_BIN_EXE_muster-shim");
 
 struct CellHarness {
     address: String,
@@ -54,7 +54,7 @@ struct CellHarness {
 
 impl CellHarness {
     fn spawn() -> Self {
-        marshal_entities::link();
+        muster_entities::link();
         let bind: SocketAddr = format!("127.0.0.1:{}", free_port()).parse().unwrap();
         let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
         let (shutdown_tx, shutdown_rx) = std::sync::mpsc::channel();
@@ -285,7 +285,7 @@ async fn serve_app_server_connection(
             json!({
                 "id": initialize_id,
                 "result": {
-                    "userAgent": "marshal-wake-canary",
+                    "userAgent": "muster-wake-canary",
                     "platformFamily": "test",
                     "platformOs": std::env::consts::OS,
                     "codexHome": "/tmp"
@@ -389,9 +389,9 @@ impl BridgeProcess {
                 "--ready-file",
             ])
             .arg(&ready_file)
-            .env("MARSHAL_BASE_URL", &hooks.base_url)
-            .env("MARSHAL_HOST", TEST_HOST)
-            .env("RUST_LOG", "marshal_shim=debug")
+            .env("MUSTER_BASE_URL", &hooks.base_url)
+            .env("MUSTER_HOST", TEST_HOST)
+            .env("RUST_LOG", "muster_shim=debug")
             .env("TMPDIR", temp.path())
             .env("TEMP", temp.path())
             .env("TMP", temp.path())

@@ -10,7 +10,7 @@
 use std::sync::Arc;
 
 use hyphae::{Gettable, Materialize};
-use marshal_entities::{
+use muster_entities::{
     AutoSource, BroadcastMessage, Message, Room, RoomId, RoomKind, RoomMember, RoomMemberId,
     Session, SessionId,
 };
@@ -32,7 +32,7 @@ fn assert_uuid_v7(value: &str) {
 }
 
 fn setup() -> MykoServerContext {
-    marshal_entities::link();
+    muster_entities::link();
     daemon::link();
     let blackhole: Arc<dyn Persister> = Arc::new(BlackholePersister);
     let server = MykoServer::builder()
@@ -167,7 +167,7 @@ fn mention_delivers_a_direct_ping_to_the_named_member() {
     set_member(&ctx, "everyone", "sender");
     set_member(&ctx, "everyone", "alice");
 
-    let alice_nick = marshal_entities::nickname("alice");
+    let alice_nick = muster_entities::nickname("alice");
     let res = BroadcastMessage {
         to_room_id: RoomId(Arc::from("everyone")),
         body: format!("heads up @{alice_nick}, redeploying"),
@@ -202,7 +202,7 @@ fn mention_reaches_a_peer_who_is_not_a_room_member() {
     // A session that is NOT a member of `everyone`.
     set_session(&ctx, &session("outsider", Some("c-out")));
 
-    let out_nick = marshal_entities::nickname("outsider");
+    let out_nick = muster_entities::nickname("outsider");
     let res = BroadcastMessage {
         to_room_id: RoomId(Arc::from("everyone")),
         body: format!("@{out_nick} can you take a look"),
@@ -252,7 +252,7 @@ fn self_mention_is_ignored() {
     let ctx = setup();
     room_with_two(&ctx);
 
-    let sender_nick = marshal_entities::nickname("sender");
+    let sender_nick = muster_entities::nickname("sender");
     let res = BroadcastMessage {
         to_room_id: RoomId(Arc::from("everyone")),
         body: format!("note to self @{sender_nick}"),

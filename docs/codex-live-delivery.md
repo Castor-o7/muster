@@ -1,7 +1,7 @@
 # Codex live delivery
 
 Codex command hooks can add context to a turn, but they cannot create a turn.
-That is why a direct Marshal message sent to an idle, normally launched Codex
+That is why a direct Muster message sent to an idle, normally launched Codex
 session remains unread until the user submits another prompt.
 
 Codex app-server provides the missing control plane. Multiple clients can
@@ -12,7 +12,7 @@ It also provides the earliest authoritative session lifecycle signal.
 `codex-run` connects the bridge first and waits until its app-server
 subscription is ready before launching the TUI. The TUI's `thread/started`
 notification contains the canonical root `sessionId` and cwd, so the bridge
-registers that session with Marshal immediately—without waiting for a first
+registers that session with Muster immediately—without waiting for a first
 prompt or `SessionStart` hook.
 
 ## Delivery path
@@ -26,7 +26,7 @@ codex-run ──wait for subscriber──> local Codex bridge
                                       │
                                       └── /hook/session-register ──> roster
 
-sender ──send_message──> marshal daemon ──durable unread Message
+sender ──send_message──> muster daemon ──durable unread Message
                                       │
                                       ▼
                               local Codex bridge
@@ -39,7 +39,7 @@ sender ──send_message──> marshal daemon ──durable unread Message
                          injects, then acknowledges inbox
 ```
 
-The Marshal session id supplied to hooks is the Codex app-server thread id.
+The Muster session id supplied to hooks is the Codex app-server thread id.
 That lets the bridge target the thread without guessing from cwd, process age,
 or rollout files.
 
@@ -51,7 +51,7 @@ Codex launches that do not use `codex-run`.
 
 The bridge deliberately does not mark the message read. The existing hook
 acknowledges it only after the daemon successfully writes the
-`<marshal_inbox>` response back to Codex. If the app-server is unavailable, the
+`<muster_inbox>` response back to Codex. If the app-server is unavailable, the
 thread is busy, or `turn/start` fails, the durable message stays unread and the
 ordinary prompt/tool-boundary path remains intact.
 
@@ -68,13 +68,13 @@ Automatic delivery is intentionally smaller than durable history:
 - a hook surfaces at most 20 messages and divides an 8,000-character body
   budget across that batch;
 - truncated entries include their message id, and the complete body remains in
-  `marshal://messages`;
+  `muster://messages`;
 - successful wakes are coalesced per thread for 30 seconds, including after
   the first message is acknowledged, so a burst joins the active turn instead
   of creating one turn per message.
 
 On Linux and macOS, every interactive launcher keeps its lifecycle subscriber,
-but bridges attached to the same app-server and Marshal daemon elect one
+but bridges attached to the same app-server and Muster daemon elect one
 host-local wake leader with an advisory file lock. A new leader waits briefly
 before waking so the old leader's in-flight hook acknowledgement can settle.
 Dropping the leader process releases the lock and another bridge takes over.
@@ -108,20 +108,20 @@ compatibility, but describe only the synchronous live push.
 First install the normal Codex integration:
 
 ```sh
-marshal-shim codex-setup --daemon ws://marshal-host:6155
+muster-shim codex-setup --daemon ws://muster-host:6255
 ```
 
 Then use the live launcher for an interactive session:
 
 ```sh
-marshal-shim codex-run
-marshal-shim codex-run resume --last
+muster-shim codex-run
+muster-shim codex-run resume --last
 ```
 
 On Linux and macOS, `codex-run` performs three actions:
 
 1. idempotently starts `codex app-server daemon`;
-2. starts `marshal-shim codex-bridge` and waits until its lifecycle
+2. starts `muster-shim codex-bridge` and waits until its lifecycle
    subscription is ready;
 3. runs `codex --remote unix:// ...`; the resulting `thread/started` event
    registers the session before any prompt is required.
@@ -138,8 +138,8 @@ This generation split applies to local `codex-run` sessions. Codex Remote
 Control exposes one managed server identity per `CODEX_HOME`; Codex must roll
 that server through its managed daemon lifecycle.
 
-The wrapper is a Marshal integration boundary, not a replacement Codex
-client. Marshal needs a second app-server connection because Codex hooks only
+The wrapper is a Muster integration boundary, not a replacement Codex
+client. Muster needs a second app-server connection because Codex hooks only
 run at turn boundaries and therefore cannot wake an idle TUI. The TUI remains
 the normal Codex executable and owns all user interaction and thread state.
 
@@ -157,7 +157,7 @@ restarted. An explicit UUID passed to `codex resume` pins the launcher to that
 thread immediately. A new or picker-selected session learns the id from its
 own proxied request and response, then keeps it across later server generations.
 
-The bridge uses the same ownership proof to add the Marshal nickname to the
+The bridge uses the same ownership proof to add the Muster nickname to the
 Codex thread name. It waits for a non-empty Codex name, then writes
 `[<nickname>] <existing name>` through `thread/name/set`. A
 `thread/name/updated` event applies the rule again after an automatic title or
@@ -193,13 +193,13 @@ launchers use separate ephemeral ports.
 For diagnostics or a supervisor-managed deployment, run the bridge directly:
 
 ```sh
-marshal-shim codex-bridge \
-  --daemon ws://marshal-host:6155 \
+muster-shim codex-bridge \
+  --daemon ws://muster-host:6255 \
   --socket "$CODEX_HOME/app-server-control/app-server-control.sock"
 
 # Native Windows or a manually supervised local app-server:
-marshal-shim codex-bridge \
-  --daemon ws://marshal-host:6155 \
+muster-shim codex-bridge \
+  --daemon ws://muster-host:6255 \
   --endpoint ws://127.0.0.1:4500
 ```
 
@@ -209,10 +209,10 @@ Codex currently exposes the shared endpoint as a CLI flag, not a
 `config.toml` setting. Make the behavior default at the agent-launcher layer:
 
 - interactive `codex` and `codex resume` jobs invoke
-  `marshal-shim codex-run ...`;
+  `muster-shim codex-run ...`;
 - non-interactive and administrative subcommands (`codex exec`, `codex mcp`,
   `codex update`, and similar) continue to invoke the real Codex executable;
-- the Ansible role runs `marshal-shim codex-setup` so SessionStart,
+- the Ansible role runs `muster-shim codex-setup` so SessionStart,
   SessionEnd, prompt, and tool hooks stay installed and trusted.
 
 Do not overwrite Codex's own managed executable or symlink. Its updater owns

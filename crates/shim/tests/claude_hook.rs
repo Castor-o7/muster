@@ -1,4 +1,4 @@
-//! Integration test: `marshal-shim claude-hook` — the Claude Code side of the
+//! Integration test: `muster-shim claude-hook` — the Claude Code side of the
 //! hook inbox. Drives the REAL binary against a fake `/hook/*` listener and
 //! checks the request it sends and the `hookSpecificOutput` it prints, plus
 //! that every hook the plugin ships answers for the event it is registered
@@ -11,9 +11,9 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-const SHIM: &str = env!("CARGO_BIN_EXE_marshal-shim");
+const SHIM: &str = env!("CARGO_BIN_EXE_muster-shim");
 const HOOK_INPUT: &str = r#"{"session_id":"itest-claude","cwd":"/tmp/proj"}"#;
-const HOOKS_JSON: &str = include_str!("../../../plugins/marshal-shim/hooks/hooks.json");
+const HOOKS_JSON: &str = include_str!("../../../plugins/muster-shim/hooks/hooks.json");
 
 /// What the fake listener saw: the request line and the body.
 struct Seen {
@@ -64,16 +64,16 @@ fn fake_hook_listener(reply: &'static str) -> (String, mpsc::Receiver<Seen>) {
     (base, rx)
 }
 
-/// Run `marshal-shim <args>` with the hook JSON on stdin; return stdout.
+/// Run `muster-shim <args>` with the hook JSON on stdin; return stdout.
 fn run_hook(args: &[&str], base: &str) -> String {
     let mut child = Command::new(SHIM)
         .args(args)
-        .env("MARSHAL_BASE_URL", base)
+        .env("MUSTER_BASE_URL", base)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
-        .expect("spawn marshal-shim claude-hook");
+        .expect("spawn muster-shim claude-hook");
     child
         .stdin
         .take()
@@ -95,7 +95,7 @@ fn additional_context(stdout: &str, event: &str) -> String {
 
 #[test]
 fn prompt_submit_pulls_the_inbox_as_claude() {
-    let inbox = "<marshal_inbox count=\"1\">\n- from peer: hi\n</marshal_inbox>\n";
+    let inbox = "<muster_inbox count=\"1\">\n- from peer: hi\n</muster_inbox>\n";
     let (base, seen) = fake_hook_listener(inbox);
     let stdout = run_hook(&["claude-hook", "prompt-submit"], &base);
     let seen = seen.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -121,7 +121,7 @@ fn prompt_submit_pulls_the_inbox_as_claude() {
 
 #[test]
 fn post_tool_use_reads_the_inbox_endpoint() {
-    let (base, seen) = fake_hook_listener("<marshal_inbox count=\"1\">\n</marshal_inbox>");
+    let (base, seen) = fake_hook_listener("<muster_inbox count=\"1\">\n</muster_inbox>");
     let stdout = run_hook(&["claude-hook", "post-tool-use"], &base);
     let seen = seen.recv_timeout(Duration::from_secs(5)).unwrap();
     assert!(seen.request_line.starts_with("POST /hook/prompt-submit?"));
@@ -179,11 +179,11 @@ fn shipped_hooks_answer_for_the_event_they_are_registered_under() {
             for hook in group["hooks"].as_array().unwrap() {
                 let command = hook["command"].as_str().unwrap();
                 let mut words = command.split_whitespace();
-                assert_eq!(words.next(), Some("marshal-shim"), "{command}");
+                assert_eq!(words.next(), Some("muster-shim"), "{command}");
                 let args: Vec<&str> = words.collect();
                 assert_eq!(args.first(), Some(&"claude-hook"), "{command}");
 
-                let (base, _seen) = fake_hook_listener("<marshal_session/>");
+                let (base, _seen) = fake_hook_listener("<muster_session/>");
                 let stdout = run_hook(&args, &base);
                 additional_context(&stdout, event);
             }

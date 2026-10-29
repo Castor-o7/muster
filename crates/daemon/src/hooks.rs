@@ -1,6 +1,6 @@
 //! Agent hook logic — all of it server-side.
 //!
-//! These run behind marshal's own plain-HTTP listener (`http_listener`),
+//! These run behind muster's own plain-HTTP listener (`http_listener`),
 //! not myko's MCP endpoint: the hook command on every platform is a dumb
 //! curl one-liner that POSTs Claude Code's raw hook JSON and prints the
 //! `text/plain` response back into the agent's context.
@@ -33,7 +33,7 @@ use myko::{
 };
 use serde_json::Value;
 
-use marshal_entities::{
+use muster_entities::{
     AckMessages, CONTEXT_BODY_MAX_CHARS, GetAllSessions, HostInfo, MessageId, MessageView,
     ReadMessages, Session, SessionId, context_preview, nickname_for,
 };
@@ -45,7 +45,7 @@ const AUTO_INBOX_MIN_BODY_CHARS: usize = 256;
 /// until the response is confirmed written back to the caller.
 ///
 /// Acking is what marks a surfaced message "delivered". Doing it inside the
-/// hook — before the `<marshal_inbox>` bytes reach the agent — is at-most-once:
+/// hook — before the `<muster_inbox>` bytes reach the agent — is at-most-once:
 /// a response that times out (`curl --max-time 5`) or drops mid-write would
 /// leave the messages marked read but never seen. So `surface_unread` returns
 /// the surfaced ids here and the listener acks them ONLY after a successful
@@ -117,7 +117,7 @@ fn handle_session_register(query: &str, body: &[u8], ctx: &Arc<MykoServerContext
         return HookOutcome::text(String::new());
     };
     let nickname = crate::nickname_assign::ensure_assigned(&cmd_ctx, &sid)
-        .unwrap_or_else(|_| marshal_entities::nickname(&sid));
+        .unwrap_or_else(|_| muster_entities::nickname(&sid));
     HookOutcome::text(
         serde_json::json!({
             "session_id": sid,
@@ -132,27 +132,27 @@ fn handle_session_start(query: &str, body: &[u8], ctx: &Arc<MykoServerContext>) 
         return HookOutcome::text(String::new());
     };
 
-    // Inject the agent's own marshal identity for context — recognising
+    // Inject the agent's own muster identity for context — recognising
     // itself in the roster, addressing self-sends. Persists in context across
     // the session; re-injected on resume. The `asSession` guidance is
-    // harness-specific: Claude reaches marshal through the shim, which resolves
+    // harness-specific: Claude reaches muster through the shim, which resolves
     // the sender from its WS connection, so the agent does NOT pass it. Codex's
     // MCP server has no connection identity (Codex never tells it the session),
     // so the Codex agent must name itself explicitly on every write.
     // The agent's own handle — so it recognises itself in the roster and can say
     // who it is. Authoritative (assigned handle, else the computed candidate the
-    // assigner would use), matching what peers see in marshal://roster.
+    // assigner would use), matching what peers see in muster://roster.
     let q = parse_query(query);
-    let nick = nickname_for(&cmd_ctx, &sid).unwrap_or_else(|_| marshal_entities::nickname(&sid));
+    let nick = nickname_for(&cmd_ctx, &sid).unwrap_or_else(|_| muster_entities::nickname(&sid));
     let mut out = if q.get("harness").map(String::as_str) == Some("codex") {
         format!(
-            "<marshal_session nickname=\"{nick}\" id=\"{sid}\">Use id as asSession on writes and \
-             ?asSession= on caller-relative reads.</marshal_session>\n"
+            "<muster_session nickname=\"{nick}\" id=\"{sid}\">Use id as asSession on writes and \
+             ?asSession= on caller-relative reads.</muster_session>\n"
         )
     } else {
         format!(
-            "<marshal_session nickname=\"{nick}\" id=\"{sid}\">Marshal tools attach this \
-             identity.</marshal_session>\n"
+            "<muster_session nickname=\"{nick}\" id=\"{sid}\">Muster tools attach this \
+             identity.</muster_session>\n"
         )
     };
     let (inbox, ids) = surface_unread(&cmd_ctx, &sid);
@@ -319,7 +319,7 @@ fn surface_unread(cmd_ctx: &CommandContext, sid: &str) -> (String, Vec<MessageId
     let sid_typed = SessionId(Arc::from(sid));
     // DIRECT-ONLY auto-inject. The per-turn inbox surfaces messages addressed
     // to me *directly* (`to_session`), NOT room broadcasts — a broadcast is
-    // ambient (read via `marshal://messages room=…` or the marshal UI), so it
+    // ambient (read via `muster://messages room=…` or the muster UI), so it
     // never hijacks the turn with unrelated context. `inbox: true` (direct +
     // room) stays available for explicit reads; auto-inject is direct-only.
     let read = ReadMessages {
@@ -349,12 +349,12 @@ fn surface_unread(cmd_ctx: &CommandContext, sid: &str) -> (String, Vec<MessageId
         .clamp(AUTO_INBOX_MIN_BODY_CHARS, CONTEXT_BODY_MAX_CHARS);
     let render_line = |m: &MessageView| -> String {
         let sender = nickname_for(cmd_ctx, m.from_session_id.0.as_ref())
-            .unwrap_or_else(|_| marshal_entities::nickname(m.from_session_id.0.as_ref()));
+            .unwrap_or_else(|_| muster_entities::nickname(m.from_session_id.0.as_ref()));
         let (preview, truncated) = context_preview(&m.body, per_message_chars);
         let mut line = format!("- from {sender}: {preview}\n");
         if truncated {
             line.push_str(&format!(
-                "  [truncated; full message {} remains in marshal://messages]\n",
+                "  [truncated; full message {} remains in muster://messages]\n",
                 m.message_id.0
             ));
         }
@@ -380,18 +380,18 @@ fn surface_unread(cmd_ctx: &CommandContext, sid: &str) -> (String, Vec<MessageId
         .saturating_sub(result.messages.len() as u32);
     if remaining == 0 {
         out.push_str(&format!(
-            "<marshal_inbox count=\"{}\">\n",
+            "<muster_inbox count=\"{}\">\n",
             result.messages.len()
         ));
     } else {
         out.push_str(&format!(
-            "<marshal_inbox count=\"{}\" remaining=\"{remaining}\">\n",
+            "<muster_inbox count=\"{}\" remaining=\"{remaining}\">\n",
             result.messages.len()
         ));
     }
     if !human.is_empty() {
         let op = human[0].to_operator.as_deref().unwrap_or("your operator");
-        out.push_str(&marshal_entities::operator_relay_notice(op));
+        out.push_str(&muster_entities::operator_relay_notice(op));
         out.push('\n');
         for m in &human {
             out.push_str(&render_line(m));
@@ -406,11 +406,11 @@ fn surface_unread(cmd_ctx: &CommandContext, sid: &str) -> (String, Vec<MessageId
             out.push_str(&render_line(m));
         }
     }
-    out.push_str("</marshal_inbox>\n");
+    out.push_str("</muster_inbox>\n");
 
     // Return the surfaced ids for the listener to ack AFTER the response is
     // written (see `HookOutcome` / `ack_surfaced`). Acking here — before the
-    // `<marshal_inbox>` bytes reach the agent — would lose messages on a
+    // `<muster_inbox>` bytes reach the agent — would lose messages on a
     // dropped or timed-out response.
     let ids: Vec<MessageId> = result
         .messages

@@ -281,7 +281,7 @@ mod tests {
         assert!(is_reserved_room_name("EVERYONE"));
         assert!(is_reserved_room_name("host:laptop"));
         assert!(is_reserved_room_name("Op:trevor"));
-        assert!(is_reserved_room_name("project:marshal"));
+        assert!(is_reserved_room_name("project:muster"));
         assert!(!is_reserved_room_name("frontend"));
         assert!(!is_reserved_room_name("hostess"));
     }

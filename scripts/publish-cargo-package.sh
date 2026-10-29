@@ -14,7 +14,7 @@ PY
 registry_url="https://crates.io/api/v1/crates/${package_name}/${package_version}"
 status=$(
   curl --silent --show-error --retry 3 \
-    --user-agent 'marshal-release-workflow (https://github.com/ignition-is-go/marshal)' \
+    --user-agent 'muster-release-workflow (https://github.com/Castor-o7/muster)' \
     --output /dev/null --write-out '%{http_code}' "$registry_url"
 )
 

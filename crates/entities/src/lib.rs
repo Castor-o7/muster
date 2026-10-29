@@ -1,4 +1,4 @@
-//! Myko entities for the marshal coordination service.
+//! Myko entities for the muster coordination service.
 //!
 //! - `Session` — one row per connected Claude shim or TUI client.
 //! - `Message` — point-to-point or broadcast text addressed to either

@@ -20,7 +20,7 @@ use std::{
 };
 
 use hyphae::{Gettable, Materialize};
-use marshal_entities::{
+use muster_entities::{
     GetAllSessions, LivePushStatus, Message, NotifyChannel, SendMessage, SendMessageResult,
     Session, SessionId, WakeStatus,
 };
@@ -146,7 +146,7 @@ fn message_count(ctx: &MykoServerContext) -> usize {
 #[test]
 fn send_message_delivers_then_persists_when_recipient_is_live() {
     let _ = env_logger::builder().is_test(true).try_init();
-    marshal_entities::link();
+    muster_entities::link();
     daemon::link();
 
     let port = pick_free_port();
@@ -256,7 +256,7 @@ fn send_message_delivers_then_persists_when_recipient_is_live() {
         push.content,
         format!(
             "new message from {}",
-            marshal_entities::nickname("sess-alpha")
+            muster_entities::nickname("sess-alpha")
         ),
         "content should be a nickname-only origin ping, got: {}",
         push.content,
@@ -285,7 +285,7 @@ fn send_message_delivers_then_persists_when_recipient_is_live() {
     );
     assert_eq!(
         push.meta.get("from_nickname"),
-        Some(&serde_json::json!(marshal_entities::nickname("sess-alpha")))
+        Some(&serde_json::json!(muster_entities::nickname("sess-alpha")))
     );
 
     // And the server persisted exactly one Message. Persistence happens before
@@ -308,7 +308,7 @@ fn send_message_delivers_then_persists_when_recipient_is_live() {
 #[test]
 fn live_client_with_channels_off_is_not_delivered_live() {
     let _ = env_logger::builder().is_test(true).try_init();
-    marshal_entities::link();
+    muster_entities::link();
     daemon::link();
 
     let port = pick_free_port();
@@ -418,7 +418,7 @@ fn human_addressed_push_content_carries_the_relay_contract() {
     // request meant for a person. Without the contract in `content`, an
     // approval request for the human gets handled by the agent instead.
     let _ = env_logger::builder().is_test(true).try_init();
-    marshal_entities::link();
+    muster_entities::link();
     daemon::link();
 
     let port = pick_free_port();
@@ -515,7 +515,7 @@ fn human_addressed_push_content_carries_the_relay_contract() {
     );
     assert!(
         push.content
-            .contains(&marshal_entities::nickname("sess-alpha")),
+            .contains(&muster_entities::nickname("sess-alpha")),
         "content must still name the sender, got: {}",
         push.content,
     );

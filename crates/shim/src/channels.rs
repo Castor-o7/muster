@@ -1,7 +1,7 @@
 //! Two concerns live here:
 //!
 //! 1. [`detect`] — does THIS session have the live channel loaded (parent
-//!    launched with `--dangerously-load-development-channels …marshal…`)?
+//!    launched with `--dangerously-load-development-channels …muster…`)?
 //!    Reported to the daemon on the Session so `SendMessage` can set
 //!    `delivered_live` honestly. There is no in-band MCP signal for it, so it
 //!    is read from the parent's command line.
@@ -9,7 +9,7 @@
 //! 2. [`cannot_receive`] — is the daemon UNREACHABLE (the statusline's
 //!    top-severity warning, meaning nothing delivers at all)? Delivery has TWO
 //!    paths: the live channel (needs the flag) and the turn-boundary INBOX (the
-//!    `UserPromptSubmit` hook POSTs to the daemon and surfaces `<marshal_inbox>`
+//!    `UserPromptSubmit` hook POSTs to the daemon and surfaces `<muster_inbox>`
 //!    on the NEXT prompt). Neither works if the daemon is unreachable, so that
 //!    is the "can't communicate at all" signal, keyed on reachability.
 //!
@@ -32,18 +32,18 @@ use std::time::Duration;
 /// when we want to warn, so a brief render stall then is acceptable.
 const REACHABILITY_TIMEOUT: Duration = Duration::from_millis(600);
 
-/// True iff `parent_cmdline` shows marshal channels were loaded. Pure, so the
+/// True iff `parent_cmdline` shows muster channels were loaded. Pure, so the
 /// matching contract is unit-testable without a parent process.
 pub fn channels_enabled_in(parent_cmdline: &[String]) -> bool {
     let joined = parent_cmdline.join(" ");
-    joined.contains("--dangerously-load-development-channels") && joined.contains("marshal")
+    joined.contains("--dangerously-load-development-channels") && joined.contains("muster")
 }
 
 /// Detect this process's LIVE channel capability from its PARENT's command
 /// line. `None` = parent cmdline unreadable (unknown → legacy/None Session);
 /// `Some(true|false)` = live channel on|off. Used by the shim at startup to
 /// report `channels_enabled` to the daemon for `delivered_live` honesty. NOT
-/// used for the statusline warning — see [`marshal_reachable`].
+/// used for the statusline warning — see [`muster_reachable`].
 pub fn detect() -> Option<bool> {
     let cmd = parent_cmdline();
     if cmd.is_empty() {
@@ -53,7 +53,7 @@ pub fn detect() -> Option<bool> {
 }
 
 /// statusline: true iff this session CANNOT receive peer messages at all —
-/// i.e. the marshal daemon is unreachable, so neither the live channel nor the
+/// i.e. the muster daemon is unreachable, so neither the live channel nor the
 /// inbox can deliver. A flagless-but-daemon-reachable session is NOT warned:
 /// its inbox still works. Unknown (no address configured / unresolvable) →
 /// `false` so we never false-alarm.
@@ -105,11 +105,11 @@ fn parse_host_port(addr: &str) -> Option<(String, u16)> {
 }
 
 /// Resolve the daemon WS address the same way the shim does: env first
-/// (`MARSHAL_DAEMON_ADDRESS`, legacy `MYKO_ADDRESS`), then the
+/// (`MUSTER_DAEMON_ADDRESS`, legacy `MYKO_ADDRESS`), then the
 /// `daemon-address` file the deploy role writes. `None` if nothing is
 /// configured.
 fn daemon_address() -> Option<String> {
-    for var in ["MARSHAL_DAEMON_ADDRESS", "MYKO_ADDRESS"] {
+    for var in ["MUSTER_DAEMON_ADDRESS", "MYKO_ADDRESS"] {
         if let Ok(v) = std::env::var(var) {
             let v = v.trim();
             if !v.is_empty() {
@@ -128,21 +128,21 @@ fn daemon_address() -> Option<String> {
     }
 }
 
-/// Per-user marshal config dir (mirrors the daemon-address file's resolution).
+/// Per-user muster config dir (mirrors the daemon-address file's resolution).
 fn config_dir(home: &Path) -> PathBuf {
     #[cfg(windows)]
     {
         if let Some(appdata) = std::env::var_os("APPDATA").filter(|s| !s.is_empty()) {
-            return PathBuf::from(appdata).join("marshal");
+            return PathBuf::from(appdata).join("muster");
         }
     }
     #[cfg(unix)]
     {
         if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME").filter(|s| !s.is_empty()) {
-            return PathBuf::from(xdg).join("marshal");
+            return PathBuf::from(xdg).join("muster");
         }
     }
-    home.join(".config").join("marshal")
+    home.join(".config").join("muster")
 }
 
 #[cfg(unix)]
@@ -267,20 +267,20 @@ mod tests {
     }
 
     #[test]
-    fn flag_with_server_marshal_is_enabled() {
+    fn flag_with_server_muster_is_enabled() {
         assert!(channels_enabled_in(&v(&[
             "claude",
             "--dangerously-load-development-channels",
-            "server:marshal",
+            "server:muster",
         ])));
     }
 
     #[test]
-    fn flag_with_plugin_marshal_is_enabled() {
+    fn flag_with_plugin_muster_is_enabled() {
         assert!(channels_enabled_in(&v(&[
             "claude",
             "--dangerously-load-development-channels",
-            "plugin:marshal-shim@marshal",
+            "plugin:muster-shim@muster",
         ])));
     }
 
@@ -301,16 +301,16 @@ mod tests {
     #[test]
     fn parses_ws_url_with_port() {
         assert_eq!(
-            parse_host_port("ws://100.86.142.61:6155"),
-            Some(("100.86.142.61".to_string(), 6155))
+            parse_host_port("ws://100.86.142.61:6255"),
+            Some(("100.86.142.61".to_string(), 6255))
         );
     }
 
     #[test]
     fn parses_bare_host_port_and_strips_path() {
         assert_eq!(
-            parse_host_port("marshal-01.lucid.host:6156/hook"),
-            Some(("marshal-01.lucid.host".to_string(), 6156))
+            parse_host_port("muster-01.lucid.host:6256/hook"),
+            Some(("muster-01.lucid.host".to_string(), 6256))
         );
     }
 

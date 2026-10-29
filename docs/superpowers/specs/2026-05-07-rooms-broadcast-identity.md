@@ -1,4 +1,4 @@
-# marshal: rooms, broadcast, identity, host info
+# muster: rooms, broadcast, identity, host info
 
 Proposal for the next feature wave on top of v0.1. Comments / edits welcome
 before any of this gets implemented.
@@ -10,7 +10,7 @@ Add three orthogonal layers on top of the current flat session-id mesh:
 1. **Identity** on every session — which human it belongs to, and which host
    it's on. Both auto-detected, both overridable.
 2. **Rooms** — optional named groupings of sessions. Auto-rooms are derived
-   from identity (`host:laptop`, `op:trevor`, `project:marshal`); ad-hoc
+   from identity (`host:laptop`, `op:trevor`, `project:muster`); ad-hoc
    rooms are anything a user creates with `join_room("frontend-redesign")`.
 3. **Broadcast** — a `broadcast(room, body)` tool that fans the message out
    to every member of the room, with per-recipient delivery results.
@@ -30,9 +30,9 @@ pub struct Session {
     // ... existing fields ...
 
     /// Which human this session belongs to. Auto-detected from
-    /// $MARSHAL_OPERATOR, then $USER, then "anonymous". Surfaces on the
-    /// roster so peers can tell apart "trevor's marshal session" from
-    /// "alice's marshal session" on a shared box.
+    /// $MUSTER_OPERATOR, then $USER, then "anonymous". Surfaces on the
+    /// roster so peers can tell apart "trevor's muster session" from
+    /// "alice's muster session" on a shared box.
     pub operator: Option<String>,
 
     /// Host environment summary. Auto-populated by the shim at startup.
@@ -49,7 +49,7 @@ pub struct HostInfo {
 }
 ```
 
-**Resolution order for `operator`:** `$MARSHAL_OPERATOR` → `$USER` →
+**Resolution order for `operator`:** `$MUSTER_OPERATOR` → `$USER` →
 `"anonymous"`. A user override matters when one human runs
 multiple OS accounts, or when sessions actually run as a service user
 (`claude-bot`, etc.) but logically belong to a person.
@@ -155,7 +155,7 @@ When a session SETs/re-SETs, the daemon's `AutoRoomSaga`:
 
 `everyone`, `host:`, `op:`, `project:` are first-class routes — you can
 `broadcast("everyone", "...")`, `broadcast("op:trevor", "...")`,
-`broadcast("project:marshal", "...")` exactly like ad-hoc rooms. The
+`broadcast("project:muster", "...")` exactly like ad-hoc rooms. The
 identity fields drive membership; the rooms are just the addressable
 view of "all sessions sharing this identity attribute".
 
@@ -290,7 +290,7 @@ broadcasts are universally visible.
 ```text
 read_messages({})                          // recent in your inbox + sent
 read_messages({ inbox: true, unread: true })   // your unread inbox
-read_messages({ room: "project:marshal" })     // everything in this project
+read_messages({ room: "project:muster" })     // everything in this project
 read_messages({ from: "<peer-session-id>" })   // 1:1 thread + their broadcasts
 read_messages({ to: "op:trevor" })             // anything addressed to trevor's ops
 read_messages({ sent: true })                  // your outbox

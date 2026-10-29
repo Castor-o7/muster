@@ -6,7 +6,7 @@
 //! close) and render a small overlay that sets the global `Focus` on pick.
 
 use leptos::prelude::*;
-use marshal_entities::{GetAllRooms, GetAllSessions};
+use muster_entities::{GetAllRooms, GetAllSessions};
 use pulse_leptos_ui::hooks::use_command_palette_shortcut;
 
 use crate::nick::use_nicknames;

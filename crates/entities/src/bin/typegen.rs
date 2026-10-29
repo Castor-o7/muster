@@ -1,18 +1,18 @@
-//! Generate TypeScript bindings for marshal's myko entities, commands, and
-//! queries — the source of truth the `marshal-opencode` plugin consumes so its
+//! Generate TypeScript bindings for muster's myko entities, commands, and
+//! queries — the source of truth the `muster-opencode` plugin consumes so its
 //! wire types can't drift from the Rust definitions.
 //!
 //! Mirrors myko's own `typegen` bin: `generate_item_types` filters the global
 //! `inventory` registry by `CARGO_PKG_NAME`, so run under THIS crate
-//! (`-p marshal-entities`) it emits only marshal's types.
+//! (`-p muster-entities`) it emits only muster's types.
 //!
-//! Usage: cargo run -p marshal-entities --features codegen --bin typegen -- <out-dir>
+//! Usage: cargo run -p muster-entities --features codegen --bin typegen -- <out-dir>
 
 fn main() {
     // Force-link so the `inventory`-registered item/command/query metadata is
     // present (the macros register lazily; nothing here references the types
     // directly otherwise).
-    marshal_entities::link();
+    muster_entities::link();
 
     let output_dir = std::env::args()
         .nth(1)
@@ -24,5 +24,5 @@ fn main() {
 
     myko::codegen::typescript::generate_item_types(&output_dir)
         .expect("failed to generate TypeScript types");
-    println!("wrote marshal TS bindings to {output_dir}");
+    println!("wrote muster TS bindings to {output_dir}");
 }

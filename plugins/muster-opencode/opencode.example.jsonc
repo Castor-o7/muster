@@ -1,0 +1,17 @@
+// Example opencode config wiring the muster plugin.
+// Copy the relevant keys into your opencode.json (project root) or
+// ~/.config/opencode/opencode.json (global).
+{
+  "$schema": "https://opencode.ai/config.json",
+
+  // Published-package form (see README Option A):
+  "plugin": ["muster-opencode"],
+
+  // — or — local-checkout form (Option B): reference this directory by path.
+  // "plugin": ["/abs/path/to/muster/plugins/muster-opencode"],
+
+  // The plugin reads its daemon address + operator from the environment, not
+  // from this file, so env-propagation works the same on every shell:
+  //   export MUSTER_DAEMON_ADDRESS=ws://muster-01.lucid.host:6255
+  //   export MUSTER_OPERATOR=max
+}

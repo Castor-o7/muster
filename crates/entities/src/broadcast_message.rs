@@ -145,7 +145,7 @@ impl CommandHandler for BroadcastMessage {
         ctx.emit_set(&msg)?;
 
         // Membership accounting only — no live push. A broadcast is delivered
-        // AMBIENTLY (persisted + addressed to the room; seen via the marshal UI
+        // AMBIENTLY (persisted + addressed to the room; seen via the muster UI
         // or an explicit room read), never blasted into members' turns.
         let mut delivered = Vec::new();
         let mut failed = Vec::new();
@@ -168,8 +168,8 @@ impl CommandHandler for BroadcastMessage {
             // AMBIENT delivery — a broadcast is NOT real-time-pushed. Unlike a
             // direct message (which auto-injects into the recipient's turn), a
             // room broadcast is persisted + addressed to the room and surfaced
-            // ambiently (the marshal UI's room view + an explicit
-            // `marshal://messages room=…` read) — never blasted into every
+            // ambiently (the muster UI's room view + an explicit
+            // `muster://messages room=…` read) — never blasted into every
             // member's active context. This is the fix for broadcasts hijacking
             // whole workspaces with unrelated context. `delivered` here means
             // "on the roster + will see it in the room", not "live-pushed".
@@ -229,7 +229,7 @@ impl CommandHandler for BroadcastMessage {
                     cid.0.as_ref(),
                     mention_push_content(&from_nickname, &room.name, to_operator.as_deref()),
                     serde_json::json!({
-                        "source": "marshal",
+                        "source": "muster",
                         "kind": "mention",
                         "message_id": ping.id.0.as_ref(),
                         "from_session": sender.id.0.as_ref(),

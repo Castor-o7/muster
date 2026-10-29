@@ -1,4 +1,4 @@
 fn main() {
     console_error_panic_hook::set_once();
-    leptos::mount::mount_to_body(marshal_ui::App);
+    leptos::mount::mount_to_body(muster_ui::App);
 }

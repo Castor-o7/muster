@@ -175,7 +175,7 @@ pub struct Session {
     /// `"busy"` (processing a turn), `"idle"` (awaiting input), or `"shell"`
     /// (in a shell command). A truer "is this agent working right now" signal
     /// than `last_activity_at`, which only moves on MCP tool calls — an agent
-    /// can be `busy` for minutes without touching marshal. The shim pushes it
+    /// can be `busy` for minutes without touching muster. The shim pushes it
     /// event-driven (an fs-watch on the manifest), so the roster tracks
     /// turn-state in near real time. `None` for harnesses with no such
     /// manifest (Codex) or older Claude builds.
@@ -225,7 +225,7 @@ pub struct Session {
     pub last_tool_at: Option<i64>,
 
     /// Which human this session belongs to. Resolved by the shim:
-    /// `$MARSHAL_OPERATOR` → `$USER` → `"anonymous"`. Anchors the
+    /// `$MUSTER_OPERATOR` → `$USER` → `"anonymous"`. Anchors the
     /// auto-room `op:<operator>`, so peers can see "all of trevor's
     /// sessions" regardless of cwd. `None` for legacy / observer
     /// shims that don't set it.
@@ -247,7 +247,7 @@ pub struct Session {
 
     /// Whether this session can receive LIVE channel pushes — i.e. its
     /// claude was launched with `--dangerously-load-development-channels
-    /// …marshal`. The shim resolves it from the parent process at startup;
+    /// …muster`. The shim resolves it from the parent process at startup;
     /// the daemon can't see it (it's a recipient-host launch detail).
     /// `None` = unknown (legacy shim that doesn't report it). `SendMessage`
     /// uses it to report `delivered_live` HONESTLY: a live WS client with

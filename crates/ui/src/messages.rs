@@ -1,4 +1,4 @@
-//! Messages — the live marshal message bus.
+//! Messages — the live muster message bus.
 //!
 //! A reverse-chronological feed of every message: direct sends (peer → peer)
 //! and broadcasts (peer → #room), both nickname-labelled. A filter bar scopes
@@ -8,7 +8,7 @@
 //! traffic, with a clearable chip. That's what turns five panes into one lens.
 
 use leptos::prelude::*;
-use marshal_entities::{GetAllMessages, GetAllRooms, Message};
+use muster_entities::{GetAllMessages, GetAllRooms, Message};
 use pulse_leptos_ui::{EmptyState, SearchField};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -172,7 +172,7 @@ pub fn MessagesPanel() -> impl IntoView {
                 } else if loaded.get() {
                     "No messages yet. Sends and broadcasts stream in here live."
                 } else {
-                    "Connecting to the marshal daemon…"
+                    "Connecting to the muster daemon…"
                 };
                 return view! { <EmptyState message=msg.to_string() /> }.into_any();
             }

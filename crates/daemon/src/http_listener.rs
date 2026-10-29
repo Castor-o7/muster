@@ -1,10 +1,10 @@
-//! marshal's own minimal plain-HTTP listener for the Claude Code
+//! muster's own minimal plain-HTTP listener for the Claude Code
 //! `/hook/*` endpoints.
 //!
 //! Deliberately separate from myko's listener. Stock myko serves
 //! `/myko/mcp` (WS + HTTP MCP) on its own port and we do **not** fork it
 //! to bolt on extra routes. The hooks need a dumb plain-HTTP endpoint a
-//! curl one-liner POSTs raw hook JSON to, so marshal binds a second port
+//! curl one-liner POSTs raw hook JSON to, so muster binds a second port
 //! and shares the server's `Arc<MykoServerContext>` — same registry, same
 //! event log, no second source of truth.
 //!
@@ -31,7 +31,7 @@ const MAX_BODY: usize = 256 * 1024;
 /// Run the hook listener forever. Spawn on a tokio task.
 pub async fn run(bind: SocketAddr, ctx: Arc<MykoServerContext>) -> std::io::Result<()> {
     let listener = TcpListener::bind(bind).await?;
-    log::info!("marshal hook listener on http://{bind} (/hook/*)");
+    log::info!("muster hook listener on http://{bind} (/hook/*)");
     loop {
         let (stream, _peer) = match listener.accept().await {
             Ok(pair) => pair,

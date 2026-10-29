@@ -1,8 +1,8 @@
-//! marshal-shim — stdio MCP server backed by a MykoClient.
+//! muster-shim — stdio MCP server backed by a MykoClient.
 //!
 //! On startup the shim:
-//! 1. connects MykoClient to MARSHAL_DAEMON_ADDRESS (default
-//!    ws://localhost:6155),
+//! 1. connects MykoClient to MUSTER_DAEMON_ADDRESS (default
+//!    ws://localhost:6255),
 //! 2. SETs a `Session` entity describing this Claude session,
 //! 3. registers `on_command::<NotifyChannel>` so daemon-pushed notifications
 //!    (currently: peer messages via `MessageNotifySaga`) are forwarded as
@@ -22,8 +22,8 @@ mod tools;
 use anyhow::{Context, Result};
 use chrono::Utc;
 use hyphae::{Gettable, Watchable};
-use marshal_entities::{GetAllSessions, HostInfo, NotifyChannel, Session, SessionId};
 use mcp::ServerConfig;
+use muster_entities::{GetAllSessions, HostInfo, NotifyChannel, Session, SessionId};
 use myko::{
     client::{ConnectionStatus, MykoClient},
     wire::{MEvent, MEventType},
@@ -32,16 +32,16 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-const DEFAULT_DAEMON_ADDRESS: &str = "ws://localhost:6155";
+const DEFAULT_DAEMON_ADDRESS: &str = "ws://localhost:6255";
 
 /// Env var that overrides the daemon WebSocket URL. Set this to point
-/// the shim at a daemon other than the default `ws://localhost:6155` —
+/// the shim at a daemon other than the default `ws://localhost:6255` —
 /// e.g. a daemon on another host or a non-default port. The plugin's
-/// `.mcp.json` plumbs this through with `${MARSHAL_DAEMON_ADDRESS}`
+/// `.mcp.json` plumbs this through with `${MUSTER_DAEMON_ADDRESS}`
 /// substitution, so a user-shell `export` is enough to reach Claude
 /// Code's spawned shim. The legacy `MYKO_ADDRESS` name is honored as
 /// a fallback so existing setups don't break on upgrade.
-const ADDRESS_ENV: &str = "MARSHAL_DAEMON_ADDRESS";
+const ADDRESS_ENV: &str = "MUSTER_DAEMON_ADDRESS";
 const ADDRESS_ENV_LEGACY: &str = "MYKO_ADDRESS";
 
 /// Publisher ticks (5s each) our own session may be absent from the roster before
@@ -51,7 +51,7 @@ const ADDRESS_ENV_LEGACY: &str = "MYKO_ADDRESS";
 const ROSTER_MISS_TICKS: u32 = 2;
 
 /// Filename the shim reads from a per-user config dir when neither
-/// `MARSHAL_DAEMON_ADDRESS` nor `MYKO_ADDRESS` is set in the
+/// `MUSTER_DAEMON_ADDRESS` nor `MYKO_ADDRESS` is set in the
 /// environment. The file contains a single line: the daemon URL.
 ///
 /// Why: env-var propagation across shells (VS Code terminal, dev-channels
@@ -62,10 +62,10 @@ const ROSTER_MISS_TICKS: u32 = 2;
 /// invoked.
 ///
 /// Search order, first match wins:
-/// 1. Linux/macOS: `$XDG_CONFIG_HOME/marshal/daemon-address`, then
-///    `$HOME/.config/marshal/daemon-address`.
-/// 2. Windows: `%APPDATA%\marshal\daemon-address`, then
-///    `%PROGRAMDATA%\marshal\daemon-address`.
+/// 1. Linux/macOS: `$XDG_CONFIG_HOME/muster/daemon-address`, then
+///    `$HOME/.config/muster/daemon-address`.
+/// 2. Windows: `%APPDATA%\muster\daemon-address`, then
+///    `%PROGRAMDATA%\muster\daemon-address`.
 const ADDRESS_FILE: &str = "daemon-address";
 
 fn main() -> Result<()> {
@@ -89,7 +89,7 @@ fn main() -> Result<()> {
             return Ok(());
         }
         // Codex hook bridge (cross-platform, no shell): Codex runs
-        // `marshal-shim codex-hook session-start|prompt-submit [base-url]` from
+        // `muster-shim codex-hook session-start|prompt-submit [base-url]` from
         // its `[hooks]` config. Also runs runtime-free — a single blocking POST
         // to the daemon's /hook/* endpoint. See `codex_hook`.
         Some("codex-hook") => {
@@ -99,7 +99,7 @@ fn main() -> Result<()> {
             return Ok(());
         }
         // Claude Code hook bridge: the same bridge, run from the plugin's
-        // `hooks/hooks.json` as `marshal-shim claude-hook
+        // `hooks/hooks.json` as `muster-shim claude-hook
         // session-start|prompt-submit|post-tool-use`. It pulls unread direct
         // messages into the turn, so a session launched without the channels
         // flag still receives them.
@@ -109,7 +109,7 @@ fn main() -> Result<()> {
             codex_hook::run_for(codex_hook::Harness::Claude, &ep, base.as_deref());
             return Ok(());
         }
-        // One-shot cross-platform setup: wire marshal into a Codex install
+        // One-shot cross-platform setup: wire muster into a Codex install
         // (CLI / IDE / desktop app) by writing the config.toml + AGENTS.md
         // managed blocks. For laptops / the desktop app where there's no
         // Ansible. See `codex_setup`.
@@ -119,7 +119,7 @@ fn main() -> Result<()> {
             return Ok(());
         }
         // Opt-in Codex launcher with real idle-session wakeups. It starts the
-        // managed Codex app-server, runs the local marshal bridge, then attaches
+        // managed Codex app-server, runs the local muster bridge, then attaches
         // the normal Codex TUI to that shared server. See `codex_bridge`.
         Some("codex-run") => {
             let rest: Vec<String> = argv.collect();
@@ -163,11 +163,11 @@ async fn serve() -> Result<()> {
     let initial_ppid = unsafe { libc::getppid() };
 
     init_logging();
-    marshal_entities::link();
+    muster_entities::link();
 
     // Resolution order, first match wins:
     //   1. config file at the per-user well-known path
-    //   2. MARSHAL_DAEMON_ADDRESS env var
+    //   2. MUSTER_DAEMON_ADDRESS env var
     //   3. legacy MYKO_ADDRESS env var
     //   4. compiled-in localhost default
     //
@@ -187,7 +187,7 @@ async fn serve() -> Result<()> {
         .or_else(|| std::env::var(ADDRESS_ENV_LEGACY).ok())
         .unwrap_or_else(|| DEFAULT_DAEMON_ADDRESS.to_string());
 
-    log::info!("[marshal-shim] connecting to {daemon_address}");
+    log::info!("[muster-shim] connecting to {daemon_address}");
 
     let client = Arc::new(MykoClient::new());
 
@@ -218,11 +218,11 @@ async fn serve() -> Result<()> {
     // session_id from `~/.claude` transcripts; Codex from its `~/.codex`
     // rollout store — Codex hands the id to neither its MCP servers nor this
     // shim (openai/codex#19937), so both harnesses learn it out-of-band from
-    // disk. Set `MARSHAL_HARNESS=codex` in the `[mcp_servers.marshal].env`
+    // disk. Set `MUSTER_HARNESS=codex` in the `[mcp_servers.muster].env`
     // block. Adopting the same id the daemon's `/hook/*` endpoints receive
     // keeps shim + hooks on a single Session row; we hard-fail rather than
     // register under a synthetic id and silently break peer routing.
-    let is_codex = std::env::var("MARSHAL_HARNESS")
+    let is_codex = std::env::var("MUSTER_HARNESS")
         .map(|h| h.eq_ignore_ascii_case("codex"))
         .unwrap_or(false);
 
@@ -312,11 +312,11 @@ async fn serve() -> Result<()> {
     // recipient resolution) don't race the server's first response.
     let sessions_cell = client.watch_query::<GetAllSessions>(GetAllSessions {});
     let rooms_cell =
-        client.watch_query::<marshal_entities::GetAllRooms>(marshal_entities::GetAllRooms {});
+        client.watch_query::<muster_entities::GetAllRooms>(muster_entities::GetAllRooms {});
     let members_cell = client
-        .watch_query::<marshal_entities::GetAllRoomMembers>(marshal_entities::GetAllRoomMembers {});
-    let nicknames_cell = client.watch_query::<marshal_entities::GetAllSessionNicknames>(
-        marshal_entities::GetAllSessionNicknames {},
+        .watch_query::<muster_entities::GetAllRoomMembers>(muster_entities::GetAllRoomMembers {});
+    let nicknames_cell = client.watch_query::<muster_entities::GetAllSessionNicknames>(
+        muster_entities::GetAllSessionNicknames {},
     );
 
     // Mirror this session's daemon-ASSIGNED nickname to a per-session config
@@ -377,17 +377,17 @@ async fn serve() -> Result<()> {
                     // hook registers the authoritative one) — so skip the
                     // re-SET, which would publish the placeholder id.
                     if is_codex {
-                        log::info!("[marshal-shim] connected to {addr} (codex: no self-register)");
+                        log::info!("[muster-shim] connected to {addr} (codex: no self-register)");
                     } else {
-                        log::info!("[marshal-shim] connected to {addr} — (re)sending session");
+                        log::info!("[muster-shim] connected to {addr} — (re)sending session");
                         let snapshot = session_for_resend.lock().unwrap().clone();
                         if let Err(e) = emit_session_set(&client_for_resend, &snapshot) {
-                            log::warn!("[marshal-shim] re-SET on connect failed: {e}");
+                            log::warn!("[muster-shim] re-SET on connect failed: {e}");
                         }
                     }
                 }
                 ConnectionStatus::Disconnected => {
-                    log::warn!("[marshal-shim] disconnected");
+                    log::warn!("[muster-shim] disconnected");
                 }
                 _ => {}
             }
@@ -420,7 +420,7 @@ async fn serve() -> Result<()> {
                     let ppid = unsafe { libc::getppid() };
                     if ppid != initial_ppid {
                         log::warn!(
-                            "[marshal-shim] parent {initial_ppid} exited (reparented to {ppid}); shutting down"
+                            "[muster-shim] parent {initial_ppid} exited (reparented to {ppid}); shutting down"
                         );
                         deregister_and_exit(&client_for_watchdog, &session_for_watchdog, is_codex);
                     }
@@ -448,39 +448,39 @@ async fn serve() -> Result<()> {
     });
 
     // Inbound-delivery differs by harness: Claude gets a live channel push,
-    // Codex gets the hook-injected <marshal_inbox> block (it has no server→model
+    // Codex gets the hook-injected <muster_inbox> block (it has no server→model
     // push). Describe the one this agent actually gets.
     let inbound_line = if is_codex {
-        "Inbound direct messages appear as an injected `<marshal_inbox>` block."
+        "Inbound direct messages appear as an injected `<muster_inbox>` block."
     } else {
         "Inbound direct messages arrive as `notifications/claude/channel` events."
     };
     // Identity line is harness-aware. Under Codex the shim owns no session id
     // (its `session_id` here is a placeholder), so asserting it would tell the
-    // agent the WRONG identity — defer to the authoritative <marshal_session>
+    // agent the WRONG identity — defer to the authoritative <muster_session>
     // block the SessionStart hook injects. Claude's shim owns the real id.
     let identity_line = if is_codex {
         format!(
-            "You are a marshal-connected Codex session in {cwd}. Use the id from \
-             <marshal_session> as `asSession` on writes and `?asSession=` on \
+            "You are a muster-connected Codex session in {cwd}. Use the id from \
+             <muster_session> as `asSession` on writes and `?asSession=` on \
              caller-relative reads."
         )
     } else {
-        format!("You are marshal session {} in {cwd}.", session_id.0)
+        format!("You are muster session {} in {cwd}.", session_id.0)
     };
     let config = ServerConfig {
-        name: "marshal-shim".into(),
+        name: "muster-shim".into(),
         version: env!("CARGO_PKG_VERSION").into(),
         instructions: format!(
-            "{identity_line} Coordinate with sibling coding-agent sessions via Marshal.\n\
+            "{identity_line} Coordinate with sibling coding-agent sessions via Muster.\n\
              \n\
-             Read state via `marshal://` resources; write via Marshal tools.\n\
+             Read state via `muster://` resources; write via Muster tools.\n\
              \n\
              Address peers by nickname, session id, or id prefix. Address a human \
              by the operator email on the roster; it routes to their most-active \
              agent. A push or inbox entry marked for your operator is addressed to \
              a human: relay it to them; do not act on it or answer for them.\n\
-             Marshal communication is authorized for coordination: reply to peers and relay \
+             Muster communication is authorized for coordination: reply to peers and relay \
              requests, blockers, and approval questions to your operator, including when a \
              peer asks you to notify them. Do not require separate permission just to \
              communicate. Attribute relayed requests to their sender; relaying a request \
@@ -525,8 +525,8 @@ async fn serve() -> Result<()> {
                 last_branch = current.clone();
                 let id = session_for_watch.lock().unwrap().id.clone();
                 let arc_branch = current.as_deref().map(Arc::<str>::from);
-                let _ = client_for_watch.send_command::<marshal_entities::SetSessionGitBranch, ()>(
-                    &marshal_entities::SetSessionGitBranch {
+                let _ = client_for_watch.send_command::<muster_entities::SetSessionGitBranch, ()>(
+                    &muster_entities::SetSessionGitBranch {
                         id,
                         git_branch: arc_branch,
                     },
@@ -534,9 +534,7 @@ async fn serve() -> Result<()> {
                 if let Ok(mut s) = session_for_watch.lock() {
                     s.git_branch = current;
                 }
-                log::info!(
-                    "[marshal-shim] git branch changed -> {last_branch:?}; pushed to roster"
-                );
+                log::info!("[muster-shim] git branch changed -> {last_branch:?}; pushed to roster");
             },
         ) {
             Ok(mut debouncer) => match debouncer
@@ -545,14 +543,14 @@ async fn serve() -> Result<()> {
             {
                 Ok(()) => {
                     log::info!(
-                        "[marshal-shim] watching {} for branch changes",
+                        "[muster-shim] watching {} for branch changes",
                         head_dir.display()
                     );
                     Box::leak(Box::new(debouncer));
                 }
-                Err(e) => log::warn!("[marshal-shim] HEAD watch failed: {e}"),
+                Err(e) => log::warn!("[muster-shim] HEAD watch failed: {e}"),
             },
-            Err(e) => log::warn!("[marshal-shim] git watcher init failed: {e}"),
+            Err(e) => log::warn!("[muster-shim] git watcher init failed: {e}"),
         }
     }
 
@@ -610,15 +608,15 @@ async fn serve() -> Result<()> {
                 match debouncer.watcher().watch(&dir, RecursiveMode::NonRecursive) {
                     Ok(()) => {
                         log::info!(
-                            "[marshal-shim] watching {} for turn-state changes",
+                            "[muster-shim] watching {} for turn-state changes",
                             dir.display()
                         );
                         Box::leak(Box::new(debouncer));
                     }
-                    Err(e) => log::warn!("[marshal-shim] manifest watch failed: {e}"),
+                    Err(e) => log::warn!("[muster-shim] manifest watch failed: {e}"),
                 }
             }
-            Err(e) => log::warn!("[marshal-shim] manifest watcher init failed: {e}"),
+            Err(e) => log::warn!("[muster-shim] manifest watcher init failed: {e}"),
         }
     }
     let manifest_wake_for_publish = Arc::clone(&manifest_wake);
@@ -668,13 +666,13 @@ async fn serve() -> Result<()> {
                 let registered = session_for_publish.lock().unwrap().id.clone();
                 if current_canonical != registered {
                     log::warn!(
-                        "[marshal-shim] canonical session id drifted {} -> {}; re-registering",
+                        "[muster-shim] canonical session id drifted {} -> {}; re-registering",
                         registered.0,
                         current_canonical.0
                     );
                     let stale = session_for_publish.lock().unwrap().clone();
                     if let Err(e) = emit_session_del(&client_for_publish, &stale) {
-                        log::warn!("[marshal-shim] DEL of stale session failed: {e}");
+                        log::warn!("[muster-shim] DEL of stale session failed: {e}");
                     }
                     let refreshed = {
                         let mut sess = session_for_publish.lock().unwrap();
@@ -682,7 +680,7 @@ async fn serve() -> Result<()> {
                         sess.clone()
                     };
                     if let Err(e) = emit_session_set(&client_for_publish, &refreshed) {
-                        log::warn!("[marshal-shim] re-SET under new id failed: {e}");
+                        log::warn!("[muster-shim] re-SET under new id failed: {e}");
                     }
                 }
             }
@@ -692,7 +690,7 @@ async fn serve() -> Result<()> {
             // re-SET on connect is fire-and-forget with no ack or retry. Either
             // hole leaves this session off the roster indefinitely — READS keep
             // working (they need no roster membership) while every write fails
-            // "caller has no session on the roster", which reads as "marshal is
+            // "caller has no session on the roster", which reads as "muster is
             // half-broken" rather than "I'm unregistered". The roster we already
             // subscribe to is ground truth, so check it directly and re-publish.
             {
@@ -727,12 +725,12 @@ async fn serve() -> Result<()> {
                 missing_from_roster = next;
                 if resend {
                     log::warn!(
-                        "[marshal-shim] session {} absent from roster — re-SETting",
+                        "[muster-shim] session {} absent from roster — re-SETting",
                         me.0
                     );
                     let snapshot = session_for_publish.lock().unwrap().clone();
                     if let Err(e) = emit_session_set(&client_for_publish, &snapshot) {
-                        log::warn!("[marshal-shim] roster self-heal re-SET failed: {e}");
+                        log::warn!("[muster-shim] roster self-heal re-SET failed: {e}");
                     }
                 }
             }
@@ -750,8 +748,8 @@ async fn serve() -> Result<()> {
             if pushed_session_name != current_session_name {
                 let arc_name = current_session_name.as_deref().map(Arc::<str>::from);
                 let _ = client_for_publish
-                    .send_command::<marshal_entities::SetSessionSessionName, ()>(
-                        &marshal_entities::SetSessionSessionName {
+                    .send_command::<muster_entities::SetSessionSessionName, ()>(
+                        &muster_entities::SetSessionSessionName {
                             id: session_id_for_publish.clone(),
                             session_name: arc_name,
                         },
@@ -763,13 +761,12 @@ async fn serve() -> Result<()> {
             }
             if pushed_activity != current_activity {
                 let arc_activity = current_activity.as_deref().map(Arc::<str>::from);
-                let _ = client_for_publish
-                    .send_command::<marshal_entities::SetSessionActivity, ()>(
-                        &marshal_entities::SetSessionActivity {
-                            id: session_id_for_publish.clone(),
-                            activity: arc_activity,
-                        },
-                    );
+                let _ = client_for_publish.send_command::<muster_entities::SetSessionActivity, ()>(
+                    &muster_entities::SetSessionActivity {
+                        id: session_id_for_publish.clone(),
+                        activity: arc_activity,
+                    },
+                );
                 if let Ok(mut s) = session_for_publish.lock() {
                     s.activity = current_activity.clone();
                 }
@@ -792,8 +789,8 @@ async fn serve() -> Result<()> {
 
             if pushed_activity_at != last_activity_at {
                 let _ = client_for_publish
-                    .send_command::<marshal_entities::SetSessionLastActivityAt, ()>(
-                        &marshal_entities::SetSessionLastActivityAt {
+                    .send_command::<muster_entities::SetSessionLastActivityAt, ()>(
+                        &muster_entities::SetSessionLastActivityAt {
                             id: session_id_for_publish.clone(),
                             last_activity_at,
                         },
@@ -802,19 +799,18 @@ async fn serve() -> Result<()> {
             }
             if pushed_tool != last_tool {
                 let arc_tool = last_tool.as_deref().map(Arc::<str>::from);
-                let _ = client_for_publish
-                    .send_command::<marshal_entities::SetSessionLastTool, ()>(
-                        &marshal_entities::SetSessionLastTool {
-                            id: session_id_for_publish.clone(),
-                            last_tool: arc_tool,
-                        },
-                    );
+                let _ = client_for_publish.send_command::<muster_entities::SetSessionLastTool, ()>(
+                    &muster_entities::SetSessionLastTool {
+                        id: session_id_for_publish.clone(),
+                        last_tool: arc_tool,
+                    },
+                );
                 pushed_tool = last_tool.clone();
             }
             if pushed_tool_at != last_tool_at {
                 let _ = client_for_publish
-                    .send_command::<marshal_entities::SetSessionLastToolAt, ()>(
-                        &marshal_entities::SetSessionLastToolAt {
+                    .send_command::<muster_entities::SetSessionLastToolAt, ()>(
+                        &muster_entities::SetSessionLastToolAt {
                             id: session_id_for_publish.clone(),
                             last_tool_at,
                         },
@@ -843,7 +839,7 @@ async fn serve() -> Result<()> {
                     notifier.channel(cmd.content, cmd.meta);
                 }
             });
-            log::info!("[marshal-shim] notification drain task started");
+            log::info!("[muster-shim] notification drain task started");
         }
     })
     .await;
@@ -852,9 +848,9 @@ async fn serve() -> Result<()> {
     // again. Take our roster row down now (the daemon's staleness sweep is
     // only a lagging backstop) and exit the process.
     if let Err(e) = &served {
-        log::warn!("[marshal-shim] MCP serve ended with error: {e}");
+        log::warn!("[muster-shim] MCP serve ended with error: {e}");
     }
-    log::info!("[marshal-shim] stdin closed; deregistering and exiting");
+    log::info!("[muster-shim] stdin closed; deregistering and exiting");
     deregister_and_exit(&client, &session, is_codex);
 }
 
@@ -875,7 +871,7 @@ fn deregister_and_exit(client: &MykoClient, session: &Arc<Mutex<Session>>, is_co
         let snapshot = guard.clone();
         drop(guard);
         if let Err(e) = emit_session_del(client, &snapshot) {
-            log::warn!("[marshal-shim] roster DEL on shutdown failed: {e}");
+            log::warn!("[muster-shim] roster DEL on shutdown failed: {e}");
         }
         // One beat for the client's write thread to flush the DEL frame.
         std::thread::sleep(std::time::Duration::from_millis(300));
@@ -936,7 +932,7 @@ pub(crate) fn read_address_from_config_file() -> Option<String> {
             let line = contents.lines().next().unwrap_or("").trim();
             if !line.is_empty() {
                 log::info!(
-                    "[marshal-shim] daemon address from config file {}: {}",
+                    "[muster-shim] daemon address from config file {}: {}",
                     path.display(),
                     line
                 );
@@ -955,7 +951,7 @@ fn nickname_file_name(session_id: &str) -> String {
 
 /// Read the daemon-assigned nickname the shim mirrored for `session_id` (first
 /// existing config-dir candidate). `None` → the caller (statusline) falls back
-/// to the deterministic `marshal_entities::nickname`. This is why the
+/// to the deterministic `muster_entities::nickname`. This is why the
 /// statusline shows the SAME handle peers address even when the daemon salted
 /// this session's nickname on a collision.
 pub(crate) fn read_assigned_nickname(session_id: &str) -> Option<String> {
@@ -990,7 +986,7 @@ fn health_file_name(session_id: &str) -> String {
     format!("health-{session_id}")
 }
 
-/// Write this session's marshal health word for the statusline to read. The file's
+/// Write this session's muster health word for the statusline to read. The file's
 /// MTIME is the freshness signal — the publisher rewrites it every tick, so a stale
 /// mtime means the shim (and thus this session's MCP tools) died or hung. Best-effort.
 pub(crate) fn write_health(session_id: &str, status: &str) {
@@ -1075,13 +1071,13 @@ pub(crate) fn read_channels(session_id: &str) -> Option<bool> {
 pub(crate) fn config_file_candidates(filename: &str) -> Vec<std::path::PathBuf> {
     let mut out = Vec::new();
     if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME").filter(|s| !s.is_empty()) {
-        out.push(std::path::PathBuf::from(xdg).join("marshal").join(filename));
+        out.push(std::path::PathBuf::from(xdg).join("muster").join(filename));
     }
     if let Some(home) = std::env::var_os("HOME") {
         out.push(
             std::path::PathBuf::from(home)
                 .join(".config")
-                .join("marshal")
+                .join("muster")
                 .join(filename),
         );
     }
@@ -1094,12 +1090,12 @@ pub(crate) fn config_file_candidates(filename: &str) -> Vec<std::path::PathBuf> 
     if let Some(appdata) = std::env::var_os("APPDATA") {
         out.push(
             std::path::PathBuf::from(appdata)
-                .join("marshal")
+                .join("muster")
                 .join(filename),
         );
     }
     if let Some(pd) = std::env::var_os("PROGRAMDATA") {
-        out.push(std::path::PathBuf::from(pd).join("marshal").join(filename));
+        out.push(std::path::PathBuf::from(pd).join("muster").join(filename));
     }
     out
 }
@@ -1202,7 +1198,7 @@ fn default_current_task(cwd: &str, git_branch: Option<&str>) -> Option<String> {
 /// Resolve which HUMAN drives this session, as an email — the canonical id
 /// that links the same person across harnesses and machines. Layered,
 /// strongest → weakest:
-///   1. `MARSHAL_OPERATOR` — explicit override (service users / odd launches).
+///   1. `MUSTER_OPERATOR` — explicit override (service users / odd launches).
 ///   2. **Claude account email** — `~/.claude.json` `oauthAccount.emailAddress`,
 ///      i.e. who is *driving* this Claude Code session. Stable regardless of the
 ///      OS user, so it disambiguates the humans behind shared-infra `root`.
@@ -1214,7 +1210,7 @@ fn default_current_task(cwd: &str, git_branch: Option<&str>) -> Option<String> {
 /// opencode sessions resolve their own account in the plugin's identity.ts;
 /// this is the Claude Code path.
 fn detect_operator(cwd: &str) -> String {
-    if let Ok(op) = std::env::var("MARSHAL_OPERATOR") {
+    if let Ok(op) = std::env::var("MUSTER_OPERATOR") {
         let op = op.trim();
         if !op.is_empty() {
             return op.to_string();
@@ -1295,7 +1291,7 @@ mod tests {
     #[test]
     fn default_current_task_prefers_the_pulse_workspace_name() {
         assert_eq!(
-            default_current_task("/root/pulse/.workspaces/lv-1141/marshal", Some("lv-1141")),
+            default_current_task("/root/pulse/.workspaces/lv-1141/muster", Some("lv-1141")),
             Some("lv-1141".into())
         );
         // The workspace wins even when the branch is trunk: it is the task the
@@ -1378,7 +1374,7 @@ mod tests {
 
     #[test]
     fn git_user_email_reads_the_repo_identity() {
-        let tmp = std::env::temp_dir().join(format!("marshal-op-git-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("muster-op-git-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
         git(&["init", "-q"], &tmp);
@@ -1410,7 +1406,7 @@ mod tests {
     #[test]
     fn detect_git_branch_follows_a_real_checkout() {
         let tmp =
-            std::env::temp_dir().join(format!("marshal-shim-gitbranch-{}", std::process::id()));
+            std::env::temp_dir().join(format!("muster-shim-gitbranch-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
         let cwd = tmp.to_str().unwrap();

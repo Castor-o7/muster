@@ -1,4 +1,4 @@
-# Installing marshal
+# Installing muster
 
 ## Build
 
@@ -7,7 +7,7 @@ cargo install --path crates/daemon
 cargo install --path crates/shim
 ```
 
-This places `marshal-daemon` and `marshal-shim` in `~/.cargo/bin`. Make sure that's on your `PATH`.
+This places `muster-daemon` and `muster-shim` in `~/.cargo/bin`. Make sure that's on your `PATH`.
 
 ## Configure Claude Code
 
@@ -16,8 +16,8 @@ Add an MCP entry — one entry per Claude Code config; every session uses the sa
 ```json
 {
   "mcpServers": {
-    "marshal": {
-      "command": "marshal-shim"
+    "muster": {
+      "command": "muster-shim"
     }
   }
 }
@@ -30,18 +30,18 @@ The shim auto-starts the daemon on first connect via a detached background proce
 To run the daemon manually for debugging:
 
 ```
-marshal-daemon --foreground
+muster-daemon --foreground
 ```
 
 ## State
 
-- Socket: `$XDG_RUNTIME_DIR/marshal/sock` (fallback `~/.local/state/marshal/sock`)
-- DB:     `~/.local/state/marshal/db.sqlite`
-- Logs:   `~/.local/state/marshal/daemon.log` (daily rotation)
+- Socket: `$XDG_RUNTIME_DIR/muster/sock` (fallback `~/.local/state/muster/sock`)
+- DB:     `~/.local/state/muster/db.sqlite`
+- Logs:   `~/.local/state/muster/daemon.log` (daily rotation)
 
 ## Coordinating with peers
 
-Each Claude session that connects via `marshal-shim` shows up on the
+Each Claude session that connects via `muster-shim` shows up on the
 roster with a unique nickname (the shim's cwd basename, with `-N`
 appended on collision). Sessions coordinate by sending free-form
 messages to each other:

@@ -1,4 +1,4 @@
-//! Roster — the live wall of agent sessions on the marshal daemon.
+//! Roster — the live wall of agent sessions on the muster daemon.
 //!
 //! A dense, scannable table (not a field of cards): the roster is a list of
 //! homogeneous rows, so it reads best as aligned columns grouped by host. The
@@ -7,7 +7,7 @@
 //! the Session detail pane.
 
 use leptos::prelude::*;
-use marshal_entities::{GetAllSessions, Session};
+use muster_entities::{GetAllSessions, Session};
 use pulse_leptos_ui::{EmptyState, SearchField};
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -107,7 +107,7 @@ pub fn RosterPanel() -> impl IntoView {
                 } else if loaded.get() {
                     "No sessions on the roster. Shims and TUIs appear here as they connect."
                 } else {
-                    "Connecting to the marshal daemon…"
+                    "Connecting to the muster daemon…"
                 };
                 return view! { <EmptyState message=msg.to_string() /> }.into_any();
             }

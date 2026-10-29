@@ -1,4 +1,4 @@
-//! marshal-tui — terminal dashboard powered by a MykoClient.
+//! muster-tui — terminal dashboard powered by a MykoClient.
 //!
 //! Connects to the daemon as a passive observer (no Session item is
 //! created — peers don't see the TUI on the roster), subscribes to live
@@ -16,7 +16,7 @@ use crossterm::{
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use hyphae::{Signal, Watchable};
-use marshal_entities::{
+use muster_entities::{
     GetAllMessages, GetAllRoomMembers, GetAllRooms, GetAllSessions, Message, Room, RoomKind,
     RoomMember, Session,
 };
@@ -41,19 +41,19 @@ use std::{
 
 const FRAME_POLL: Duration = Duration::from_millis(150);
 const RECENT_LIMIT: usize = 50;
-const DEFAULT_DAEMON_ADDRESS: &str = "ws://localhost:6155";
+const DEFAULT_DAEMON_ADDRESS: &str = "ws://localhost:6255";
 /// Env var that overrides the daemon WebSocket URL. Same name the shim
-/// uses, so a single `export MARSHAL_DAEMON_ADDRESS=...` configures
-/// every marshal client. `MYKO_ADDRESS` is honored as a legacy fallback.
-const ADDRESS_ENV: &str = "MARSHAL_DAEMON_ADDRESS";
+/// uses, so a single `export MUSTER_DAEMON_ADDRESS=...` configures
+/// every muster client. `MYKO_ADDRESS` is honored as a legacy fallback.
+const ADDRESS_ENV: &str = "MUSTER_DAEMON_ADDRESS";
 const ADDRESS_ENV_LEGACY: &str = "MYKO_ADDRESS";
 
 #[derive(Parser, Debug)]
-#[command(name = "marshal-tui")]
+#[command(name = "muster-tui")]
 struct Args {
     /// Override the daemon WebSocket URL. Defaults to
-    /// MARSHAL_DAEMON_ADDRESS env var (then MYKO_ADDRESS for back-compat),
-    /// then ws://localhost:6155.
+    /// MUSTER_DAEMON_ADDRESS env var (then MYKO_ADDRESS for back-compat),
+    /// then ws://localhost:6255.
     #[arg(long)]
     address: Option<String>,
 
@@ -121,7 +121,7 @@ async fn main() -> Result<()> {
         .or_else(|| std::env::var(ADDRESS_ENV_LEGACY).ok())
         .unwrap_or_else(|| DEFAULT_DAEMON_ADDRESS.to_string());
 
-    marshal_entities::link();
+    muster_entities::link();
 
     let state = State::new();
     let client = Arc::new(MykoClient::new());
@@ -309,7 +309,7 @@ fn draw_header(snap: &StateInner, area: Rect, frame: &mut ratatui::Frame) {
         .count();
     let line = Line::from(vec![
         Span::styled(dot, dot_style),
-        Span::raw(" marshal-tui — "),
+        Span::raw(" muster-tui — "),
         Span::styled(
             format!("{} sessions", snap.sessions.len()),
             Style::default().add_modifier(Modifier::BOLD),

@@ -80,7 +80,7 @@ impl FakeAppServer {
                         json!({
                             "id": initialize.get("id").cloned().unwrap_or(json!(1)),
                             "result": {
-                                "userAgent": "marshal-cleanup-test",
+                                "userAgent": "muster-cleanup-test",
                                 "platformFamily": "test",
                                 "platformOs": "linux",
                                 "codexHome": "/tmp"
@@ -192,12 +192,12 @@ fn start_launcher(exit_tui: bool) -> RunningLauncher {
     fs::set_permissions(&codex, fs::Permissions::from_mode(0o755))
         .expect("make fake Codex executable");
 
-    let child = Command::new(env!("CARGO_BIN_EXE_marshal-shim"))
+    let child = Command::new(env!("CARGO_BIN_EXE_muster-shim"))
         .arg("codex-run")
-        .env("MARSHAL_CODEX_BIN", &codex)
+        .env("MUSTER_CODEX_BIN", &codex)
         .env("FAKE_CODEX_MARKER", &marker)
         .env("FAKE_CODEX_EXIT", if exit_tui { "1" } else { "0" })
-        .env("MARSHAL_CODEX_APP_SERVER_SOCKET", &app_server.socket)
+        .env("MUSTER_CODEX_APP_SERVER_SOCKET", &app_server.socket)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())

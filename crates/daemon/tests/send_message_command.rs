@@ -17,7 +17,7 @@
 use std::sync::Arc;
 
 use hyphae::{Gettable, Materialize};
-use marshal_entities::{
+use muster_entities::{
     LivePushStatus, Message, SendMessage, SendMessageResult, Session, SessionId, WakeStatus,
 };
 use myko::{
@@ -32,7 +32,7 @@ use myko_server::{BlackholePersister, MykoServer};
 use uuid::Uuid;
 
 fn setup() -> MykoServerContext {
-    marshal_entities::link();
+    muster_entities::link();
     daemon::link();
 
     let blackhole: Arc<dyn Persister> = Arc::new(BlackholePersister);
@@ -245,7 +245,7 @@ fn nickname_resolves_server_side() {
     set_session(&ctx, &session("sender", Some("c-sender")));
     set_session(&ctx, &session("recipient-xyz", None));
 
-    let nick = marshal_entities::nickname("recipient-xyz");
+    let nick = muster_entities::nickname("recipient-xyz");
     let cmd = SendMessage {
         to_session_id: SessionId(Arc::from(nick.as_str())),
         body: "hi".into(),

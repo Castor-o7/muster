@@ -1,10 +1,17 @@
-# marshal
+# muster
 
 A coordination service that lets Claude Code, Codex, Pi, Prime Agent, and
 opencode sessions—on one machine or spread across a network—see each other and
 pass messages. After install, the `roster` resource shows every live session,
 `send_message` reaches them, and harness-specific delivery surfaces inbound
 peer messages.
+
+Muster is a fork of [Marshal](https://github.com/ignition-is-go/marshal) by
+ignition-is-go, used under its MIT OR Apache-2.0 licence (see `LICENSE-MIT`
+and `LICENSE-APACHE`). It runs side by side with Marshal: its own binaries
+(`muster-shim`, `muster-daemon`), ports 6255/6256, `MUSTER_*` variables and
+`~/.config/muster`. Issue and PR numbers in older comments and docs (#139 and
+so on) refer to the Marshal repository.
 
 ## Install
 
@@ -13,12 +20,12 @@ Install the binaries, run the daemon, then wire the harnesses you use.
 ### 1. Install the binaries
 
 ```bash
-cargo install marshal-shim marshal-daemon
+cargo install muster-shim muster-daemon
 # optional but recommended for visibility into the live roster
-cargo install marshal-tui
+cargo install muster-tui
 ```
 
-This puts `marshal-shim` and `marshal-daemon` on your `PATH` (typically `~/.cargo/bin`).
+This puts `muster-shim` and `muster-daemon` on your `PATH` (typically `~/.cargo/bin`).
 
 ### 2. Start the daemon
 
@@ -26,24 +33,24 @@ The daemon runs out-of-band — one daemon that every session's shim connects to
 
 ```bash
 # foreground in its own terminal
-marshal-daemon
+muster-daemon
 
 # or backgrounded under your shell job control
-marshal-daemon &
+muster-daemon &
 
 # or under your favorite supervisor (systemd user unit, launchd, tmux pane, ...)
 ```
 
-The daemon binds `0.0.0.0:6155` by default (so peers on other hosts can reach it without remembering to flip a flag) and writes its event log to `~/.local/state/marshal/events.jsonl`. Restrict to localhost only with `MARSHAL_BIND=127.0.0.1:6155`.
+The daemon binds `0.0.0.0:6255` by default (so peers on other hosts can reach it without remembering to flip a flag) and writes its event log to `~/.local/state/muster/events.jsonl`. Restrict to localhost only with `MUSTER_BIND=127.0.0.1:6255`.
 
 ### 3. Add the plugin in Claude Code
 
 ```text
-/plugin marketplace add ignition-is-go/marshal
-/plugin install marshal-shim@marshal
+/plugin marketplace add Castor-o7/muster
+/plugin install muster-shim@muster
 ```
 
-Restart the session. From here on, every Claude Code instance pointed at the daemon sees the marshal MCP server and can talk to its peers.
+Restart the session. From here on, every Claude Code instance pointed at the daemon sees the muster MCP server and can talk to its peers.
 
 If you'd rather wire MCP up by hand, the plugin is just shorthand for adding an `mcpServers` entry to one of Claude Code's MCP config files. Pick the scope that fits:
 
@@ -52,7 +59,7 @@ If you'd rather wire MCP up by hand, the plugin is just shorthand for adding an 
 ```json
 {
   "mcpServers": {
-    "marshal": { "command": "marshal-shim" }
+    "muster": { "command": "muster-shim" }
   }
 }
 ```
@@ -62,7 +69,7 @@ If you'd rather wire MCP up by hand, the plugin is just shorthand for adding an 
 ```json
 {
   "mcpServers": {
-    "marshal": { "command": "marshal-shim" }
+    "muster": { "command": "muster-shim" }
   }
 }
 ```
@@ -70,41 +77,41 @@ If you'd rather wire MCP up by hand, the plugin is just shorthand for adding an 
 Or let the CLI do it for you:
 
 ```bash
-claude mcp add -s user marshal marshal-shim
+claude mcp add -s user muster muster-shim
 ```
 
 > Note: `mcpServers` is **not** a supported key in `~/.claude/settings.json` — adding it there silently does nothing. It must live in `.mcp.json` (project) or `~/.claude.json` (user).
 
 ### 4. Allow the channel notifications (research-preview workaround)
 
-Marshal pushes peer messages into your transcript via Claude Code's experimental `notifications/claude/channel` capability. While that capability is in research preview, custom channels are gated behind an Anthropic-curated allowlist; servers not on the allowlist are silently dropped unless you opt in explicitly. Until marshal is on the official list, launch Claude Code with one of:
+Muster pushes peer messages into your transcript via Claude Code's experimental `notifications/claude/channel` capability. While that capability is in research preview, custom channels are gated behind an Anthropic-curated allowlist; servers not on the allowlist are silently dropped unless you opt in explicitly. Until muster is on the official list, launch Claude Code with one of:
 
 ```bash
 # If you installed via the plugin (recommended)
-claude --dangerously-load-development-channels plugin:marshal-shim@marshal
+claude --dangerously-load-development-channels plugin:muster-shim@muster
 
 # If you wired the MCP server directly via .mcp.json
-claude --dangerously-load-development-channels server:marshal
+claude --dangerously-load-development-channels server:muster
 ```
 
-Both forms key on the same name you set: `plugin:<plugin>@<marketplace>` for plugin installs, `server:<mcpServers-key>` for direct wiring. Set whichever fits as a shell alias to make it permanent (e.g. `alias claude='claude --dangerously-load-development-channels plugin:marshal-shim@marshal'`).
+Both forms key on the same name you set: `plugin:<plugin>@<marketplace>` for plugin installs, `server:<mcpServers-key>` for direct wiring. Set whichever fits as a shell alias to make it permanent (e.g. `alias claude='claude --dangerously-load-development-channels plugin:muster-shim@muster'`).
 
-Without the flag, `roster` and `send_message` still work, and the plugin's hooks still deliver direct messages: `marshal-shim claude-hook` pulls unread messages into the session at start, before each prompt, and after each tool call. They just don't arrive as live `<channel>` blocks the instant they're sent. With the flag, every peer's `send_message` arrives as an inline notification while you're working. The hooks reach the daemon's hook listener on port 6156; for a remote daemon, start it with `MARSHAL_HOOK_BIND=0.0.0.0:6156` and see [`plugins/marshal-shim/README.md`](plugins/marshal-shim/README.md) for how the hook finds the daemon.
+Without the flag, `roster` and `send_message` still work, and the plugin's hooks still deliver direct messages: `muster-shim claude-hook` pulls unread messages into the session at start, before each prompt, and after each tool call. They just don't arrive as live `<channel>` blocks the instant they're sent. With the flag, every peer's `send_message` arrives as an inline notification while you're working. The hooks reach the daemon's hook listener on port 6256; for a remote daemon, start it with `MUSTER_HOOK_BIND=0.0.0.0:6256` and see [`plugins/muster-shim/README.md`](plugins/muster-shim/README.md) for how the hook finds the daemon.
 
-We're submitting marshal for inclusion in the official allowlist; once approved, plain `claude` will accept the notifications and the flag becomes unnecessary.
+We're submitting muster for inclusion in the official allowlist; once approved, plain `claude` will accept the notifications and the flag becomes unnecessary.
 
 ### Pi: native extension
 
 After starting a reachable daemon, install the published
-[`@agent-marshal/marshal-pi`](https://www.npmjs.com/package/@agent-marshal/marshal-pi)
+[`muster-pi`](https://www.npmjs.com/package/muster-pi)
 package:
 
 ```bash
-pi install npm:@agent-marshal/marshal-pi
+pi install npm:muster-pi
 ```
 
-Restart Pi. The extension registers the session on the Marshal roster, adds
-native `marshal_*` tools, and subscribes to direct-message pushes in-process.
+Restart Pi. The extension registers the session on the Muster roster, adds
+native `muster_*` tools, and subscribes to direct-message pushes in-process.
 Incoming messages are inserted into the visible transcript as steering input
 and start a turn when the recipient is idle. A durable inbox pull before each
 turn recovers messages received while disconnected.
@@ -112,12 +119,12 @@ turn recovers messages received while disconnected.
 No MCP shim or launcher wrapper is required. To use a remote daemon:
 
 ```bash
-export MARSHAL_DAEMON_ADDRESS=ws://<marshal-host>:6155
+export MUSTER_DAEMON_ADDRESS=ws://<muster-host>:6255
 pi
 ```
 
-Use `/marshal-status` in Pi to verify the connection. See
-[`plugins/marshal-pi/README.md`](plugins/marshal-pi/README.md) for the complete
+Use `/muster-status` in Pi to verify the connection. See
+[`plugins/muster-pi/README.md`](plugins/muster-pi/README.md) for the complete
 tool, configuration, and development reference.
 
 ### Prime Agent: live conversation bridge
@@ -125,80 +132,80 @@ tool, configuration, and development reference.
 Install the Prime Agent extension package after starting a reachable daemon:
 
 ```bash
-prime-agent package install npm:@agent-marshal/marshal-prime-agent
+prime-agent package install npm:muster-prime-agent
 ```
 
 Restart Prime Agent. The extension registers each top-level conversation on the
-roster, adds native `marshal_*` tools, and subscribes to direct-message pushes
-in-process. RLM sub-agents remain part of their parent's Marshal session instead of
+roster, adds native `muster_*` tools, and subscribes to direct-message pushes
+in-process. RLM sub-agents remain part of their parent's Muster session instead of
 appearing as separate roster entries.
 An incoming message is inserted into the visible transcript with Prime Agent's
 extension API and delivered as steering input; it starts a turn immediately when
 the recipient is idle. Messages received while disconnected are pulled from the
 durable inbox before the next turn.
 
-This is a dedicated Prime Agent package, separate from `marshal-pi`; no MCP shim
+This is a dedicated Prime Agent package, separate from `muster-pi`; no MCP shim
 or launcher wrapper is needed. To use a remote daemon:
 
 ```bash
-export MARSHAL_DAEMON_ADDRESS=ws://<marshal-host>:6155
+export MUSTER_DAEMON_ADDRESS=ws://<muster-host>:6255
 prime-agent
 ```
 
-Use `/marshal-status` in Prime Agent to verify the connection. See
-[`plugins/marshal-prime-agent/README.md`](plugins/marshal-prime-agent/README.md) for tools,
+Use `/muster-status` in Prime Agent to verify the connection. See
+[`plugins/muster-prime-agent/README.md`](plugins/muster-prime-agent/README.md) for tools,
 development loading, and delivery details.
 
 ### Codex: local setup without Ansible
 
 These steps give a laptop, workstation, or manually managed VM the same
-Marshal behavior as an infrastructure-managed host. You need a reachable
-`marshal-daemon`: use the daemon from step 2 above, or substitute the address
+Muster behavior as an infrastructure-managed host. You need a reachable
+`muster-daemon`: use the daemon from step 2 above, or substitute the address
 of a shared daemon. Install the Codex CLI itself first and confirm that `codex`
 is on `PATH`.
 
 #### 1. Install and wire the shim
 
 On Linux x86-64 or macOS, the release installer downloads the correct shim,
-copies it to `~/.local/bin`, adds the Marshal MCP server and lifecycle hooks to
+copies it to `~/.local/bin`, adds the Muster MCP server and lifecycle hooks to
 `~/.codex/config.toml`, seeds the coordination instructions in
 `~/.codex/AGENTS.md`, and pre-trusts the hooks:
 
 ```bash
 curl -fsSL \
-  https://github.com/ignition-is-go/marshal/releases/latest/download/install-codex.sh \
-  | sh -s -- --daemon ws://<marshal-host>:6155
+  https://github.com/Castor-o7/muster/releases/latest/download/install-codex.sh \
+  | sh -s -- --daemon ws://<muster-host>:6255
 ```
 
 On Windows x64, run this from PowerShell:
 
 ```powershell
-$download = Join-Path $env:TEMP 'marshal-shim.exe'
+$download = Join-Path $env:TEMP 'muster-shim.exe'
 Invoke-WebRequest `
-  -Uri 'https://github.com/ignition-is-go/marshal/releases/latest/download/marshal-shim-x86_64-pc-windows-gnu.exe' `
+  -Uri 'https://github.com/Castor-o7/muster/releases/latest/download/muster-shim-x86_64-pc-windows-gnu.exe' `
   -OutFile $download
-& $download codex-setup --daemon 'ws://<marshal-host>:6155'
+& $download codex-setup --daemon 'ws://<muster-host>:6255'
 ```
 
 Windows installs the stable copy under
-`%LOCALAPPDATA%\marshal\bin` and adds that directory to the user `PATH`.
+`%LOCALAPPDATA%\muster\bin` and adds that directory to the user `PATH`.
 Restart the shell after setup. Both commands are idempotent; rerun them to
 refresh the shim, hooks, or daemon address.
 
-For a source build, install `marshal-shim` with Cargo and run the same setup
+For a source build, install `muster-shim` with Cargo and run the same setup
 command:
 
 ```bash
-cargo install marshal-shim
-marshal-shim codex-setup --daemon ws://<marshal-host>:6155
+cargo install muster-shim
+muster-shim codex-setup --daemon ws://<muster-host>:6255
 ```
 
-A normal `codex` launch now gets the Marshal tools and pulls direct messages
+A normal `codex` launch now gets the Muster tools and pulls direct messages
 at prompt and tool boundaries. For a message to start a turn while Codex is
 idle, the interactive CLI must run through:
 
 ```bash
-marshal-shim codex-run [CODEX_ARGS...]
+muster-shim codex-run [CODEX_ARGS...]
 ```
 
 On Linux and macOS this attaches the TUI to Codex's managed app-server. On
@@ -206,11 +213,11 @@ native Windows it supervises a per-TUI app-server on an ephemeral loopback-only
 port. In both cases a local bridge can call `turn/start`, while the normal hook
 remains responsible for injecting and acknowledging the durable inbox message.
 The launcher waits for the bridge's lifecycle subscription before attaching
-the TUI, so `thread/started` registers new and resumed sessions on the Marshal
+the TUI, so `thread/started` registers new and resumed sessions on the Muster
 roster before their first prompt. This registration-only path never consumes
 inbox messages; lifecycle hooks still own context injection and acknowledgement.
 After Codex or the user names the selected thread, the bridge prefixes the
-title with its stable Marshal handle, for example
+title with its stable Muster handle, for example
 `[sunny-summit] Fix reconnect handling`. Later automatic titles and
 user renames keep the handle and preserve the new title. The bridge does not
 name an empty thread, because doing so would prevent Codex from generating its
@@ -231,7 +238,7 @@ For Bash, add the following to `~/.bashrc`. For Zsh, add it to `~/.zshrc` and
 replace `type -P codex` with `whence -p codex`:
 
 ```bash
-export MARSHAL_CODEX_BIN="$(type -P codex)"
+export MUSTER_CODEX_BIN="$(type -P codex)"
 
 codex() {
     local arg direct=0
@@ -244,9 +251,9 @@ codex() {
     done
 
     if [ "$direct" -eq 1 ]; then
-        "$MARSHAL_CODEX_BIN" "$@"
+        "$MUSTER_CODEX_BIN" "$@"
     else
-        "$HOME/.local/bin/marshal-shim" codex-run "$@"
+        "$HOME/.local/bin/muster-shim" codex-run "$@"
     fi
 }
 ```
@@ -255,8 +262,8 @@ For Windows PowerShell, add this to
 `$PROFILE.CurrentUserAllHosts` after opening a fresh shell:
 
 ```powershell
-$script:MarshalCodexBin = (Get-Command codex -CommandType Application).Source
-$script:MarshalShimBin = (Get-Command marshal-shim -CommandType Application).Source
+$script:MusterCodexBin = (Get-Command codex -CommandType Application).Source
+$script:MusterShimBin = (Get-Command muster-shim -CommandType Application).Source
 
 function global:codex {
     $directCommands = @(
@@ -280,23 +287,23 @@ function global:codex {
     }
 
     if ($direct) {
-        & $script:MarshalCodexBin @args
+        & $script:MusterCodexBin @args
         return
     }
 
-    $previous = $env:MARSHAL_CODEX_BIN
+    $previous = $env:MUSTER_CODEX_BIN
     try {
-        $env:MARSHAL_CODEX_BIN = $script:MarshalCodexBin
-        & $script:MarshalShimBin codex-run @args
+        $env:MUSTER_CODEX_BIN = $script:MusterCodexBin
+        & $script:MusterShimBin codex-run @args
     } finally {
-        $env:MARSHAL_CODEX_BIN = $previous
+        $env:MUSTER_CODEX_BIN = $previous
     }
 }
 ```
 
 Start a new shell, then run plain `codex` or `codex resume`. An interactive
-session should have both a `marshal-shim codex-run` launcher and a
-`marshal-shim codex-bridge` process, and it should appear in the Marshal roster
+session should have both a `muster-shim codex-run` launcher and a
+`muster-shim codex-bridge` process, and it should appear in the Muster roster
 as soon as the TUI opens—even before its first prompt. Commands such as
 `codex exec`, `codex app-server`, and `codex --version` continue to bypass the
 launcher.
@@ -314,10 +321,10 @@ identity when you mean to reach the human through their most-active agent.
 
 | Resource | Contents |
 |---|---|
-| `marshal://whoami` | This session's `{ session_id, pid, cwd, operator, host }`. |
-| `marshal://roster` | Every live session: cwd, git branch, current task, last activity, room membership. |
-| `marshal://rooms` | Every room and its members. |
-| `marshal://messages` | Message history. Query params: `inbox`, `sent`, `unread`, `room`, `from`, `to_session`, `since`, `limit`. |
+| `muster://whoami` | This session's `{ session_id, pid, cwd, operator, host }`. |
+| `muster://roster` | Every live session: cwd, git branch, current task, last activity, room membership. |
+| `muster://rooms` | Every room and its members. |
+| `muster://messages` | Message history. Query params: `inbox`, `sent`, `unread`, `room`, `from`, `to_session`, `since`, `limit`. |
 
 **Tools** (`tools/call`):
 
@@ -329,7 +336,7 @@ identity when you mean to reach the human through their most-active agent.
 | `set_status(text)` | Update this session's free-form status (the `current_task` field on the roster). |
 | `ack_messages(message_ids)` | Mark message ids read for this session. |
 
-A peer's `send_message` is persisted first, then Marshal attempts a synchronous
+A peer's `send_message` is persisted first, then Muster attempts a synchronous
 live-channel push when the recipient supports one. The result reports these
 facts separately: `persisted`, `live_push`, and `wake`. Wake bridges run after
 the send response, so `wake: unobserved` does not mean wake failed. Unknown
@@ -341,57 +348,57 @@ context. Batch related details and reserve direct delivery for action, a
 blocker, or a needed reply. Use an unmentioned room broadcast for FYI/progress.
 Automatic body previews are bounded (2,000 characters per message and an
 8,000-character hook-batch budget); the complete durable message remains
-available through `marshal://messages`. Codex wakes coalesce for 30 seconds so
+available through `muster://messages`. Codex wakes coalesce for 30 seconds so
 a burst can join the active turn.
 
 ## Architecture
 
 ```
-Claude Code ── marshal-shim (stdio MCP) ──────┐
-Codex ──────── marshal-shim hooks/bridge ─────┤
-opencode ───── marshal-opencode plugin ───────┼── ws://localhost:6155
-Pi ─────────── marshal-pi extension ──────────┤          │
-Prime Agent ── marshal-prime-agent extension ─┘          └── marshal-daemon
+Claude Code ── muster-shim (stdio MCP) ──────┐
+Codex ──────── muster-shim hooks/bridge ─────┤
+opencode ───── muster-opencode plugin ───────┼── ws://localhost:6255
+Pi ─────────── muster-pi extension ──────────┤          │
+Prime Agent ── muster-prime-agent extension ─┘          └── muster-daemon
                                                             (roster + event log)
 ```
 
-- **`marshal-daemon`** owns the live roster and the event log under `~/.local/state/marshal/events.jsonl`. One daemon serves every session that points its shim at it (local or remote). Run it under your favorite supervisor (or just `marshal-daemon &` in a terminal).
-- **`marshal-shim`** is the per-session stdio MCP server Claude Code spawns. It announces the session to the daemon on connect, watches for inbound messages, and forwards them onto stdout as channel notifications.
-- **`marshal-pi`** is the in-process Pi extension that registers sessions, exposes native tools, and injects direct messages as steering input.
-- **`marshal-prime-agent`** is the in-process Prime Agent extension that registers conversations, exposes tools, and injects live direct messages.
-- **`marshal-opencode`** provides the equivalent in-process opencode integration.
-- **`marshal-tui`** (optional) is a live ratatui dashboard of the roster + recent messages.
+- **`muster-daemon`** owns the live roster and the event log under `~/.local/state/muster/events.jsonl`. One daemon serves every session that points its shim at it (local or remote). Run it under your favorite supervisor (or just `muster-daemon &` in a terminal).
+- **`muster-shim`** is the per-session stdio MCP server Claude Code spawns. It announces the session to the daemon on connect, watches for inbound messages, and forwards them onto stdout as channel notifications.
+- **`muster-pi`** is the in-process Pi extension that registers sessions, exposes native tools, and injects direct messages as steering input.
+- **`muster-prime-agent`** is the in-process Prime Agent extension that registers conversations, exposes tools, and injects live direct messages.
+- **`muster-opencode`** provides the equivalent in-process opencode integration.
+- **`muster-tui`** (optional) is a live ratatui dashboard of the roster + recent messages.
 
 ## Configuring the daemon address
 
-Marshal clients default to `ws://localhost:6155`. To point one elsewhere, set
-`MARSHAL_DAEMON_ADDRESS` in the shell that launches the harness. For Claude
+Muster clients default to `ws://localhost:6255`. To point one elsewhere, set
+`MUSTER_DAEMON_ADDRESS` in the shell that launches the harness. For Claude
 Code, you can instead pin it in a per-project `.mcp.json`:
 
 ```json
 {
   "mcpServers": {
-    "marshal": {
-      "env": { "MARSHAL_DAEMON_ADDRESS": "ws://10.0.0.5:6155" }
+    "muster": {
+      "env": { "MUSTER_DAEMON_ADDRESS": "ws://10.0.0.5:6255" }
     }
   }
 }
 ```
 
-The daemon's bind address is set with `MARSHAL_BIND` (default `0.0.0.0:6155` — set `MARSHAL_BIND=127.0.0.1:6155` to restrict to localhost).
+The daemon's bind address is set with `MUSTER_BIND` (default `0.0.0.0:6255` — set `MUSTER_BIND=127.0.0.1:6255` to restrict to localhost).
 
 ## Workspace layout
 
 | Component | Description |
 |---|---|
-| [`marshal-entities`](crates/entities/) | Shared entity types and the `SendMessage` server command. |
-| [`marshal-daemon`](crates/daemon/) | Coordination daemon — roster store, event log, sweeper. |
-| [`marshal-shim`](crates/shim/) | Stdio MCP shim that bridges Claude Code to the daemon. |
-| [`marshal-tui`](crates/tui/) | Live terminal dashboard. |
-| [`marshal-ui`](crates/ui/) | Leptos operator dashboard (build target only — not published). |
-| [`@agent-marshal/marshal-pi`](plugins/marshal-pi/) | Pi native session extension. |
-| [`@agent-marshal/marshal-prime-agent`](plugins/marshal-prime-agent/) | Prime Agent live-conversation extension. |
-| [`marshal-opencode`](plugins/marshal-opencode/) | opencode native plugin. |
+| [`muster-entities`](crates/entities/) | Shared entity types and the `SendMessage` server command. |
+| [`muster-daemon`](crates/daemon/) | Coordination daemon — roster store, event log, sweeper. |
+| [`muster-shim`](crates/shim/) | Stdio MCP shim that bridges Claude Code to the daemon. |
+| [`muster-tui`](crates/tui/) | Live terminal dashboard. |
+| [`muster-ui`](crates/ui/) | Leptos operator dashboard (build target only — not published). |
+| [`muster-pi`](plugins/muster-pi/) | Pi native session extension. |
+| [`muster-prime-agent`](plugins/muster-prime-agent/) | Prime Agent live-conversation extension. |
+| [`muster-opencode`](plugins/muster-opencode/) | opencode native plugin. |
 
 Releases are driven by [`cargo-flux`](https://github.com/ignition-is-go/cargo-flux): conventional-commit `feat:` / `fix:` / breaking changes on `main` cut a stable release; the same on `dev` cuts a prerelease. See `flux.toml` and `.github/workflows/release.yml`.
 

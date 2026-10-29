@@ -25,7 +25,7 @@ use std::{
 };
 
 use hyphae::Gettable;
-use marshal_entities::{GetAllSessions, Session, SessionId};
+use muster_entities::{GetAllSessions, Session, SessionId};
 use myko::{
     client::{ConnectionStatus, MykoClient, MykoProtocol},
     server::{MykoServerContext, Persister},
@@ -139,7 +139,7 @@ fn wait_for(label: &str, mut f: impl FnMut() -> bool) {
 #[test]
 fn client_subscription_resumes_after_server_restart() {
     let _ = env_logger::builder().is_test(true).try_init();
-    marshal_entities::link();
+    muster_entities::link();
     daemon::link();
 
     let port = pick_free_port();
@@ -214,7 +214,7 @@ fn client_subscription_resumes_after_server_restart() {
 #[test]
 fn many_subscriptions_resume_together_after_restart() {
     let _ = env_logger::builder().is_test(true).try_init();
-    marshal_entities::link();
+    muster_entities::link();
     daemon::link();
 
     let port = pick_free_port();
@@ -294,7 +294,7 @@ fn many_subscriptions_resume_together_after_restart() {
 #[test]
 fn dropped_cell_handle_still_pumps_updates_after_reconnect() {
     let _ = env_logger::builder().is_test(true).try_init();
-    marshal_entities::link();
+    muster_entities::link();
     daemon::link();
 
     let port = pick_free_port();

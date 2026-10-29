@@ -1,15 +1,15 @@
 [package]
-name = "marshal-entities"
+name = "muster-entities"
 version = "0.53.6"
 edition.workspace = true
 license.workspace = true
-description = "Shared entity types and server-handled commands for the marshal multi-agent coordination service."
-repository = "https://github.com/ignition-is-go/marshal"
-keywords = ["marshal", "agent", "coordination", "myko"]
+description = "Shared entity types and server-handled commands for the muster multi-agent coordination service."
+repository = "https://github.com/Castor-o7/muster"
+keywords = ["muster", "agent", "coordination", "myko"]
 categories = ["network-programming"]
 
 [package.metadata.flux]
-# Published as a transitive dep of marshal-daemon/shim/tui. Cargo
+# Published as a transitive dep of muster-daemon/shim/tui. Cargo
 # requires path deps to also be published (with a matching version),
 # so this crate ships even though it isn't a user-facing artifact.
 tasks = ["check", "build", "test", "lint", "publish"]
@@ -20,7 +20,7 @@ tasks = ["check", "build", "test", "lint", "publish"]
 # turns on myko's ts-rs machinery so `myko::TS` resolves to `ts_rs::TS`.
 # `codegen` additionally enables the typegen bin. Both are off by default so
 # normal builds skip the ts-rs/codegen tree. (codegen
-# needs unicode-width ^0.2.1 via swc; marshal-tui was bumped to ratatui 0.30 so
+# needs unicode-width ^0.2.1 via swc; muster-tui was bumped to ratatui 0.30 so
 # the workspace no longer pins unicode-width =0.2.0 and this resolves in-tree.)
 # `ts-export` pulls `ts-rs` itself — the macros emit `#[derive(ts_rs::TS)]`, so
 # the crate must be in scope; pinned to myko's exact 12.0.1 so the `TS` trait is

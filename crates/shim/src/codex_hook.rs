@@ -1,44 +1,44 @@
-//! `marshal-shim codex-hook <session-start|session-end|prompt-submit|pre-tool-use|post-tool-use> [base-url]`
+//! `muster-shim codex-hook <session-start|session-end|prompt-submit|pre-tool-use|post-tool-use> [base-url]`
 //! — the Codex hook bridge, as a shim subcommand.
 //!
 //! Codex invokes this from `[hooks]` in `~/.codex/config.toml`. It reads Codex's
-//! hook JSON on stdin, forwards `session_id` + `cwd` to the marshal daemon's
-//! `/hook/*` endpoint, and emits the daemon's `<marshal_session>` /
-//! `<marshal_inbox>` block as `additionalContext` so Codex injects it into the
+//! hook JSON on stdin, forwards `session_id` + `cwd` to the muster daemon's
+//! `/hook/*` endpoint, and emits the daemon's `<muster_session>` /
+//! `<muster_inbox>` block as `additionalContext` so Codex injects it into the
 //! model's turn. SessionStart surfaces the identity block; UserPromptSubmit AND
 //! the two tool-use events surface the inbox — the tool-use events let an
 //! actively-working agent pick up peer messages between tool calls, the closest
 //! Codex gets to live delivery (it has no server→model push).
 //!
 //! Living as a SUBCOMMAND of the shim binary (rather than a shell script) makes
-//! the integration cross-platform: the same `marshal-shim` / `marshal-shim.exe`
+//! the integration cross-platform: the same `muster-shim` / `muster-shim.exe`
 //! Codex already runs as its MCP server is also its hook handler, on Windows,
 //! macOS, and Linux, with NO bash / jq / curl dependency. It dispatches BEFORE
 //! the tokio runtime (like `--check` / `statusline`): one small blocking HTTP
 //! POST, no async, no WebSocket.
 //!
-//! `marshal-shim claude-hook <session-start|prompt-submit|post-tool-use>` runs
+//! `muster-shim claude-hook <session-start|prompt-submit|post-tool-use>` runs
 //! the same bridge for Claude Code (see [`Harness`]), so Claude sessions get the
 //! inbox without the live-channel launch flag.
 //!
-//! Best-effort by design: any failure prints nothing and returns, so marshal
+//! Best-effort by design: any failure prints nothing and returns, so muster
 //! can never block or break a Codex or Claude turn.
 
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
-const HOOK_PORT: u16 = 6156;
+const HOOK_PORT: u16 = 6256;
 const TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Which agent harness invoked the hook. Both send the same hook JSON and read
 /// the same `hookSpecificOutput.additionalContext`; they differ in the
-/// `harness=` the daemon sees (it words the `<marshal_session>` block per
+/// `harness=` the daemon sees (it words the `<muster_session>` block per
 /// harness) and in how long a request may take.
 #[derive(Clone, Copy)]
 pub enum Harness {
     Codex,
-    /// Claude Code, via `marshal-shim claude-hook`. Its `PostToolUse` hook runs
+    /// Claude Code, via `muster-shim claude-hook`. Its `PostToolUse` hook runs
     /// after every tool call, so a slow daemon must not stall each one for the
     /// Codex budget.
     Claude,
@@ -149,10 +149,10 @@ pub(crate) fn register_session(base: &str, session_id: &str, cwd: &str) -> Optio
 }
 
 /// Resolve the hook listener used by a bridge that already resolved its daemon
-/// WebSocket address. `MARSHAL_BASE_URL` remains the explicit override for
+/// WebSocket address. `MUSTER_BASE_URL` remains the explicit override for
 /// non-standard hook ports.
 pub(crate) fn registration_base(daemon: &str) -> String {
-    if let Ok(base) = std::env::var("MARSHAL_BASE_URL")
+    if let Ok(base) = std::env::var("MUSTER_BASE_URL")
         && !base.is_empty()
     {
         return base.trim_end_matches('/').to_string();
@@ -160,14 +160,14 @@ pub(crate) fn registration_base(daemon: &str) -> String {
     base_from_daemon(daemon)
 }
 
-/// Resolve the daemon hook base URL: explicit arg → `MARSHAL_BASE_URL` env →
-/// derived from the shim's daemon-address (`ws://host:6155` → `http://host:6156`)
+/// Resolve the daemon hook base URL: explicit arg → `MUSTER_BASE_URL` env →
+/// derived from the shim's daemon-address (`ws://host:6255` → `http://host:6256`)
 /// → localhost default.
 fn resolve_base(base_override: Option<&str>) -> String {
     if let Some(b) = base_override.filter(|b| !b.is_empty()) {
         return b.trim_end_matches('/').to_string();
     }
-    if let Ok(b) = std::env::var("MARSHAL_BASE_URL")
+    if let Ok(b) = std::env::var("MUSTER_BASE_URL")
         && !b.is_empty()
     {
         return b.trim_end_matches('/').to_string();
@@ -235,7 +235,7 @@ fn http_post(base: &str, path: &str, body: &str, timeout: Duration) -> Option<St
 }
 
 fn short_host() -> String {
-    std::env::var("MARSHAL_HOST")
+    std::env::var("MUSTER_HOST")
         .ok()
         .filter(|s| !s.is_empty())
         .or_else(|| {
@@ -249,7 +249,7 @@ fn short_host() -> String {
 }
 
 fn operator() -> String {
-    std::env::var("MARSHAL_OPERATOR")
+    std::env::var("MUSTER_OPERATOR")
         .or_else(|_| std::env::var("USER"))
         .or_else(|_| std::env::var("USERNAME"))
         .ok()
@@ -335,14 +335,14 @@ mod tests {
     #[test]
     fn derives_hook_base_from_daemon_authority() {
         assert_eq!(
-            base_from_daemon("ws://marshal.example:6155"),
-            "http://marshal.example:6156"
+            base_from_daemon("ws://muster.example:6255"),
+            "http://muster.example:6256"
         );
         assert_eq!(
-            base_from_daemon("wss://marshal.example:443/myko/mcp"),
-            "http://marshal.example:6156"
+            base_from_daemon("wss://muster.example:443/myko/mcp"),
+            "http://muster.example:6256"
         );
-        assert_eq!(base_from_daemon("ws://[::1]:6155"), "http://[::1]:6156");
-        assert_eq!(base_from_daemon(""), "http://localhost:6156");
+        assert_eq!(base_from_daemon("ws://[::1]:6255"), "http://[::1]:6256");
+        assert_eq!(base_from_daemon(""), "http://localhost:6256");
     }
 }

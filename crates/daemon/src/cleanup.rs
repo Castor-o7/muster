@@ -25,7 +25,7 @@ use std::{
 
 use chrono::Utc;
 use hyphae::{Gettable, Materialize};
-use marshal_entities::{AutoSource, Message, Room, RoomKind, RoomMember, Session};
+use muster_entities::{AutoSource, Message, Room, RoomKind, RoomMember, Session};
 use myko::{core::item::Eventable, server::MykoServerContext, utils::downcast_item};
 
 /// How long a WS-shim session must be without a live client before DEL. Sized
@@ -260,7 +260,7 @@ fn sweep_once(ctx: &MykoServerContext, disconnected_since: &mut HashMap<Arc<str>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use marshal_entities::{Message, MessageId, RoomId, RoomMemberId, SessionId};
+    use muster_entities::{Message, MessageId, RoomId, RoomMemberId, SessionId};
     use myko::{
         server::Persister,
         wire::{MEvent, MEventType},
@@ -270,7 +270,7 @@ mod tests {
     use uuid::Uuid;
 
     fn setup() -> MykoServerContext {
-        marshal_entities::link();
+        muster_entities::link();
         crate::link();
         let blackhole: Arc<dyn Persister> = Arc::new(BlackholePersister);
         let server = MykoServer::builder()

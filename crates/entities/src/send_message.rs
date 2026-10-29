@@ -67,7 +67,7 @@ pub struct SendMessageResult {
     /// Whether this synchronous response observed an asynchronous wake.
     ///
     /// A durable unread message may be noticed by a Codex bridge after this
-    /// command returns. Marshal currently has no bridge acknowledgement path,
+    /// command returns. Muster currently has no bridge acknowledgement path,
     /// so an inbox result is `Unobserved`, never a false claim of wake failure.
     #[serde(default)]
     pub wake: WakeStatus,
@@ -195,14 +195,14 @@ impl CommandHandler for SendMessage {
             Some(cid) if recipient_can_render => {
                 if push_to_client(
                     cid.0.as_ref(),
-                    // Concise origin ping only — no leading "marshal:" (Claude
-                    // already prefixes the channel name, else it reads "marshal:
-                    // marshal:") and no body (it would just be a truncated
+                    // Concise origin ping only — no leading "muster:" (Claude
+                    // already prefixes the channel name, else it reads "muster:
+                    // muster:") and no body (it would just be a truncated
                     // banner). `meta.body` is a bounded model-context preview;
                     // the persisted Message retains the complete body.
                     direct_push_content(&from_nickname, to_operator.as_deref()),
                     serde_json::json!({
-                        "source": "marshal",
+                        "source": "muster",
                         "kind": "new_message",
                         "message_id": msg.id.0.as_ref(),
                         "from_session": sender.id.0.as_ref(),
@@ -244,7 +244,7 @@ impl CommandHandler for SendMessage {
 
         // Dedup the pull inbox against a landed live push. A channels-ON
         // recipient already rendered this message via the NotifyChannel, so
-        // mark it read for them — the per-turn `<marshal_inbox>` reads only
+        // mark it read for them — the per-turn `<muster_inbox>` reads only
         // UNREAD direct messages, so it won't re-surface it. Without this the
         // recipient sees every direct message TWICE (once live, once in the
         // inbox). Best-effort: a failed write just falls back to that harmless
@@ -356,7 +356,7 @@ fn resolve_recipient(
         0 => Err(err(
             ctx,
             &format!(
-                "no session matches '{token}' (by id, nickname, operator, or id-prefix) — check marshal://roster"
+                "no session matches '{token}' (by id, nickname, operator, or id-prefix) — check muster://roster"
             ),
         )),
         _ => Err(err(ctx, &ambiguous(ctx, "id-prefix", token, &by_prefix))),

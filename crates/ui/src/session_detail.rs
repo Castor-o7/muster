@@ -6,7 +6,7 @@
 //! most recent traffic (to and from), all nickname-labelled.
 
 use leptos::prelude::*;
-use marshal_entities::{
+use muster_entities::{
     GetAllMessages, GetAllRoomMembers, GetAllRooms, GetAllSessions, Message, Session,
 };
 use pulse_leptos_ui::EmptyState;

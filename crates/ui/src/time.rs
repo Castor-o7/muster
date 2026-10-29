@@ -1,6 +1,6 @@
 //! A shared 1 Hz wall clock for the dashboard.
 //!
-//! marshal's timestamps (`connected_at`, `last_activity_at`, `last_tool_at`,
+//! muster's timestamps (`connected_at`, `last_activity_at`, `last_tool_at`,
 //! `sent_at`, …) are all epoch-**millis** `i64`. Freshness ("how long since this
 //! session did anything") is the roster's whole point, so rather than each panel
 //! minting its own timer, `provide_now()` installs one reactive clock at the app

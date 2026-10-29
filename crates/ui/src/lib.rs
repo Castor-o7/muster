@@ -1,6 +1,6 @@
-//! marshal-ui — the coordination console.
+//! muster-ui — the coordination console.
 //!
-//! A live operator dashboard over the marshal daemon: who's on the roster, what
+//! A live operator dashboard over the muster daemon: who's on the roster, what
 //! they're doing, the message bus between them, and the rooms that route it.
 //! Connects over WebSocket (via myko-leptos) and subscribes to the live
 //! `Session`, `Message`, `Room`, `RoomMember`, and `SessionNickname` queries.
@@ -34,9 +34,9 @@ mod roster;
 mod session_detail;
 mod time;
 
-/// The marshal daemon's myko WS port (co-located with the daemon; see
-/// `daemon_address`). Groups with the daemon's :6155 and the hook :6156.
-const DAEMON_PORT: u16 = 6155;
+/// The muster daemon's myko WS port (co-located with the daemon; see
+/// `daemon_address`). Groups with the daemon's :6255 and the hook :6256.
+const DAEMON_PORT: u16 = 6255;
 
 /// The global focus — a lens shared across every pane. Selecting a session (a
 /// roster row) or a room (a rooms card) focuses the whole workspace on it: the
@@ -83,7 +83,7 @@ pub fn use_focus() -> Focus {
     use_context::<Focus>().expect("Focus provided at root")
 }
 
-/// The daemon WS address to dial. marshal-01 serves both this bundle and the
+/// The daemon WS address to dial. muster-01 serves both this bundle and the
 /// daemon, so in the browser we connect back to the host that served the page
 /// on the daemon's port — keeping the built bundle independent of which host it
 /// lands on. Falls back to the dev default under `trunk serve` (localhost).
@@ -109,7 +109,7 @@ pub fn App() -> impl IntoView {
     // One shared 1 Hz clock for the whole console — drives every freshness age.
     time::provide_now();
 
-    // Connect to the marshal daemon, then open the shared nickname subscription
+    // Connect to the muster daemon, then open the shared nickname subscription
     // (must follow provide_myko — it opens a live query). Cross-panel selection
     // is a single shared signal.
     let address = daemon_address();
@@ -124,7 +124,7 @@ pub fn App() -> impl IntoView {
     notify::provide_notifications();
 
     view! {
-        <Title text="marshal"/>
+        <Title text="muster"/>
         <style>{base_css}</style>
         <style>{mullion_css}</style>
         <div class="app-shell">
@@ -222,7 +222,7 @@ fn items() -> Vec<ActivityNode<Slot>> {
 }
 
 /// localStorage key for the persisted pane layout.
-const LAYOUT_KEY: &str = "marshal-ui-layout";
+const LAYOUT_KEY: &str = "muster-ui-layout";
 /// Bump when `default_layout()` changes — a persisted layout with an older
 /// version is discarded so the new default reaches everyone once.
 const LAYOUT_VERSION: u32 = 2;
@@ -342,7 +342,7 @@ fn Header(connected: Signal<bool>, addr: String) -> impl IntoView {
             <Status variant=Signal::derive(status_variant)>
                 {move || status_label()}
             </Status>
-            <span class="title">"marshal"</span>
+            <span class="title">"muster"</span>
             <span class="substrate">{addr}</span>
             <span style="flex:1"/>
             <button

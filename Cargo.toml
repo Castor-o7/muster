@@ -35,6 +35,6 @@ hyphae = "3.1.2"
 # keep them in sync. The dep key matches the published crates.io
 # name so cargo-flux's workspace topology resolution works (it keys
 # the cross-crate publish graph on the dep key, not the `package =`
-# alias). Source code uses `use marshal_entities::...` — the auto
+# alias). Source code uses `use muster_entities::...` — the auto
 # dash→underscore conversion Rust applies to crate names.
-marshal-entities = { path = "crates/entities", version = "0.53.6" }
+muster-entities = { path = "crates/entities", version = "0.53.6" }

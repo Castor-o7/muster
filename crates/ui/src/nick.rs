@@ -1,7 +1,7 @@
 //! Nickname resolution for the whole dashboard.
 //!
 //! The daemon assigns each session a sticky `adjective-noun` handle
-//! (`SessionNickname`, keyed by session id) and every marshal surface — the
+//! (`SessionNickname`, keyed by session id) and every muster surface — the
 //! shims, the TUI, the message notifications — addresses peers by it. The
 //! dashboard does the same: one live subscription at the root, read everywhere
 //! via `use_nicknames()`, so a handle shows identically in the roster, the
@@ -13,7 +13,7 @@
 //! fall back to its short id.
 
 use leptos::prelude::*;
-use marshal_entities::GetAllSessionNicknames;
+use muster_entities::GetAllSessionNicknames;
 use std::collections::HashMap;
 
 /// Handle to the live nickname map. Cheap to copy; `of()` is a reactive,

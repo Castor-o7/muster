@@ -6,7 +6,7 @@
 //! nickname. Auto-rooms sort first.
 
 use leptos::prelude::*;
-use marshal_entities::{AutoSource, GetAllRoomMembers, GetAllRooms, Room, RoomKind};
+use muster_entities::{AutoSource, GetAllRoomMembers, GetAllRooms, Room, RoomKind};
 use pulse_leptos_ui::{Badge, BadgeVariant, EmptyState};
 use std::collections::HashMap;
 use std::sync::Arc;

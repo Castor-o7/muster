@@ -2,7 +2,7 @@
 //!
 //! Every `Session` SET fires this saga. The first time a session is seen it
 //! assigns a frozen handle — the candidate from the current wordlists
-//! (`marshal_entities::nickname`), re-hashed on the rare collision with a
+//! (`muster_entities::nickname`), re-hashed on the rare collision with a
 //! live-or-past assignment — and stores it as a `SessionNickname`. Once
 //! assigned it is NEVER touched again, so editing/expanding the wordlists only
 //! affects sessions that register afterward; existing sessions keep their
@@ -15,7 +15,7 @@
 
 use std::{collections::HashSet, sync::Arc};
 
-use marshal_entities::{
+use muster_entities::{
     GetAllSessionNicknames, GetAllSessions, Session, SessionNickname, SessionNicknameId, nickname,
 };
 use myko::prelude::EventPublishing as _;

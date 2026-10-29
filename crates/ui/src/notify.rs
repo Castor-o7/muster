@@ -8,7 +8,7 @@
 //! the dashboard doesn't dump every past message as a "new" notification.
 
 use leptos::prelude::*;
-use marshal_entities::GetAllMessages;
+use muster_entities::GetAllMessages;
 use pulse_leptos_ui::{NotificationLevel, NotificationWidget, Notifications};
 use std::collections::HashSet;
 

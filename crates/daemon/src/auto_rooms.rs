@@ -26,7 +26,7 @@
 use std::sync::Arc;
 
 use chrono::Utc;
-use marshal_entities::{
+use muster_entities::{
     AutoSource, GetAllRoomMembers, GetAllRooms, Room, RoomId, RoomKind, RoomMember, RoomMemberId,
     Session,
 };
@@ -76,7 +76,7 @@ impl CommandHandler for DispatchAutoRooms {
         // Find the session row this saga was triggered by. If it's
         // gone (DEL'd between the SET and our run), bail — the saga
         // is responsible for live identity, not stale state.
-        let sessions: Vec<Arc<Session>> = ctx.exec_query(marshal_entities::GetAllSessions {})?;
+        let sessions: Vec<Arc<Session>> = ctx.exec_query(muster_entities::GetAllSessions {})?;
         let Some(session) = sessions
             .iter()
             .find(|s| s.id.0.as_ref() == self.session_id.as_str())

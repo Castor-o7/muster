@@ -1,9 +1,9 @@
 {
-  "name": "marshal",
+  "name": "muster",
   "private": true,
   "workspaces": [
-    "plugins/marshal-opencode",
-    "plugins/marshal-pi",
-    "plugins/marshal-prime-agent"
+    "plugins/muster-opencode",
+    "plugins/muster-pi",
+    "plugins/muster-prime-agent"
   ]
 }

@@ -1,8 +1,8 @@
 //! Watches the running TUI's own binary on disk and re-execs when a new
 //! version is installed (e.g. `cargo install --path crates/tui`
-//! overwrites `~/.cargo/bin/marshal-tui`).
+//! overwrites `~/.cargo/bin/muster-tui`).
 //!
-//! Mirrors `marshal-shim`'s `self_update.rs` — same poll-and-exec
+//! Mirrors `muster-shim`'s `self_update.rs` — same poll-and-exec
 //! mechanism, two TUI-specific differences:
 //!
 //! 1. **Idle gate.** The shim gates on MCP-server idleness (no in-flight
@@ -89,7 +89,7 @@ pub fn spawn(activity: Arc<KeyActivity>) {
     let exe_path = match std::env::current_exe() {
         Ok(p) => p,
         Err(e) => {
-            log::warn!("[marshal-tui] cannot resolve current_exe ({e}); auto-restart disabled");
+            log::warn!("[muster-tui] cannot resolve current_exe ({e}); auto-restart disabled");
             return;
         }
     };
@@ -97,14 +97,14 @@ pub fn spawn(activity: Arc<KeyActivity>) {
         Some(t) => t,
         None => {
             log::warn!(
-                "[marshal-tui] cannot stat {} for self-update; auto-restart disabled",
+                "[muster-tui] cannot stat {} for self-update; auto-restart disabled",
                 exe_path.display()
             );
             return;
         }
     };
     log::info!(
-        "[marshal-tui] self-update watcher polling {} every {:?}",
+        "[muster-tui] self-update watcher polling {} every {:?}",
         exe_path.display(),
         POLL_INTERVAL
     );
@@ -128,19 +128,17 @@ async fn run(exe_path: PathBuf, initial_mtime: SystemTime, activity: Arc<KeyActi
         // want to re-attempt the same broken binary every poll.
         last_known = current;
         log::info!(
-            "[marshal-tui] detected updated binary at {}; waiting for keystroke idle",
+            "[muster-tui] detected updated binary at {}; waiting for keystroke idle",
             exe_path.display()
         );
         wait_for_idle(&activity).await;
 
         if let Err(e) = smoke_test(&exe_path).await {
-            log::warn!(
-                "[marshal-tui] smoke test failed for new binary: {e}; staying on old binary"
-            );
+            log::warn!("[muster-tui] smoke test failed for new binary: {e}; staying on old binary");
             continue;
         }
 
-        log::info!("[marshal-tui] tui binary updated, re-execing");
+        log::info!("[muster-tui] tui binary updated, re-execing");
         // Best-effort terminal cleanup so the new process starts on a
         // clean screen — leaving alt-screen restores whatever was
         // visible before the TUI launched, disable_raw_mode lets the
@@ -199,11 +197,11 @@ async fn smoke_test(path: &Path) -> std::io::Result<()> {
 /// mode + alt screen.
 fn restore_terminal_global() {
     if let Err(e) = disable_raw_mode() {
-        log::warn!("[marshal-tui] disable_raw_mode failed pre-exec: {e}");
+        log::warn!("[muster-tui] disable_raw_mode failed pre-exec: {e}");
     }
     let mut stdout = io::stdout();
     if let Err(e) = execute!(stdout, LeaveAlternateScreen, Show) {
-        log::warn!("[marshal-tui] terminal restore failed pre-exec: {e}");
+        log::warn!("[muster-tui] terminal restore failed pre-exec: {e}");
     }
 }
 
@@ -212,7 +210,7 @@ fn re_exec(path: &Path) {
     let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
     let err = std::process::Command::new(path).args(&args).exec();
     log::error!(
-        "[marshal-tui] exec({}) failed: {err}; continuing on old binary",
+        "[muster-tui] exec({}) failed: {err}; continuing on old binary",
         path.display()
     );
 }
@@ -220,7 +218,7 @@ fn re_exec(path: &Path) {
 #[cfg(not(unix))]
 fn re_exec(path: &Path) {
     log::warn!(
-        "[marshal-tui] self-update re-exec is only supported on unix; \
+        "[muster-tui] self-update re-exec is only supported on unix; \
          binary at {} will not auto-restart",
         path.display()
     );

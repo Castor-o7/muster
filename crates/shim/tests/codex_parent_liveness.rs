@@ -9,7 +9,7 @@ use std::{
 #[test]
 fn codex_bridge_exits_when_its_launcher_disappears() {
     let (reader, writer) = std::os::unix::net::UnixStream::pair().expect("parent liveness pipe");
-    let mut command = Command::new(env!("CARGO_BIN_EXE_marshal-shim"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_muster-shim"));
     command
         .args([
             "codex-bridge",

@@ -14,7 +14,7 @@
 //! `SET`/`DEL` `MEvent` for the `Session`, plus a 5 s liveness heartbeat.
 
 use leptos::prelude::*;
-use marshal_entities::{
+use muster_entities::{
     BroadcastMessage, BroadcastMessageResult, GetAllRooms, GetAllSessions, HostInfo, JoinRoom,
     JoinRoomResult, LivePushStatus, RoomId, SendMessage, SendMessageResult, Session, SessionId,
     WakeStatus,
@@ -27,9 +27,9 @@ use std::time::Duration;
 
 use crate::nick::{self};
 
-const SOURCE_ID: &str = "marshal-ui";
-const CONSOLE_ID_KEY: &str = "marshal-ui-console-id";
-const OPERATOR_KEY: &str = "marshal-ui-operator";
+const SOURCE_ID: &str = "muster-ui";
+const CONSOLE_ID_KEY: &str = "muster-ui-console-id";
+const OPERATOR_KEY: &str = "muster-ui-operator";
 
 /// The operator console's identity + roster lifecycle. Cheap to clone (an
 /// `Arc<str>` id, Copy signals, and the Clone myko client).
@@ -76,7 +76,7 @@ impl Console {
                 os: "browser".to_string(),
                 arch: "wasm".to_string(),
             }),
-            project: Some("marshal".to_string()),
+            project: Some("muster".to_string()),
             channels_enabled: Some(false),
         }
     }

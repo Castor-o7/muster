@@ -1,7 +1,7 @@
 //! End-to-end test of the `/hook/*` HTTP listener — registration plus the
 //! flag-independent inbox-delivery path. Eager registration MUST create the
 //! session without consuming context, and a stored message MUST subsequently
-//! surface in the `<marshal_inbox>` block returned by
+//! surface in the `<muster_inbox>` block returned by
 //! `POST /hook/prompt-submit`.
 //!
 //! This guards the daemon side of the path whose *deploy* misconfiguration
@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use marshal_entities::{GetAllMessages, GetAllSessions, Message, SendMessage, Session, SessionId};
+use muster_entities::{GetAllMessages, GetAllSessions, Message, SendMessage, Session, SessionId};
 use myko::{
     command::{CommandContext, CommandHandler},
     entities::client::ClientId,
@@ -108,7 +108,7 @@ fn wait_listening(addr: SocketAddr) {
 
 #[test]
 fn stored_message_surfaces_via_prompt_submit_hook() {
-    marshal_entities::link();
+    muster_entities::link();
     daemon::link();
 
     let blackhole: Arc<dyn Persister> = Arc::new(BlackholePersister);
@@ -214,8 +214,8 @@ fn stored_message_surfaces_via_prompt_submit_hook() {
         "message did not surface via /hook/prompt-submit; got: {body:?}"
     );
     assert!(
-        body.contains("<marshal_inbox"),
-        "expected a <marshal_inbox> block; got: {body:?}"
+        body.contains("<muster_inbox"),
+        "expected a <muster_inbox> block; got: {body:?}"
     );
 
     // At-least-once contract: the listener acks the surfaced message only

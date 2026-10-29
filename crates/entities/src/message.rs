@@ -9,7 +9,7 @@ use crate::session::{Session, SessionId};
 /// The durable `Message` always retains the complete body. Delivery paths use
 /// a preview so a mistaken log dump or generated artifact cannot consume an
 /// unbounded amount of the recipient's transcript; the full message remains
-/// available through `marshal://messages`.
+/// available through `muster://messages`.
 pub const CONTEXT_BODY_MAX_CHARS: usize = 2_000;
 
 /// Return a UTF-8-safe model-context preview and whether it was truncated.

@@ -1,6 +1,6 @@
 //! Minimal MCP (Model Context Protocol) server over stdio.
 //!
-//! Implements just enough of MCP for the marshal-shim's needs:
+//! Implements just enough of MCP for the muster-shim's needs:
 //! - line-delimited JSON-RPC 2.0 framing on stdin/stdout
 //! - `initialize` / `tools/list` / `tools/call` / `ping` request handlers
 //! - `notifications/initialized` listener
@@ -35,9 +35,9 @@ pub struct ToolDef {
 }
 
 /// A read-only MCP resource. Per the MCP spec, resources are addressable
-/// state the model can fetch (vs tools which are actions). Marshal uses
-/// resources for everything that doesn't mutate: `marshal://whoami`,
-/// `marshal://roster`, `marshal://rooms`, `marshal://messages?...`.
+/// state the model can fetch (vs tools which are actions). Muster uses
+/// resources for everything that doesn't mutate: `muster://whoami`,
+/// `muster://roster`, `muster://rooms`, `muster://messages?...`.
 #[derive(Debug, Clone, Serialize)]
 pub struct ResourceDef {
     pub uri: String,
@@ -185,7 +185,7 @@ impl Notifier {
     pub fn log(&self, level: &str, data: Value) {
         let params = serde_json::json!({
             "level": level,
-            "logger": "marshal",
+            "logger": "muster",
             "data": data,
         });
         self.send_raw("notifications/message", params);

@@ -1,15 +1,15 @@
 [package]
-name = "marshal-tui"
+name = "muster-tui"
 version = "0.53.6"
 edition.workspace = true
 license.workspace = true
-description = "Terminal UI for the marshal coordination daemon — live roster + message stream."
-repository = "https://github.com/ignition-is-go/marshal"
-keywords = ["marshal", "agent", "tui", "ratatui", "myko"]
+description = "Terminal UI for the muster coordination daemon — live roster + message stream."
+repository = "https://github.com/Castor-o7/muster"
+keywords = ["muster", "agent", "tui", "ratatui", "myko"]
 categories = ["command-line-utilities"]
 
 [[bin]]
-name = "marshal-tui"
+name = "muster-tui"
 path = "src/main.rs"
 
 [package.metadata.flux]
@@ -23,7 +23,7 @@ tokio = { workspace = true }
 chrono = { workspace = true }
 myko = { workspace = true }
 hyphae = { workspace = true }
-marshal-entities = { workspace = true }
+muster-entities = { workspace = true }
 ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
 crossterm = "0.29"
 clap = { version = "4", features = ["derive"] }
