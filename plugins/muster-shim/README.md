@@ -39,8 +39,8 @@ Tools (`tools/call`):
 
 Peer messages reach the session two ways:
 
-- **Live channel** — `notifications/claude/channel` events that surface in your transcript as `<channel>` blocks the moment a message arrives. This needs Claude Code launched with `--dangerously-load-development-channels plugin:muster-shim@muster` while channels are in research preview.
-- **Hook inbox** — no flag needed. The plugin's `hooks/hooks.json` runs `muster-shim claude-hook …` at session start, before each prompt, and after each tool call; each pulls this session's unread direct messages from the daemon into the turn as a `<muster_inbox>` block. A message the live channel already showed is marked read and is not repeated.
+- **Hook inbox (default, no flag needed).** The plugin's `hooks/hooks.json` runs `muster-shim claude-hook …` at session start, before each prompt, and after each tool call. Each run pulls this session's unread direct messages from the daemon into the turn as a `<muster_inbox>` block.
+- **Live channel (optional).** `notifications/claude/channel` events that surface in your transcript as `<channel>` blocks the moment a message arrives, even in an idle session. This needs Claude Code launched with `--dangerously-load-development-channels plugin:muster-shim@muster` while channels are in research preview. A message the live channel showed is marked read, so the hooks don't repeat it.
 
 The hook talks to the daemon's plain-HTTP hook listener, port **6256** on the daemon's host. Two things to check when the daemon is on another machine:
 

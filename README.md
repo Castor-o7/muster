@@ -19,10 +19,13 @@ Install the binaries, run the daemon, then wire the harnesses you use.
 
 ### 1. Install the binaries
 
+Muster isn't published to crates.io; install from the repository (or from a
+local checkout with `--path crates/shim` and so on):
+
 ```bash
-cargo install muster-shim muster-daemon
+cargo install --git https://github.com/Castor-o7/muster muster-shim muster-daemon
 # optional but recommended for visibility into the live roster
-cargo install muster-tui
+cargo install --git https://github.com/Castor-o7/muster muster-tui
 ```
 
 This puts `muster-shim` and `muster-daemon` on your `PATH` (typically `~/.cargo/bin`).
@@ -41,7 +44,16 @@ muster-daemon &
 # or under your favorite supervisor (systemd user unit, launchd, tmux pane, ...)
 ```
 
-The daemon binds `0.0.0.0:6255` by default (so peers on other hosts can reach it without remembering to flip a flag) and writes its event log to `~/.local/state/muster/events.jsonl`. Restrict to localhost only with `MUSTER_BIND=127.0.0.1:6255`.
+The daemon listens on two ports, both on loopback by default:
+
+| Port | Variable | Serves |
+|---|---|---|
+| 6255 | `MUSTER_BIND` | WebSocket and MCP for `muster-shim`, the TUI and the web UI |
+| 6256 | `MUSTER_HOOK_BIND` | Plain HTTP for the Claude Code and Codex hooks |
+
+To accept sessions from other machines, bind both to a reachable address, e.g. `MUSTER_BIND=0.0.0.0:6255 MUSTER_HOOK_BIND=0.0.0.0:6256`. Neither port has authentication or encryption yet, so only expose them on a network you trust.
+
+Set `MYKO_POSTGRES_URL` to keep the roster, rooms and messages across restarts. Without it the daemon runs in memory and starts empty each time.
 
 ### 3. Add the plugin in Claude Code
 
@@ -82,9 +94,33 @@ claude mcp add -s user muster muster-shim
 
 > Note: `mcpServers` is **not** a supported key in `~/.claude/settings.json` — adding it there silently does nothing. It must live in `.mcp.json` (project) or `~/.claude.json` (user).
 
-### 4. Allow the channel notifications (research-preview workaround)
+### 4. How messages reach Claude Code
 
-Muster pushes peer messages into your transcript via Claude Code's experimental `notifications/claude/channel` capability. While that capability is in research preview, custom channels are gated behind an Anthropic-curated allowlist; servers not on the allowlist are silently dropped unless you opt in explicitly. Until muster is on the official list, launch Claude Code with one of:
+Muster delivers direct messages through Claude Code **hooks**; no launch flag is needed. The plugin's `hooks/hooks.json` runs `muster-shim claude-hook` at session start, before each prompt, and after each tool call. Each run pulls this session's unread direct messages into the turn as a `<muster_inbox>` block, so a busy session sees new messages between tool calls rather than waiting for its next prompt.
+
+If you wired the MCP server by hand (step 3) instead of installing the plugin, add the hooks to `~/.claude/settings.json` yourself:
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "muster-shim claude-hook session-start", "timeout": 10 }] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "muster-shim claude-hook prompt-submit", "timeout": 10 }] }
+    ],
+    "PostToolUse": [
+      { "hooks": [{ "type": "command", "command": "muster-shim claude-hook post-tool-use", "timeout": 10 }] }
+    ]
+  }
+}
+```
+
+Hooks don't inherit the MCP server's `env` block, so tell them where the daemon is with `~/.config/muster/daemon-address` (one line, e.g. `ws://my-daemon-host:6255`). The shim reads the same file. If the daemon can't be reached, the hook prints nothing and gives up within about two seconds, so it never blocks a turn.
+
+#### Optional: live push
+
+Hooks deliver at turn boundaries. For instant delivery into an idle session, Muster can also push through Claude Code's experimental `notifications/claude/channel` capability. While that capability is in research preview, Claude Code drops channel notifications from servers that aren't on its allowlist unless you opt in at launch:
 
 ```bash
 # If you installed via the plugin (recommended)
@@ -96,9 +132,7 @@ claude --dangerously-load-development-channels server:muster
 
 Both forms key on the same name you set: `plugin:<plugin>@<marketplace>` for plugin installs, `server:<mcpServers-key>` for direct wiring. Set whichever fits as a shell alias to make it permanent (e.g. `alias claude='claude --dangerously-load-development-channels plugin:muster-shim@muster'`).
 
-Without the flag, `roster` and `send_message` still work, and the plugin's hooks still deliver direct messages: `muster-shim claude-hook` pulls unread messages into the session at start, before each prompt, and after each tool call. They just don't arrive as live `<channel>` blocks the instant they're sent. With the flag, every peer's `send_message` arrives as an inline notification while you're working. The hooks reach the daemon's hook listener on port 6256; for a remote daemon, start it with `MUSTER_HOOK_BIND=0.0.0.0:6256` and see [`plugins/muster-shim/README.md`](plugins/muster-shim/README.md) for how the hook finds the daemon.
-
-We're submitting muster for inclusion in the official allowlist; once approved, plain `claude` will accept the notifications and the flag becomes unnecessary.
+With the flag, a message also appears the moment it's sent. A message shown by the live push is marked read, so the hooks don't repeat it. Without the flag, the shim detects that live push can't render and leaves messages for the hooks.
 
 ### Pi: native extension
 
