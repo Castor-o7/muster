@@ -61,8 +61,8 @@ Still open:
 - **Reads are only partly limited.** The roster, rooms and memberships stay readable by
   every paired machine. Message bodies no longer are, except through a session's own
   `ReadMessages`.
-- **`operator` and `host`** are still client-supplied (MUS-6), including on a machine's own
-  Session events.
+- **Local sessions' `operator` and `host`** are still taken as given, since the daemon's own
+  host is trusted (MUS-7 protects its ports). Paired machines' are attested (MUS-6).
 - **Codex over the gate** would need `GetAllMessages` and `GetAllMessageReads` to be
   handled differently before MUS-18.
 

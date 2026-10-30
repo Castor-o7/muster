@@ -47,16 +47,60 @@ const COMMANDS_ON_SESSION: &[&str] = &[
 #[derive(Debug, PartialEq, Eq)]
 pub struct Refused(pub String);
 
-/// Decide on one client frame. Control frames are left to the WebSocket layer.
-pub fn check_frame(state_dir: &Path, machine: &str, frame: &Message) -> Result<(), Refused> {
-    let message = match frame {
+/// Decide on one client frame, returning the frame to forward. Control frames
+/// are left to the WebSocket layer. A frame carrying a `Session` event comes back
+/// with the machine's verified host and the daemon's operator written into it.
+pub fn check_frame(
+    state_dir: &Path,
+    machine: &str,
+    operator: Option<&str>,
+    frame: Message,
+) -> Result<Message, Refused> {
+    let mut message = match &frame {
         Message::Text(text) => serde_json::from_str::<MykoMessage>(text)
             .map_err(|_| Refused("unparseable text frame".into()))?,
         Message::Binary(data) => ciborium::de::from_reader::<MykoMessage, _>(data.as_ref())
             .map_err(|_| Refused("unparseable binary frame".into()))?,
-        _ => return Ok(()),
+        _ => return Ok(frame),
     };
-    check_message(state_dir, machine, &message)
+    check_message(state_dir, machine, &message)?;
+
+    let events: &mut [myko::wire::MEvent] = match &mut message {
+        MykoMessage::Event(event) => std::slice::from_mut(event),
+        MykoMessage::EventBatch(events) => events,
+        _ => return Ok(frame),
+    };
+    for event in events {
+        attest_session(&mut event.item, machine, operator);
+    }
+    match frame {
+        Message::Text(_) => serde_json::to_string(&message)
+            .map(Message::text)
+            .map_err(|_| Refused("couldn't re-encode a Session event".into())),
+        _ => {
+            let mut bytes = Vec::new();
+            ciborium::ser::into_writer(&message, &mut bytes)
+                .map_err(|_| Refused("couldn't re-encode a Session event".into()))?;
+            Ok(Message::binary(bytes))
+        }
+    }
+}
+
+/// Replace what a machine claims about itself on its `Session` row. Its `os` and
+/// `arch` stay as claimed: they're only informational.
+fn attest_session(item: &mut Value, machine: &str, operator: Option<&str>) {
+    let Some(item) = item.as_object_mut() else {
+        return;
+    };
+    if let Some(operator) = operator {
+        item.insert("operator".into(), Value::from(operator));
+    }
+    let host = item
+        .entry("host")
+        .or_insert_with(|| serde_json::json!({"name": "", "os": "", "arch": ""}));
+    if let Some(host) = host.as_object_mut() {
+        host.insert("name".into(), Value::from(machine));
+    }
 }
 
 fn check_message(state_dir: &Path, machine: &str, message: &MykoMessage) -> Result<(), Refused> {
@@ -155,6 +199,10 @@ mod tests {
         }}))
     }
 
+    fn check(state_dir: &Path, machine: &str, frame: Message) -> Result<Message, Refused> {
+        check_frame(state_dir, machine, None, frame)
+    }
+
     /// A directory where machine `a1` owns session `mine`.
     fn dir() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
@@ -182,30 +230,30 @@ mod tests {
     fn a_machine_can_act_for_its_own_session() {
         let dir = dir();
         let p = dir.path();
-        assert!(check_frame(p, "a1", &event("Session", "mine")).is_ok());
+        assert!(check(p, "a1", event("Session", "mine")).is_ok());
         assert!(
-            check_frame(
+            check(
                 p,
                 "a1",
-                &command("SendMessage", json!({"asSession": "mine"}))
+                command("SendMessage", json!({"asSession": "mine"}))
             )
             .is_ok()
         );
         assert!(
-            check_frame(
+            check(
                 p,
                 "a1",
-                &command("SetSessionActivity", json!({"id": "mine"}))
+                command("SetSessionActivity", json!({"id": "mine"}))
             )
             .is_ok()
         );
-        assert!(check_frame(p, "a1", &query("GetAllSessions")).is_ok());
+        assert!(check(p, "a1", query("GetAllSessions")).is_ok());
     }
 
     #[test]
     fn a_command_without_as_session_binds_to_the_connection() {
         let dir = dir();
-        assert!(check_frame(dir.path(), "murph", &command("SendMessage", json!({}))).is_ok());
+        assert!(check(dir.path(), "murph", command("SendMessage", json!({}))).is_ok());
     }
 
     #[test]
@@ -219,7 +267,7 @@ mod tests {
             command("AckMessages", json!({"asSession": "mine"})),
             command("SetSessionCurrentTask", json!({"id": "mine"})),
         ] {
-            assert!(check_frame(p, "murph", &f).is_err(), "{f:?}");
+            assert!(check(p, "murph", f.clone()).is_err(), "{f:?}");
         }
     }
 
@@ -228,7 +276,7 @@ mod tests {
         let dir = dir();
         for item_type in ["Message", "MessageRead", "Room", "RoomMember", "Client"] {
             assert!(
-                check_frame(dir.path(), "a1", &event(item_type, "mine")).is_err(),
+                check(dir.path(), "a1", event(item_type, "mine")).is_err(),
                 "{item_type}"
             );
         }
@@ -241,24 +289,94 @@ mod tests {
             {"item": {"id": "mine"}, "changeType": "SET", "itemType": "Session", "createdAt": "t"},
             {"item": {"id": "m"}, "changeType": "DEL", "itemType": "Message", "createdAt": "t"},
         ]}));
-        assert!(check_frame(dir.path(), "a1", &batch).is_err());
+        assert!(check(dir.path(), "a1", batch).is_err());
     }
 
     #[test]
     fn unlisted_queries_and_commands_are_refused() {
         let dir = dir();
         let p = dir.path();
-        assert!(check_frame(p, "a1", &query("GetAllMessages")).is_err());
-        assert!(check_frame(p, "a1", &query("GetAllMessageReads")).is_err());
-        assert!(check_frame(p, "a1", &command("SomethingNew", json!({}))).is_err());
+        assert!(check(p, "a1", query("GetAllMessages")).is_err());
+        assert!(check(p, "a1", query("GetAllMessageReads")).is_err());
+        assert!(check(p, "a1", command("SomethingNew", json!({}))).is_err());
     }
 
     #[test]
     fn unparseable_frames_are_refused() {
         let dir = dir();
         let p = dir.path();
-        assert!(check_frame(p, "a1", &Message::text("not json")).is_err());
-        assert!(check_frame(p, "a1", &Message::binary(vec![0xff, 0x00])).is_err());
+        assert!(check(p, "a1", Message::text("not json")).is_err());
+        assert!(check(p, "a1", Message::binary(vec![0xff, 0x00])).is_err());
+    }
+
+    fn forged_session() -> Value {
+        json!({"event": "ws:m:event", "data": {
+            "item": {
+                "id": "mine",
+                "operator": "forged@example.com",
+                "host": {"name": "forged", "os": "macos", "arch": "aarch64"},
+            },
+            "changeType": "SET",
+            "itemType": "Session",
+            "createdAt": "t",
+        }})
+    }
+
+    fn item_of(message: MykoMessage) -> Value {
+        match message {
+            MykoMessage::Event(event) => event.item,
+            other => panic!("expected an event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_session_event_cannot_choose_its_host_or_operator() {
+        let dir = dir();
+        let out = check_frame(
+            dir.path(),
+            "a1",
+            Some("op@example.com"),
+            frame(forged_session()),
+        );
+        let Message::Text(text) = out.unwrap() else {
+            panic!("a text frame should stay text");
+        };
+        let item = item_of(serde_json::from_str(&text).unwrap());
+        assert_eq!(item["operator"], "op@example.com");
+        assert_eq!(item["host"]["name"], "a1");
+        assert_eq!(item["host"]["os"], "macos");
+    }
+
+    #[test]
+    fn a_cbor_session_event_is_attested_too() {
+        let dir = dir();
+        let mut bytes = Vec::new();
+        ciborium::ser::into_writer(&forged_session(), &mut bytes).unwrap();
+        let out = check_frame(
+            dir.path(),
+            "a1",
+            Some("op@example.com"),
+            Message::binary(bytes),
+        );
+        let Message::Binary(data) = out.unwrap() else {
+            panic!("a binary frame should stay binary");
+        };
+        let item = item_of(ciborium::de::from_reader(data.as_ref()).unwrap());
+        assert_eq!(item["operator"], "op@example.com");
+        assert_eq!(item["host"]["name"], "a1");
+    }
+
+    #[test]
+    fn without_a_daemon_operator_the_claim_stands() {
+        let dir = dir();
+        let Message::Text(text) =
+            check_frame(dir.path(), "a1", None, frame(forged_session())).unwrap()
+        else {
+            panic!("a text frame should stay text");
+        };
+        let item = item_of(serde_json::from_str(&text).unwrap());
+        assert_eq!(item["operator"], "forged@example.com");
+        assert_eq!(item["host"]["name"], "a1");
     }
 
     #[test]
@@ -273,7 +391,7 @@ mod tests {
         let mut bytes = Vec::new();
         ciborium::ser::into_writer(&value, &mut bytes).unwrap();
         let f = Message::binary(bytes);
-        assert!(check_frame(dir.path(), "a1", &f).is_ok());
-        assert!(check_frame(dir.path(), "murph", &f).is_err());
+        assert!(check(dir.path(), "a1", f.clone()).is_ok());
+        assert!(check(dir.path(), "murph", f).is_err());
     }
 }

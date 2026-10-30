@@ -182,10 +182,11 @@ where
     let (mut client_tx, mut client_rx) = client_ws.split();
     let (mut upstream_tx, mut upstream_rx) = upstream_ws.split();
 
+    let operator = credentials::daemon_operator();
     let from_client = async {
         while let Some(Ok(frame)) = client_rx.next().await {
-            match gate_filter::check_frame(state_dir, machine, &frame) {
-                Ok(()) => {
+            match gate_filter::check_frame(state_dir, machine, operator.as_deref(), frame) {
+                Ok(frame) => {
                     if upstream_tx.send(frame).await.is_err() {
                         break;
                     }

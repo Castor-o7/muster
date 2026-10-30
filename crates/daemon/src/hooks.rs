@@ -170,6 +170,29 @@ fn handle_session_start(query: &str, body: &[u8], ctx: &Arc<MykoServerContext>) 
 /// Returns the canonical session id plus the command context used for the SET
 /// so `/hook/session-start` can immediately render identity and inbox state
 /// against the same registry view.
+/// The operator and host to record. A request the gate marked with `machine` is
+/// from a paired machine, so that verified name and the daemon's operator replace
+/// what it claimed. A request from the daemon's own host is taken at its word.
+fn attested(
+    machine: Option<&str>,
+    daemon_operator: Option<String>,
+    operator: Option<String>,
+    host: Option<HostInfo>,
+) -> (Option<String>, Option<HostInfo>) {
+    let Some(machine) = machine else {
+        return (operator, host);
+    };
+    let (os, arch) = host.map(|h| (h.os, h.arch)).unwrap_or_default();
+    (
+        daemon_operator.or(operator),
+        Some(HostInfo {
+            name: machine.to_string(),
+            os,
+            arch,
+        }),
+    )
+}
+
 fn register_hook_session(
     query: &str,
     body: &[u8],
@@ -203,6 +226,13 @@ fn register_hook_session(
         os: q.get("os").cloned().unwrap_or_default(),
         arch: q.get("arch").cloned().unwrap_or_default(),
     });
+    let machine = q.get("machine").map(String::as_str);
+    let (operator, host) = attested(
+        machine,
+        crate::credentials::daemon_operator(),
+        operator,
+        host,
+    );
     let project = if dir == "session" {
         None
     } else {
@@ -226,10 +256,11 @@ fn register_hook_session(
             let mut updated = (**p).clone();
             updated.cwd = cwd;
             updated.last_activity_at = Some(now);
-            if updated.operator.is_none() {
+            // What the gate attests replaces any earlier claim.
+            if updated.operator.is_none() || machine.is_some() {
                 updated.operator = operator;
             }
-            if updated.host.is_none() {
+            if updated.host.is_none() || machine.is_some() {
                 updated.host = host;
             }
             if updated.project.is_none() {
@@ -499,4 +530,43 @@ fn url_decode(s: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn claimed_host() -> Option<HostInfo> {
+        Some(HostInfo {
+            name: "forged".into(),
+            os: "linux".into(),
+            arch: "x86_64".into(),
+        })
+    }
+
+    #[test]
+    fn a_paired_machine_cannot_choose_its_host_or_operator() {
+        let (operator, host) = attested(
+            Some("a1"),
+            Some("josh@example.com".into()),
+            Some("forged@example.com".into()),
+            claimed_host(),
+        );
+        assert_eq!(operator.as_deref(), Some("josh@example.com"));
+        let host = host.unwrap();
+        assert_eq!(host.name, "a1");
+        assert_eq!(host.os, "linux");
+    }
+
+    #[test]
+    fn local_requests_keep_their_claim() {
+        let (operator, host) = attested(
+            None,
+            Some("josh@example.com".into()),
+            Some("local".into()),
+            claimed_host(),
+        );
+        assert_eq!(operator.as_deref(), Some("local"));
+        assert_eq!(host.unwrap().name, "forged");
+    }
 }

@@ -170,6 +170,15 @@ fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
     options.open(path)?.write_all(bytes)
 }
 
+/// The operator this daemon serves, from `MUSTER_OPERATOR`. When set, it's what
+/// sessions from paired machines show, whatever they claim. Without it their
+/// own claim stands.
+pub fn daemon_operator() -> Option<String> {
+    std::env::var("MUSTER_OPERATOR")
+        .ok()
+        .filter(|s| !s.is_empty())
+}
+
 /// The owner of a session on the daemon's own host. `valid_name` can't produce
 /// it, so no paired machine can share it.
 pub const LOCAL_MACHINE: &str = "(local)";
