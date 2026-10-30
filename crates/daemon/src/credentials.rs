@@ -216,7 +216,7 @@ pub fn claim_session(dir: &Path, machine: &str, session: &str) -> io::Result<boo
             return Ok(owner == machine);
         }
     }
-    write_private(&path, format!("{text}{machine} {session}\n").as_bytes())?;
+    write_bindings(&path, &format!("{text}{machine} {session}\n"))?;
     Ok(true)
 }
 
@@ -237,7 +237,16 @@ fn release_sessions(dir: &Path, machine: &str) -> io::Result<()> {
         })
         .map(|line| format!("{line}\n"))
         .collect();
-    write_private(&path, kept.as_bytes())
+    write_bindings(&path, &kept)
+}
+
+/// Replace the bindings file in one step. A crash or full disk partway through
+/// must not leave it cut short, because a missing binding lets any machine claim
+/// that session.
+fn write_bindings(path: &Path, text: &str) -> io::Result<()> {
+    let tmp = path.with_extension("tmp");
+    write_private(&tmp, text.as_bytes())?;
+    std::fs::rename(&tmp, path)
 }
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
@@ -278,6 +287,16 @@ mod tests {
     #[test]
     fn no_pairing_can_be_named_like_the_local_machine() {
         assert!(!valid_name(LOCAL_MACHINE));
+    }
+
+    #[test]
+    fn failing_to_write_keeps_the_existing_bindings() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(claim_session(dir.path(), "a1", "s-1").unwrap());
+        // A directory where the temp file goes makes the write fail.
+        std::fs::create_dir(dir.path().join("session-bindings.tmp")).unwrap();
+        assert!(claim_session(dir.path(), "a1", "s-2").is_err());
+        assert!(!claim_session(dir.path(), "murph", "s-1").unwrap());
     }
 
     #[test]

@@ -63,6 +63,9 @@ pub fn check_frame(
             .map_err(|_| Refused("unparseable binary frame".into()))?,
         _ => return Ok(frame),
     };
+    if carries_nul(&message) {
+        return Err(Refused("NUL in a key or value".into()));
+    }
     check_message(state_dir, machine, &message)?;
 
     let events: &mut [myko::wire::MEvent] = match &mut message {
@@ -86,6 +89,24 @@ pub fn check_frame(
     }
 }
 
+/// myko strips NUL from an event's keys and values after this filter has run, so
+/// `"id\\u0000"` would become `id` and replace the one that was checked. Nothing
+/// legitimate contains NUL, so refuse it everywhere rather than try to match.
+fn carries_nul(message: &MykoMessage) -> bool {
+    serde_json::to_value(message).map_or(true, |v| value_has_nul(&v))
+}
+
+fn value_has_nul(value: &Value) -> bool {
+    match value {
+        Value::String(s) => s.contains('\0'),
+        Value::Array(items) => items.iter().any(value_has_nul),
+        Value::Object(map) => map
+            .iter()
+            .any(|(k, v)| k.contains('\0') || value_has_nul(v)),
+        _ => false,
+    }
+}
+
 /// Replace what a machine claims about itself on its `Session` row. Its `os` and
 /// `arch` stay as claimed: they're only informational.
 fn attest_session(item: &mut Value, machine: &str, operator: Option<&str>) {
@@ -98,6 +119,10 @@ fn attest_session(item: &mut Value, machine: &str, operator: Option<&str>) {
     let host = item
         .entry("host")
         .or_insert_with(|| serde_json::json!({"name": "", "os": "", "arch": ""}));
+    // A claim of `null` or anything else that isn't a host is replaced too.
+    if !host.is_object() {
+        *host = serde_json::json!({"name": "", "os": "", "arch": ""});
+    }
     if let Some(host) = host.as_object_mut() {
         host.insert("name".into(), Value::from(machine));
     }
@@ -345,6 +370,77 @@ mod tests {
         assert_eq!(item["operator"], "op@example.com");
         assert_eq!(item["host"]["name"], "a1");
         assert_eq!(item["host"]["os"], "macos");
+    }
+
+    #[test]
+    fn nul_suffixed_keys_are_refused() {
+        // Found by review: myko strips the NUL after the filter has run, so this
+        // would have taken over `victim` while claiming only `mine`.
+        let dir = dir();
+        for change in ["SET", "DEL"] {
+            let forged = json!({"event": "ws:m:event", "data": {
+                "item": {"id": "mine", "id\u{0}": "victim", "pid": 1, "cwd": "/", "connectedAt": 1},
+                "changeType": change,
+                "itemType": "Session",
+                "createdAt": "t",
+            }});
+            assert!(check(dir.path(), "a1", frame(forged.clone())).is_err());
+            let mut bytes = Vec::new();
+            ciborium::ser::into_writer(&forged, &mut bytes).unwrap();
+            assert!(check(dir.path(), "a1", Message::binary(bytes)).is_err());
+            let batch = json!({"event": "ws:m:event-batch", "data": [forged["data"]]});
+            assert!(check(dir.path(), "a1", frame(batch)).is_err());
+        }
+    }
+
+    #[test]
+    fn nul_keys_cannot_override_attestation() {
+        let dir = dir();
+        let forged = json!({"event": "ws:m:event", "data": {
+            "item": {
+                "id": "mine",
+                "operator\u{0}": "forged@example.com",
+                "host": {"name": "a", "os": "o", "arch": "r", "name\u{0}": "forged"},
+            },
+            "changeType": "SET",
+            "itemType": "Session",
+            "createdAt": "t",
+        }});
+        assert!(check_frame(dir.path(), "a1", Some("op@example.com"), frame(forged)).is_err());
+    }
+
+    #[test]
+    fn a_nul_in_a_command_is_refused() {
+        let dir = dir();
+        assert!(
+            check(
+                dir.path(),
+                "a1",
+                command(
+                    "SendMessage",
+                    json!({"asSession": "mine", "body": "a\u{0}b"})
+                )
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn a_null_host_is_still_attested() {
+        let dir = dir();
+        let forged = json!({"event": "ws:m:event", "data": {
+            "item": {"id": "mine", "host": null},
+            "changeType": "SET",
+            "itemType": "Session",
+            "createdAt": "t",
+        }});
+        let Message::Text(text) = check(dir.path(), "a1", frame(forged)).unwrap() else {
+            panic!("a text frame should stay text");
+        };
+        assert_eq!(
+            item_of(serde_json::from_str(&text).unwrap())["host"]["name"],
+            "a1"
+        );
     }
 
     #[test]

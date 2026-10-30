@@ -254,7 +254,9 @@ fn wait_for_mail(
                 }
             }
             None => {
-                if !failing {
+                // A one-shot waiter's stderr is delivered to the model with its
+                // next message, by which time this would be long out of date.
+                if !failing && !once {
                     eprintln!("muster-shim watch: can't reach daemon hook listener; retrying");
                     failing = true;
                 }

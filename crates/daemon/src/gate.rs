@@ -263,6 +263,15 @@ impl Request {
         if parts.next().is_some() || !version.starts_with("HTTP/") {
             return None;
         }
+        // The hook listener and myko split the request line on any whitespace.
+        // Anything but a plain token here would make them read a different
+        // method or target from the one checked below.
+        if !method.bytes().all(|b| b.is_ascii_uppercase())
+            || !raw_target.bytes().all(|b| b.is_ascii_graphic())
+            || !version.bytes().all(|b| b.is_ascii_graphic())
+        {
+            return None;
+        }
 
         let (path, query) = raw_target.split_once('?').unwrap_or((raw_target, ""));
         let mut token = None;
@@ -391,6 +400,25 @@ mod tests {
             head.starts_with("POST /hook/wait?timeout=1&machine=attacker HTTP/1.1\r\n"),
             "{head}"
         );
+    }
+
+    #[test]
+    fn whitespace_inside_the_request_line_is_rejected() {
+        // Found by review: the listener would end the target at the tab, losing
+        // the `machine` the gate appends, or take the target from the method.
+        for line in [
+            "POST /hook/prompt-submit\tx HTTP/1.1",
+            "POST /hook/prompt-submit?a=1\u{0b}x HTTP/1.1",
+            "POST /hook/prompt-submit\u{a0}x HTTP/1.1",
+            "POST\t/hook/session-register?machine=victim /hook/x HTTP/1.1",
+            "post /hook/x HTTP/1.1",
+            "POST /hook/x HTTP/1.1\tjunk",
+        ] {
+            assert!(
+                Request::parse(&format!("{line}\r\nHost: h")).is_none(),
+                "{line:?}"
+            );
+        }
     }
 
     #[test]

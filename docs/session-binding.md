@@ -53,6 +53,11 @@ unparseable frames are refused, and myko's other routes are closed to paired mac
 The allowlist comes from what the shim sends, and the gate script checks that a real
 shim's traffic isn't refused.
 
+An adversarial review on 2026-10-30 broke the first version: a NUL-suffixed `id` key passed
+the filter and became the real `id` when myko stripped NUL afterwards, and a tab in the
+request line lost the machine name. Both are fixed with regression tests. Further findings
+are in MUS-33 and MUS-34.
+
 Still open:
 
 - **First use wins.** A session nobody has used through a hook or the gate can still be
