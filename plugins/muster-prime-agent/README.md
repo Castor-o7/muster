@@ -32,14 +32,15 @@ prime-agent package install npm:muster-prime-agent
 ```
 
 Restart Prime Agent after installation. No MCP server or wrapper is required.
-For a remote daemon:
+Run it on the daemon's own host, because it can't use the TLS gate yet. To set the address
+explicitly:
 
 ```bash
-export MUSTER_DAEMON_ADDRESS=ws://muster.example.net:6255
+export MUSTER_DAEMON_ADDRESS=ws://localhost:6257
 prime-agent
 ```
 
-The default is `ws://localhost:6255`. `MUSTER_OPERATOR` optionally overrides the
+The default is `ws://localhost:6257`. `MUSTER_OPERATOR` optionally overrides the
 operator name shown on the roster.
 
 For development:

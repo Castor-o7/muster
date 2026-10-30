@@ -108,7 +108,7 @@ compatibility, but describe only the synchronous live push.
 First install the normal Codex integration:
 
 ```sh
-muster-shim codex-setup --daemon ws://muster-host:6255
+muster-shim codex-setup --daemon ws://localhost:6257
 ```
 
 Then use the live launcher for an interactive session:
@@ -194,12 +194,12 @@ For diagnostics or a supervisor-managed deployment, run the bridge directly:
 
 ```sh
 muster-shim codex-bridge \
-  --daemon ws://muster-host:6255 \
+  --daemon ws://localhost:6257 \
   --socket "$CODEX_HOME/app-server-control/app-server-control.sock"
 
 # Native Windows or a manually supervised local app-server:
 muster-shim codex-bridge \
-  --daemon ws://muster-host:6255 \
+  --daemon ws://localhost:6257 \
   --endpoint ws://127.0.0.1:4500
 ```
 

@@ -12,6 +12,6 @@
 
   // The plugin reads its daemon address + operator from the environment, not
   // from this file, so env-propagation works the same on every shell:
-  //   export MUSTER_DAEMON_ADDRESS=ws://muster-01.lucid.host:6255
+  //   export MUSTER_DAEMON_ADDRESS=ws://localhost:6257
   //   export MUSTER_OPERATOR=max
 }
