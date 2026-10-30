@@ -21,6 +21,8 @@ evidence from a real run by the person or team named.
 - **Language.** New Muster code is Rust. No new TypeScript. The Pi, opencode and
   Prime Agent plugins are TypeScript inherited from Marshal, because they run inside
   those TypeScript hosts; they get no new features for now.
+- **Architecture.** Muster stays a myko service wherever possible: new state is myko
+  entities and events in the daemon, not a separate system.
 - **Ordering.** Anything that lets a Claude act without the operator waits until
   Phase 2 is done.
 
@@ -123,6 +125,17 @@ evidence from a real run by the person or team named.
   its total, with any other outcome reported.
 - [ ] **MUS-22: Print nicknames at session start.** Done when: the operator can see
   which session is which without asking.
+- [ ] **MUS-32: Design the muster ledger.** The muster's best current picture of who
+  is doing what, kept as a myko service, so that no agent or team gets lost in the din,
+  watchman included. It records and informs; it doesn't command. It's a best estimate
+  rather than a final authority, so it should say how it knows each thing and how fresh
+  that is, and agents and the operator can correct it. It holds observed facts from
+  hooks and connections, declared state from agents, and who is waiting on whom. It
+  should spot a stall like the one on 2026-10-30, give stories check-in times that
+  activity pushes back, and wake the watchman with batched digests only when something
+  changes. It brings together MUS-4, MUS-23 and MUS-28. Check first how well myko's
+  data model fits. Done when: a design is in `docs/`, starting with a read-only overhead
+  view of observed facts, and follow-up stories are filed. Declared state waits for MUS-5.
 - [ ] **MUS-23: Native board.** Stories stored in the daemon, shown in the TUI and
   web UI, with commands to claim a story and submit it for review. Merged and
   Verified are independent, so it needs a merge field too. Wait for MUS-5, and use
