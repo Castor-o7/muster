@@ -72,8 +72,10 @@ evidence from a real run by the person or team named.
 
 - [ ] **MUS-5: Tie sessions to the machine's token.** The gate discards the
   machine name and `session_id` is taken on trust, so any paired machine can claim
-  another session and read and clear its mail. Done when: a test shows one paired
-  machine can't read, clear or send as another machine's session.
+  another session and read and clear its mail. Paired clients can also write raw events
+  to the store. Design: [session-binding.md](session-binding.md). Done when: a test shows
+  one paired machine can't read, clear or send as another machine's session, including
+  by raw event.
 - [ ] **MUS-6: Verify `operator` and `host` on the daemon.** The client supplies
   both. Done when: the roster shows values the daemon established, and a test
   shows a client can't fake them.
