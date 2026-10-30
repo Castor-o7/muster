@@ -220,6 +220,18 @@ pub fn claim_session(dir: &Path, machine: &str, session: &str) -> io::Result<boo
     Ok(true)
 }
 
+/// [`claim_session`] for a paired machine, whose session ids must be UUIDs, as
+/// Claude Code's are. Recipients are also addressed by nickname, operator and id
+/// prefix, so a machine free to choose any id could register one of those and
+/// receive mail meant for someone else.
+pub fn claim_machine_session(dir: &Path, machine: &str, session: &str) -> io::Result<bool> {
+    let is_uuid = session.len() == 36 && uuid::Uuid::try_parse(session).is_ok();
+    if !is_uuid {
+        return Ok(false);
+    }
+    claim_session(dir, machine, session)
+}
+
 /// Forget every session bound to `machine`, when it's unpaired.
 fn release_sessions(dir: &Path, machine: &str) -> io::Result<()> {
     let _guard = BINDINGS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -297,6 +309,19 @@ mod tests {
         std::fs::create_dir(dir.path().join("session-bindings.tmp")).unwrap();
         assert!(claim_session(dir.path(), "a1", "s-2").is_err());
         assert!(!claim_session(dir.path(), "murph", "s-1").unwrap());
+    }
+
+    #[test]
+    fn a_machine_cannot_claim_an_id_that_could_pose_as_someone() {
+        let dir = tempfile::tempdir().unwrap();
+        for id in ["copper-komodo", "josh", "josh@example.com", "4a212405"] {
+            assert!(
+                !claim_machine_session(dir.path(), "a1", id).unwrap(),
+                "{id}"
+            );
+        }
+        let id = "4a212405-0246-4c12-98f6-2359ca28c533";
+        assert!(claim_machine_session(dir.path(), "a1", id).unwrap());
     }
 
     #[test]

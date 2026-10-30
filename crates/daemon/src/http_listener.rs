@@ -181,7 +181,7 @@ fn machine_may_act(state_dir: &Path, query: &str, body: &[u8]) -> bool {
         }
         return true;
     };
-    match credentials::claim_session(state_dir, machine, &session) {
+    match credentials::claim_machine_session(state_dir, machine, &session) {
         Ok(true) => true,
         Ok(false) => {
             log::warn!("[hook] refused {machine}: session {session} isn't its own");

@@ -23,7 +23,7 @@ export XDG_CONFIG_HOME=$WORK/client
 T $BIN/muster-shim pair "$CODE" >/dev/null
 check "pairing stored owner-only" '[[ $(python3 -I -c "import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777))" $WORK/client/muster/pairing) == 0o600 ]]'
 
-HOOK='{"session_id":"e2e-hook","cwd":"/tmp/demo"}'
+HOOK='{"session_id":"a0000000-0000-4000-8000-000000000004","cwd":"/tmp/demo"}'
 OUT=$(echo $HOOK | T $BIN/muster-shim claude-hook session-start)
 check "paired hook gets its session block over TLS" '[[ $OUT == *muster_session* ]]'
 
@@ -33,7 +33,7 @@ check "TLS without a token gets 401" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_
 check "TLS with a wrong token gets 401" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_code} -H "Authorization: Bearer nope" -X POST https://127.0.0.1:16255/hook/session-start -d "$HOOK") == 401 ]]'
 
 REVOKED_TOKEN=$(python3 -I -c 'import sys,json,base64; s=sys.argv[1].split(":",2)[2]; print(json.loads(base64.urlsafe_b64decode(s+"="*(-len(s)%4)))["token"])' "$OTHER")
-OTHER_HOOK='{"session_id":"e2e-other","cwd":"/tmp/demo"}'
+OTHER_HOOK='{"session_id":"a0000000-0000-4000-8000-000000000003","cwd":"/tmp/demo"}'
 check "a second machine's token works" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_code} -H "Authorization: Bearer $REVOKED_TOKEN" -X POST https://127.0.0.1:16255/hook/session-start -d "$OTHER_HOOK") == 200 ]]'
 check "a second machine can't read the first machine's mail" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_code} -H "Authorization: Bearer $REVOKED_TOKEN" -X POST "https://127.0.0.1:16255/hook/wait?timeout=1" -d "$HOOK") == 403 ]]'
 check "nor by forging a machine name" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_code} -H "Authorization: Bearer $REVOKED_TOKEN" -X POST "https://127.0.0.1:16255/hook/wait?timeout=1&machine=e2e" -d "$HOOK") == 403 ]]'
@@ -49,7 +49,7 @@ check "WebSocket upgrade with a revoked token gets 401" '[[ $WS == 401 ]]'
 
 # The MCP shim itself: connects through its loopback tunnel.
 echo "... running the MCP shim for 6s"
-(sleep 6) | env CLAUDE_CODE_SESSION_ID=e2e-ws-session RUST_LOG=info perl -e "alarm 10; exec @ARGV" $BIN/muster-shim >/dev/null 2>$WORK/shim.log
+(sleep 6) | env CLAUDE_CODE_SESSION_ID=a0000000-0000-4000-8000-000000000001 RUST_LOG=info perl -e "alarm 10; exec @ARGV" $BIN/muster-shim >/dev/null 2>$WORK/shim.log
 echo "... shim exited with $?"
 check "MCP shim connects through the TLS tunnel" 'grep -q "connected to ws://127.0.0.1:[0-9]*/myko — (re)sending session" $WORK/shim.log'
 check "token never appears in the shim's log" '! grep -q "token=" $WORK/shim.log'
@@ -76,14 +76,19 @@ PY
 T $BIN/muster-daemon pair --name attacker >$WORK/attacker.code 2>/dev/null
 ATTACKER=$(python3 -I -c 'import sys,json,base64; s=open(sys.argv[1]).read().split()[2].split(":",2)[2]; print(json.loads(base64.urlsafe_b64decode(s+"="*(-len(s)%4)))["token"])' $WORK/attacker.code)
 EVENT='{"event":"ws:m:event","data":{"item":{"id":"m1"},"changeType":"DEL","itemType":"Message","createdAt":"t"}}'
-SEND='{"event":"ws:m:command","data":{"command":{"asSession":"e2e-ws-session","toSessionId":"x","body":"forged"},"commandId":"SendMessage"}}'
+SEND='{"event":"ws:m:command","data":{"command":{"asSession":"a0000000-0000-4000-8000-000000000001","toSessionId":"x","body":"forged"},"commandId":"SendMessage"}}'
 QUERY='{"event":"ws:m:query","data":{"query":{"tx":"t"},"queryId":"GetAllMessages","queryItemType":"Message"}}'
 python3 -I $ATTACK "$ATTACKER" "$EVENT" "$SEND" "$QUERY"
 check "a raw write to another entity is refused" 'grep -q "refused attacker: event on Message" $WORK/daemon.log'
-check "sending as another machine's session is refused" 'grep -q "refused attacker: SendMessage for session e2e-ws-session" $WORK/daemon.log'
+check "sending as another machine's session is refused" 'grep -q "refused attacker: SendMessage for session a0000000-0000-4000-8000-000000000001" $WORK/daemon.log'
 check "reading all messages is refused" 'grep -q "refused attacker: query GetAllMessages" $WORK/daemon.log'
-curl -s -m 3 -o /dev/null -X POST http://127.0.0.1:16256/hook/session-start -d '{"session_id":"e2e-local-hook","cwd":"/tmp/demo"}'
-check "a paired machine can't take a session on the daemon's own host" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_code} -H "Authorization: Bearer $ATTACKER" -X POST "https://127.0.0.1:16255/hook/wait?timeout=1" -d "{\"session_id\":\"e2e-local-hook\",\"cwd\":\"/tmp/demo\"}") == 403 ]]'
+curl -s -m 3 -o /dev/null -X POST http://127.0.0.1:16256/hook/session-start -d '{"session_id":"a0000000-0000-4000-8000-000000000002","cwd":"/tmp/demo"}'
+check "a paired machine can't take a session on the daemon's own host" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_code} -H "Authorization: Bearer $ATTACKER" -X POST "https://127.0.0.1:16255/hook/wait?timeout=1" -d "{\"session_id\":\"a0000000-0000-4000-8000-000000000002\",\"cwd\":\"/tmp/demo\"}") == 403 ]]'
+ARRAY='{"event":"ws:m:command","data":{"command":[null,null,null,false,false,true,null,null,"a0000000-0000-4000-8000-000000000001"],"commandId":"ReadMessages"}}'
+python3 -I $ATTACK "$ATTACKER" "$ARRAY" '{"event":"ws:m:event","data":{"item":{"id":"m","id\u0000":"a0000000-0000-4000-8000-000000000001"},"changeType":"DEL","itemType":"Session","createdAt":"t"}}'
+check "a positional command body is refused" 'grep -q "refused attacker: command ReadMessages body" $WORK/daemon.log'
+check "a NUL-suffixed key is refused" 'grep -q "refused attacker: NUL" $WORK/daemon.log'
+check "a session id posing as a nickname is refused" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_code} -H "Authorization: Bearer $ATTACKER" -X POST "https://127.0.0.1:16255/hook/session-register" -d "{\"session_id\":\"copper-komodo\",\"cwd\":\"/tmp\"}") == 403 ]]'
 check "myko's other routes are closed to paired machines" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_code} -H "Authorization: Bearer $ATTACKER" -X POST https://127.0.0.1:16255/myko/mcp -d "{}") == 403 ]]'
 
 # A pairing whose fingerprint doesn't match: the hook must get nothing.

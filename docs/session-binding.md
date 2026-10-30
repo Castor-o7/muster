@@ -55,11 +55,16 @@ shim's traffic isn't refused.
 
 An adversarial review on 2026-10-30 broke the first version: a NUL-suffixed `id` key passed
 the filter and became the real `id` when myko stripped NUL afterwards, and a tab in the
-request line lost the machine name. Both are fixed with regression tests. Further findings
-are in MUS-33 and MUS-34.
+request line lost the machine name. A recheck then found that a command body sent as a JSON
+array skipped the `asSession` check, because serde fills fields by position. All are fixed
+with regression tests. Paired machines' session ids must now be UUIDs, so they can't pose as
+a nickname or operator. Further findings are in MUS-33 and MUS-34.
 
 Still open:
 
+- **The filter is an allowlist over a parser myko also interprets.** Three bypasses came from
+  myko reading a frame differently from the filter. Treat more as possible, and prefer an
+  authorization hook in myko in the long term.
 - **First use wins.** A session nobody has used through a hook or the gate can still be
   claimed by whichever machine names it first. Roster ids are visible to paired machines,
   and this matters most for sessions already running during a rollout.

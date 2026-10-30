@@ -382,11 +382,8 @@ pub(crate) fn resolve_mention(
     sessions: &[Arc<Session>],
     token: &str,
 ) -> Result<Option<ResolvedRecipient>, CommandError> {
-    // 1. Exact session id.
-    if let Some(s) = sessions.iter().find(|s| s.id.0.as_ref() == token) {
-        return Ok(Some((s.clone(), None)));
-    }
-    // 2. Unique nickname (ambiguous → treat as prose, not a hard error).
+    // 1. Unique nickname (ambiguous → treat as prose, not a hard error). As in
+    // `resolve_recipient`, a daemon-assigned nickname wins over a chosen id.
     let mut by_nick: Vec<Arc<Session>> = Vec::new();
     for s in sessions {
         if crate::nickname_for(ctx, s.id.0.as_ref())? == token {
@@ -398,6 +395,10 @@ pub(crate) fn resolve_mention(
     }
     if by_nick.len() > 1 {
         return Ok(None);
+    }
+    // 2. Exact session id.
+    if let Some(s) = sessions.iter().find(|s| s.id.0.as_ref() == token) {
+        return Ok(Some((s.clone(), None)));
     }
     // 3. Operator identity — human-via-agent.
     let op = token

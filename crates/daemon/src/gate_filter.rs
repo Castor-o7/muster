@@ -132,6 +132,9 @@ fn check_message(state_dir: &Path, machine: &str, message: &MykoMessage) -> Resu
     match message {
         MykoMessage::Ping(_) | MykoMessage::QueryCancel(_) | MykoMessage::QueryWindow(_) => Ok(()),
         MykoMessage::Query(query) => {
+            if !query.query.is_object() {
+                return Err(Refused(format!("query {} body", query.query_id)));
+            }
             if QUERIES.contains(&query.query_id.as_ref()) {
                 Ok(())
             } else {
@@ -140,6 +143,11 @@ fn check_message(state_dir: &Path, machine: &str, message: &MykoMessage) -> Resu
         }
         MykoMessage::Command(wrapped) => {
             let id = wrapped.command_id.as_str();
+            // serde also fills a struct from an array by position, which would
+            // carry `asSession` past the name-based checks below.
+            if !wrapped.command.is_object() {
+                return Err(Refused(format!("command {id} body isn't an object")));
+            }
             if COMMANDS_AS_CALLER.contains(&id) {
                 match wrapped.command.get("asSession") {
                     None | Some(Value::Null) => Ok(()),
@@ -178,7 +186,7 @@ fn require_owned(
     let Some(session) = session.as_str() else {
         return Err(Refused(format!("{what} without a session id")));
     };
-    match credentials::claim_session(state_dir, machine, session) {
+    match credentials::claim_machine_session(state_dir, machine, session) {
         Ok(true) => Ok(()),
         Ok(false) => Err(Refused(format!("{what} for session {session}"))),
         Err(e) => Err(Refused(format!("{what}: can't read session bindings: {e}"))),
@@ -198,6 +206,9 @@ fn variant_name(message: &MykoMessage) -> &'static str {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    const MINE: &str = "11111111-1111-4111-8111-111111111111";
+    const VICTIM: &str = "22222222-2222-4222-8222-222222222222";
 
     fn frame(value: Value) -> Message {
         Message::text(value.to_string())
@@ -231,7 +242,7 @@ mod tests {
     /// A directory where machine `a1` owns session `mine`.
     fn dir() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
-        assert!(credentials::claim_session(dir.path(), "a1", "mine").unwrap());
+        assert!(credentials::claim_session(dir.path(), "a1", MINE).unwrap());
         dir
     }
 
@@ -241,7 +252,7 @@ mod tests {
         // would pass for the wrong reason.
         for f in [
             command("SendMessage", json!({"toSessionId": "x", "body": "hi"})),
-            event("Session", "mine"),
+            event("Session", MINE),
             query("GetAllSessions"),
         ] {
             let Message::Text(text) = &f else {
@@ -255,23 +266,9 @@ mod tests {
     fn a_machine_can_act_for_its_own_session() {
         let dir = dir();
         let p = dir.path();
-        assert!(check(p, "a1", event("Session", "mine")).is_ok());
-        assert!(
-            check(
-                p,
-                "a1",
-                command("SendMessage", json!({"asSession": "mine"}))
-            )
-            .is_ok()
-        );
-        assert!(
-            check(
-                p,
-                "a1",
-                command("SetSessionActivity", json!({"id": "mine"}))
-            )
-            .is_ok()
-        );
+        assert!(check(p, "a1", event("Session", MINE)).is_ok());
+        assert!(check(p, "a1", command("SendMessage", json!({"asSession": MINE}))).is_ok());
+        assert!(check(p, "a1", command("SetSessionActivity", json!({"id": MINE}))).is_ok());
         assert!(check(p, "a1", query("GetAllSessions")).is_ok());
     }
 
@@ -286,11 +283,11 @@ mod tests {
         let dir = dir();
         let p = dir.path();
         for f in [
-            event("Session", "mine"),
-            command("SendMessage", json!({"asSession": "mine"})),
-            command("ReadMessages", json!({"asSession": "mine"})),
-            command("AckMessages", json!({"asSession": "mine"})),
-            command("SetSessionCurrentTask", json!({"id": "mine"})),
+            event("Session", MINE),
+            command("SendMessage", json!({"asSession": MINE})),
+            command("ReadMessages", json!({"asSession": MINE})),
+            command("AckMessages", json!({"asSession": MINE})),
+            command("SetSessionCurrentTask", json!({"id": MINE})),
         ] {
             assert!(check(p, "murph", f.clone()).is_err(), "{f:?}");
         }
@@ -301,7 +298,7 @@ mod tests {
         let dir = dir();
         for item_type in ["Message", "MessageRead", "Room", "RoomMember", "Client"] {
             assert!(
-                check(dir.path(), "a1", event(item_type, "mine")).is_err(),
+                check(dir.path(), "a1", event(item_type, MINE)).is_err(),
                 "{item_type}"
             );
         }
@@ -311,7 +308,7 @@ mod tests {
     fn one_bad_event_refuses_a_whole_batch() {
         let dir = dir();
         let batch = frame(json!({"event": "ws:m:event-batch", "data": [
-            {"item": {"id": "mine"}, "changeType": "SET", "itemType": "Session", "createdAt": "t"},
+            {"item": {"id": MINE}, "changeType": "SET", "itemType": "Session", "createdAt": "t"},
             {"item": {"id": "m"}, "changeType": "DEL", "itemType": "Message", "createdAt": "t"},
         ]}));
         assert!(check(dir.path(), "a1", batch).is_err());
@@ -337,7 +334,7 @@ mod tests {
     fn forged_session() -> Value {
         json!({"event": "ws:m:event", "data": {
             "item": {
-                "id": "mine",
+                "id": MINE,
                 "operator": "forged@example.com",
                 "host": {"name": "forged", "os": "macos", "arch": "aarch64"},
             },
@@ -373,13 +370,44 @@ mod tests {
     }
 
     #[test]
+    fn a_positional_command_body_is_refused() {
+        // Found by review: serde fills `as_session` from the array, while the
+        // name-based check sees no `asSession` at all.
+        let dir = dir();
+        let p = dir.path();
+        for f in [
+            command(
+                "ReadMessages",
+                json!([null, null, null, false, false, true, null, null, VICTIM]),
+            ),
+            command("AckMessages", json!([["m1"], VICTIM])),
+            command("SendMessage", json!(["peer", "forged", VICTIM])),
+            command("SetSessionActivity", json!([VICTIM, "idle"])),
+        ] {
+            assert!(check(p, "a1", f.clone()).is_err(), "{f:?}");
+        }
+        let positional_query = frame(json!({"event": "ws:m:query", "data": {
+            "query": [],
+            "queryId": "GetAllSessions",
+            "queryItemType": "x",
+        }}));
+        assert!(check(p, "a1", positional_query).is_err());
+    }
+
+    #[test]
+    fn a_session_id_that_isnt_a_uuid_is_refused() {
+        let dir = dir();
+        assert!(check(dir.path(), "a1", event("Session", "copper-komodo")).is_err());
+    }
+
+    #[test]
     fn nul_suffixed_keys_are_refused() {
         // Found by review: myko strips the NUL after the filter has run, so this
         // would have taken over `victim` while claiming only `mine`.
         let dir = dir();
         for change in ["SET", "DEL"] {
             let forged = json!({"event": "ws:m:event", "data": {
-                "item": {"id": "mine", "id\u{0}": "victim", "pid": 1, "cwd": "/", "connectedAt": 1},
+                "item": {"id": MINE, "id\u{0}": VICTIM, "pid": 1, "cwd": "/", "connectedAt": 1},
                 "changeType": change,
                 "itemType": "Session",
                 "createdAt": "t",
@@ -398,7 +426,7 @@ mod tests {
         let dir = dir();
         let forged = json!({"event": "ws:m:event", "data": {
             "item": {
-                "id": "mine",
+                "id": MINE,
                 "operator\u{0}": "forged@example.com",
                 "host": {"name": "a", "os": "o", "arch": "r", "name\u{0}": "forged"},
             },
@@ -416,10 +444,7 @@ mod tests {
             check(
                 dir.path(),
                 "a1",
-                command(
-                    "SendMessage",
-                    json!({"asSession": "mine", "body": "a\u{0}b"})
-                )
+                command("SendMessage", json!({"asSession": MINE, "body": "a\u{0}b"}))
             )
             .is_err()
         );
@@ -429,7 +454,7 @@ mod tests {
     fn a_null_host_is_still_attested() {
         let dir = dir();
         let forged = json!({"event": "ws:m:event", "data": {
-            "item": {"id": "mine", "host": null},
+            "item": {"id": MINE, "host": null},
             "changeType": "SET",
             "itemType": "Session",
             "createdAt": "t",
@@ -479,7 +504,7 @@ mod tests {
     fn a_cbor_frame_is_checked_the_same_way() {
         let dir = dir();
         let value = json!({"event": "ws:m:event", "data": {
-            "item": {"id": "mine"},
+            "item": {"id": MINE},
             "changeType": "SET",
             "itemType": "Session",
             "createdAt": "t",
