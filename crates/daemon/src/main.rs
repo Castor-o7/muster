@@ -197,8 +197,11 @@ async fn run_daemon() -> Result<()> {
     // myko's MCP listener is left untouched on its own port.
     {
         let hook_ctx = Arc::new(server.ctx());
+        let bindings_dir = Arc::new(state_dir.clone());
         tokio::spawn(async move {
-            if let Err(e) = daemon::http_listener::run(hook_bind, hook_ctx).await {
+            if let Err(e) =
+                daemon::http_listener::run_bound(hook_bind, hook_ctx, Some(bindings_dir)).await
+            {
                 log::error!("[hook] listener exited: {e}");
             }
         });

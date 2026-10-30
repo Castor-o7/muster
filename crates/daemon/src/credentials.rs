@@ -114,6 +114,7 @@ pub fn remove_token(dir: &Path, name: &str) -> io::Result<bool> {
         return Ok(false);
     }
     write_tokens(dir, &kept)?;
+    release_sessions(dir, name)?;
     Ok(true)
 }
 
@@ -169,6 +170,63 @@ fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
     options.open(path)?.write_all(bytes)
 }
 
+/// Session ids bound to the paired machine that first used them.
+const BINDINGS_FILE: &str = "session-bindings";
+
+/// Serializes the read-then-append in [`claim_session`], so two machines racing
+/// for a new session can't both win.
+static BINDINGS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Whether `machine` may act for `session`. The first paired machine to use a
+/// session owns it from then on. An id that can't be stored safely on one line
+/// is refused.
+pub fn claim_session(dir: &Path, machine: &str, session: &str) -> io::Result<bool> {
+    let safe = !session.is_empty()
+        && session.len() <= 128
+        && session
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'));
+    if !safe {
+        return Ok(false);
+    }
+    let _guard = BINDINGS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let path = dir.join(BINDINGS_FILE);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e),
+    };
+    for line in text.lines() {
+        if let Some((owner, id)) = line.split_once(' ')
+            && id == session
+        {
+            return Ok(owner == machine);
+        }
+    }
+    write_private(&path, format!("{text}{machine} {session}\n").as_bytes())?;
+    Ok(true)
+}
+
+/// Forget every session bound to `machine`, when it's unpaired.
+fn release_sessions(dir: &Path, machine: &str) -> io::Result<()> {
+    let _guard = BINDINGS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let path = dir.join(BINDINGS_FILE);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
+    let kept: String = text
+        .lines()
+        .filter(|line| {
+            line.split_once(' ')
+                .is_none_or(|(owner, _)| owner != machine)
+        })
+        .map(|line| format!("{line}\n"))
+        .collect();
+    write_private(&path, kept.as_bytes())
+}
+
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
@@ -193,6 +251,35 @@ mod tests {
                 .mode();
             assert_eq!(mode & 0o777, 0o600, "private key must be owner-only");
         }
+    }
+
+    #[test]
+    fn first_machine_to_use_a_session_owns_it() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(claim_session(dir.path(), "a1", "s-1").unwrap());
+        assert!(claim_session(dir.path(), "a1", "s-1").unwrap());
+        assert!(!claim_session(dir.path(), "murph", "s-1").unwrap());
+        assert!(claim_session(dir.path(), "murph", "s-2").unwrap());
+    }
+
+    #[test]
+    fn a_session_id_cannot_inject_a_binding() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!claim_session(dir.path(), "attacker", "x\nattacker victim").unwrap());
+        assert!(!claim_session(dir.path(), "attacker", "x y").unwrap());
+        assert!(!claim_session(dir.path(), "attacker", "").unwrap());
+        assert!(claim_session(dir.path(), "a1", "victim").unwrap());
+    }
+
+    #[test]
+    fn unpairing_releases_a_machines_sessions() {
+        let dir = tempfile::tempdir().unwrap();
+        add_token(dir.path(), "old").unwrap();
+        assert!(claim_session(dir.path(), "old", "s-1").unwrap());
+        assert!(claim_session(dir.path(), "a1", "s-2").unwrap());
+        assert!(remove_token(dir.path(), "old").unwrap());
+        assert!(claim_session(dir.path(), "murph", "s-1").unwrap());
+        assert!(!claim_session(dir.path(), "murph", "s-2").unwrap());
     }
 
     #[test]

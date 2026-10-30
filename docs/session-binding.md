@@ -45,6 +45,12 @@ reads each client frame and allows only:
 Anything else is dropped and logged. This closes holes 2 and 3, and it applies to myko's
 HTTP-MCP route too, unless that route is simply closed to paired machines.
 
+## Status
+
+Hook binding (steps 1 and 2) is built: the gate names the verified machine, and hook
+handlers refuse a session bound to another machine. The WebSocket filter (step 3) isn't
+built, so holes 2 and 3 are still open, and MUS-5 isn't done.
+
 ## Alternatives
 
 - **Add an authorization hook to myko upstream.** The cleanest long-term answer, and worth

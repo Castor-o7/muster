@@ -131,9 +131,12 @@ async fn handle(
         request.path()
     );
     let mut upstream = TcpStream::connect(upstream_addr).await?;
-    upstream
-        .write_all(request.forwarded_head().as_bytes())
-        .await?;
+    let head = if request.path().starts_with("/hook/") {
+        request.forwarded_head_as(&name)
+    } else {
+        request.forwarded_head()
+    };
+    upstream.write_all(head.as_bytes()).await?;
     upstream.write_all(&rest).await?;
     tokio::io::copy_bidirectional(&mut tls, &mut upstream).await?;
     Ok(())
@@ -237,6 +240,28 @@ impl Request {
         self.target.split('?').next().unwrap_or("")
     }
 
+    /// The head for a hook request, with the verified machine name in place of
+    /// any `machine` parameter the client sent. The name is restricted by
+    /// `credentials::valid_name`, so it needs no escaping.
+    fn forwarded_head_as(&self, machine: &str) -> String {
+        let (path, query) = self.target.split_once('?').unwrap_or((&self.target, ""));
+        let mut kept: Vec<&str> = query
+            .split('&')
+            .filter(|p| !p.is_empty() && !p.starts_with("machine="))
+            .collect();
+        let verified = format!("machine={machine}");
+        kept.push(&verified);
+        let target = format!("{path}?{}", kept.join("&"));
+        Request {
+            method: self.method.clone(),
+            target,
+            version: self.version.clone(),
+            headers: self.headers.clone(),
+            token: None,
+        }
+        .forwarded_head()
+    }
+
     fn forwarded_head(&self) -> String {
         let mut out = format!("{} {} {}\r\n", self.method, self.target, self.version);
         for h in &self.headers {
@@ -278,6 +303,17 @@ mod tests {
             !r.forwarded_head()
                 .to_ascii_lowercase()
                 .contains("authorization")
+        );
+    }
+
+    #[test]
+    fn replaces_a_client_supplied_machine_name() {
+        let r =
+            Request::parse("POST /hook/wait?machine=victim&timeout=1 HTTP/1.1\r\nHost: h").unwrap();
+        let head = r.forwarded_head_as("attacker");
+        assert!(
+            head.starts_with("POST /hook/wait?timeout=1&machine=attacker HTTP/1.1\r\n"),
+            "{head}"
         );
     }
 

@@ -13,7 +13,12 @@
 //! per connection, `Connection: close`. Hook bodies are a few hundred
 //! bytes; anything fancier would be a dependency we don't need.
 
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{
+    net::SocketAddr,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 
 use myko::server::MykoServerContext;
 use tokio::{
@@ -21,7 +26,7 @@ use tokio::{
     net::{TcpListener, TcpStream},
 };
 
-use crate::hooks;
+use crate::{credentials, hooks};
 
 /// Hard cap on a hook request body. Claude Code hook payloads are small;
 /// this only exists so a malformed/hostile `Content-Length` can't make us
@@ -36,6 +41,17 @@ const WAIT_POLL: Duration = Duration::from_millis(500);
 
 /// Run the hook listener forever. Spawn on a tokio task.
 pub async fn run(bind: SocketAddr, ctx: Arc<MykoServerContext>) -> std::io::Result<()> {
+    run_bound(bind, ctx, None).await
+}
+
+/// [`run`], refusing requests the gate marked as coming from a machine that
+/// doesn't own the session they name. The session bindings live in `state_dir`.
+/// Requests from the daemon's own host carry no machine and aren't checked.
+pub async fn run_bound(
+    bind: SocketAddr,
+    ctx: Arc<MykoServerContext>,
+    state_dir: Option<Arc<PathBuf>>,
+) -> std::io::Result<()> {
     let listener = TcpListener::bind(bind).await?;
     log::info!("muster hook listener on http://{bind} (/hook/*)");
     loop {
@@ -47,15 +63,20 @@ pub async fn run(bind: SocketAddr, ctx: Arc<MykoServerContext>) -> std::io::Resu
             }
         };
         let ctx = ctx.clone();
+        let state_dir = state_dir.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_conn(stream, ctx).await {
+            if let Err(e) = handle_conn(stream, ctx, state_dir).await {
                 log::debug!("[hook] connection error: {e}");
             }
         });
     }
 }
 
-async fn handle_conn(mut stream: TcpStream, ctx: Arc<MykoServerContext>) -> std::io::Result<()> {
+async fn handle_conn(
+    mut stream: TcpStream,
+    ctx: Arc<MykoServerContext>,
+    state_dir: Option<Arc<PathBuf>>,
+) -> std::io::Result<()> {
     let mut buf: Vec<u8> = Vec::with_capacity(2048);
     let mut tmp = [0u8; 2048];
 
@@ -114,6 +135,12 @@ async fn handle_conn(mut stream: TcpStream, ctx: Arc<MykoServerContext>) -> std:
         return write_response(&mut stream, 405, "method not allowed").await;
     }
 
+    if let Some(dir) = &state_dir
+        && !machine_may_act(dir, query, &body)
+    {
+        return write_response(&mut stream, 403, "forbidden").await;
+    }
+
     if path == "/hook/wait" {
         return handle_wait(stream, query, &body, &ctx).await;
     }
@@ -132,6 +159,32 @@ async fn handle_conn(mut stream: TcpStream, ctx: Arc<MykoServerContext>) -> std:
             Ok(())
         }
         None => write_response(&mut stream, 404, "not found").await,
+    }
+}
+
+/// Whether the machine the gate named in `query` may act for the session in
+/// `body`. Without a machine the request came from the daemon's own host, and
+/// without a session id the handlers have nothing to act on.
+fn machine_may_act(state_dir: &Path, query: &str, body: &[u8]) -> bool {
+    let Some(machine) = query.split('&').find_map(|kv| kv.strip_prefix("machine=")) else {
+        return true;
+    };
+    let session = serde_json::from_slice::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("session_id")?.as_str().map(str::to_string));
+    let Some(session) = session else {
+        return true;
+    };
+    match credentials::claim_session(state_dir, machine, &session) {
+        Ok(true) => true,
+        Ok(false) => {
+            log::warn!("[hook] refused {machine}: session {session} isn't its own");
+            false
+        }
+        Err(e) => {
+            log::warn!("[hook] refused {machine}: can't read session bindings: {e}");
+            false
+        }
     }
 }
 
@@ -178,6 +231,7 @@ async fn handle_wait(
 async fn write_response(stream: &mut TcpStream, status: u16, body: &str) -> std::io::Result<()> {
     let reason = match status {
         200 => "OK",
+        403 => "Forbidden",
         404 => "Not Found",
         405 => "Method Not Allowed",
         413 => "Payload Too Large",
