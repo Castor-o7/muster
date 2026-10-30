@@ -25,7 +25,6 @@
 //! can never block or break a Codex or Claude turn.
 
 use std::io::{Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
 const HOOK_PORT: u16 = 6256;
@@ -155,6 +154,9 @@ pub fn watch(session_id: &str, base_override: Option<&str>) {
     // The daemon answers within `WATCH_WAIT`; the read timeout only has to
     // outlast it, so a daemon that vanished mid-wait is noticed.
     let timeout = WATCH_WAIT + Duration::from_secs(30);
+    // Report only the change into failure: stdout would wake the session, and
+    // repeating it every retry would just bury the Monitor's output file.
+    let mut failing = false;
     loop {
         let response = match crate::link::load_pairing().filter(|_| !explicit) {
             Some(pairing) => crate::link::https_post(&pairing, &path, &body, timeout),
@@ -162,6 +164,7 @@ pub fn watch(session_id: &str, base_override: Option<&str>) {
         };
         match response {
             Some(resp) => {
+                failing = false;
                 let resp = resp.trim_end_matches(['\n', '\r', ' ']);
                 if !resp.is_empty() {
                     let mut out = std::io::stdout().lock();
@@ -169,7 +172,13 @@ pub fn watch(session_id: &str, base_override: Option<&str>) {
                     let _ = out.flush();
                 }
             }
-            None => std::thread::sleep(WATCH_RETRY),
+            None => {
+                if !failing {
+                    eprintln!("muster-shim watch: can't reach daemon hook listener; retrying");
+                    failing = true;
+                }
+                std::thread::sleep(WATCH_RETRY);
+            }
         }
     }
 }
@@ -273,8 +282,7 @@ fn http_post(base: &str, path: &str, body: &str, timeout: Duration) -> Option<St
         Some((h, p)) => (h, p.parse::<u16>().ok()?),
         None => (hostport, 80),
     };
-    let sock = format!("{host}:{port}").to_socket_addrs().ok()?.next()?;
-    let mut stream = TcpStream::connect_timeout(&sock, timeout).ok()?;
+    let mut stream = crate::link::connect_any(format!("{host}:{port}"), timeout)?;
     stream.set_read_timeout(Some(timeout)).ok()?;
     stream.set_write_timeout(Some(timeout)).ok()?;
     let req = format!(
