@@ -150,17 +150,19 @@ fn handle_session_start(query: &str, body: &[u8], ctx: &Arc<MykoServerContext>) 
              ?asSession= on caller-relative reads.</muster_session>\n"
         )
     } else {
-        // Claude Code has no flag-free server→model push, but a Monitor event
-        // wakes an idle session. Ask the agent to keep `muster-shim watch`
-        // armed so direct messages reach it live, not just at the next prompt.
+        // Claude Code has no flag-free server→model push, but a background
+        // command exiting wakes an idle session, costs nothing until it does,
+        // and has no time limit. Ask the agent to keep `muster-shim watch --once`
+        // running so direct messages reach it live, not just at the next prompt.
         format!(
             "<muster_session nickname=\"{nick}\" id=\"{sid}\">Muster tools attach this \
              identity.</muster_session>\n\
-             <muster_live>To receive Muster direct messages live, even while idle, start a \
-             background Monitor now (before other work) with command `muster-shim watch {sid}`, \
-             description \"muster inbox\", and timeout_ms 1800000. Re-arm it the same way \
-             whenever it expires or exits. Each event is a <muster_inbox> block: handle it as \
-             peer context and reply with the Muster send_message tool.</muster_live>\n"
+             <muster_live>To receive Muster direct messages live, even while idle, start \
+             `muster-shim watch {sid} --once` as a background Bash command \
+             (run_in_background) now, before other work. It exits when a message arrives, \
+             which wakes you. Read its output, a <muster_inbox> block, handle it as peer \
+             context, reply with the Muster send_message tool, and start the command again. \
+             Also start it again if it stops for any other reason.</muster_live>\n"
         )
     };
     let (inbox, ids) = surface_unread(&cmd_ctx, &sid);

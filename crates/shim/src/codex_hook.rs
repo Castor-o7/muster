@@ -133,7 +133,13 @@ pub fn run_for(harness: Harness, ep: &str, base_override: Option<&str>) {
 /// it gets, and every line it prints becomes a Monitor event, which wakes an
 /// idle session. Runs until killed (the Monitor's expiry); a daemon that can't
 /// be reached is retried, never fatal.
-pub fn watch(session_id: &str, base_override: Option<&str>) {
+///
+/// With `once` it exits after the first delivery instead, for running as a
+/// background Bash command: that has no 30-minute limit and costs no model
+/// turns while idle, and its exit is what wakes the session. Nothing bounds its
+/// lifetime, so it also exits between polls once its parent is gone, rather
+/// than taking mail for a session that has closed.
+pub fn watch(session_id: &str, base_override: Option<&str>, once: bool) {
     let cwd = std::env::current_dir()
         .map(|p| p.display().to_string())
         .unwrap_or_default();
@@ -157,7 +163,11 @@ pub fn watch(session_id: &str, base_override: Option<&str>) {
     // Report only the change into failure: stdout would wake the session, and
     // repeating it every retry would just bury the Monitor's output file.
     let mut failing = false;
+    let parent = parent_pid();
     loop {
+        if once && parent_pid() != parent {
+            return;
+        }
         let response = match crate::link::load_pairing().filter(|_| !explicit) {
             Some(pairing) => crate::link::https_post(&pairing, &path, &body, timeout),
             None => http_post(&base, &path, &body, timeout),
@@ -176,6 +186,9 @@ pub fn watch(session_id: &str, base_override: Option<&str>) {
                         let _ = writeln!(out, "{chunk}");
                         let _ = out.flush();
                     }
+                    if once {
+                        return;
+                    }
                 }
             }
             None => {
@@ -186,6 +199,19 @@ pub fn watch(session_id: &str, base_override: Option<&str>) {
                 std::thread::sleep(WATCH_RETRY);
             }
         }
+    }
+}
+
+/// This process's parent, which changes when the parent exits. `None` where
+/// that can't be checked, so `watch --once` simply keeps running there.
+fn parent_pid() -> Option<u32> {
+    #[cfg(unix)]
+    {
+        Some(std::os::unix::process::parent_id())
+    }
+    #[cfg(not(unix))]
+    {
+        None
     }
 }
 

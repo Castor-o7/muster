@@ -25,7 +25,9 @@ evidence from a real run by the person or team named.
 
 - [ ] **MUS-1: Fix watcher expiry.** Monitor stops at 30 minutes; the expiry
   notice wakes an idle session, so re-arming works but costs about 48 wake-ups
-  per session per day. Done when: a session idle overnight still wakes on a
+  per session per day. `watch --once` under background Bash avoids that. Update
+  every machine's shim before its daemon: an older shim takes `--once` for a
+  server address and retries silently. Done when: a session idle overnight still wakes on a
   message, and an idle session uses at most 2 model turns per hour, with 0 as the
   target. Needs a run: the Muster team, overnight.
 - [ ] **MUS-2: Close the first-prompt gap.** Done when: a restarted session wakes
@@ -46,6 +48,10 @@ evidence from a real run by the person or team named.
 - [ ] **MUS-26: Keep `current_task` fresh.** It can go stale: one session showed
   `feature/comments` while on `feature/search`. Done when: the roster's task
   follows the branch, unless a session has set its own text.
+- [ ] **MUS-28: Show whether a team is available, working or blocked.** The roster's
+  `activity` can't separate resting from stuck, and the watchman shouldn't poll to
+  find out. Done when: a team can set its state, and the watchman can read it without
+  sending a message.
 
 ## Phase 2: Security
 
