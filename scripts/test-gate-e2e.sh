@@ -33,7 +33,11 @@ check "TLS without a token gets 401" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_
 check "TLS with a wrong token gets 401" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_code} -H "Authorization: Bearer nope" -X POST https://127.0.0.1:16255/hook/session-start -d "$HOOK") == 401 ]]'
 
 REVOKED_TOKEN=$(python3 -I -c 'import sys,json,base64; s=sys.argv[1].split(":",2)[2]; print(json.loads(base64.urlsafe_b64decode(s+"="*(-len(s)%4)))["token"])' "$OTHER")
-check "a second machine's token works" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_code} -H "Authorization: Bearer $REVOKED_TOKEN" -X POST https://127.0.0.1:16255/hook/session-start -d "$HOOK") == 200 ]]'
+OTHER_HOOK='{"session_id":"e2e-other","cwd":"/tmp/demo"}'
+check "a second machine's token works" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_code} -H "Authorization: Bearer $REVOKED_TOKEN" -X POST https://127.0.0.1:16255/hook/session-start -d "$OTHER_HOOK") == 200 ]]'
+check "a second machine can't read the first machine's mail" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_code} -H "Authorization: Bearer $REVOKED_TOKEN" -X POST "https://127.0.0.1:16255/hook/wait?timeout=1" -d "$HOOK") == 403 ]]'
+check "nor by forging a machine name" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_code} -H "Authorization: Bearer $REVOKED_TOKEN" -X POST "https://127.0.0.1:16255/hook/wait?timeout=1&machine=e2e" -d "$HOOK") == 403 ]]'
+check "the first machine still can" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_code} -H "Authorization: Bearer $(python3 -I -c '"'"'import sys,json,base64; s=sys.argv[1].split(":",2)[2]; print(json.loads(base64.urlsafe_b64decode(s+"="*(-len(s)%4)))["token"])'"'"' "$CODE")" -X POST "https://127.0.0.1:16255/hook/wait?timeout=1" -d "$HOOK") == 200 ]]'
 T $BIN/muster-daemon unpair revoked >/dev/null
 check "and stops working once unpaired" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_code} -H "Authorization: Bearer $REVOKED_TOKEN" -X POST https://127.0.0.1:16255/hook/session-start -d "$HOOK") == 401 ]]'
 
@@ -59,7 +63,8 @@ check "wrong certificate fingerprint: hook gets nothing" '[[ -z $OUT ]]'
 
 # Unpaired, on the daemon's own host: the shim falls back to myko's loopback port.
 mkdir -p $WORK/unpaired
-(sleep 4) | env XDG_CONFIG_HOME=$WORK/unpaired MUSTER_DAEMON_ADDRESS=ws://127.0.0.1:16257 CLAUDE_CODE_SESSION_ID=e2e-local RUST_LOG=info perl -e "alarm 8; exec @ARGV" $BIN/muster-shim >/dev/null 2>$WORK/local.log
+# HOME too, so a real pairing on the machine running this can't be picked up.
+(sleep 4) | env HOME=$WORK/unpaired XDG_CONFIG_HOME=$WORK/unpaired MUSTER_DAEMON_ADDRESS=ws://127.0.0.1:16257 CLAUDE_CODE_SESSION_ID=e2e-local RUST_LOG=info perl -e "alarm 8; exec @ARGV" $BIN/muster-shim >/dev/null 2>$WORK/local.log
 check "unpaired shim on the daemon host connects to the internal port" 'grep -q "connected to ws://127.0.0.1:16257/myko" $WORK/local.log'
 
 echo "--- $pass passed, $fail failed"
