@@ -60,6 +60,10 @@ array skipped the `asSession` check, because serde fills fields by position. All
 with regression tests. Paired machines' session ids must now be UUIDs, so they can't pose as
 a nickname or operator. Further findings are in MUS-33 and MUS-34.
 
+A third round found free-text room names reaching mention banners, also fixed. That round
+wasn't a clean pass: its hook-surface reviewer stopped early, so the hook surface was traced
+by reading the code instead, with no bypass found, and it wasn't tested with attacks.
+
 Still open:
 
 - **The filter is an allowlist over a parser myko also interprets.** Three bypasses came from
