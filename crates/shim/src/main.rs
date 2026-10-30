@@ -2,7 +2,7 @@
 //!
 //! On startup the shim:
 //! 1. connects MykoClient to MUSTER_DAEMON_ADDRESS (default
-//!    ws://localhost:6255),
+//!    ws://localhost:6257),
 //! 2. SETs a `Session` entity describing this Claude session,
 //! 3. registers `on_command::<NotifyChannel>` so daemon-pushed notifications
 //!    (currently: peer messages via `MessageNotifySaga`) are forwarded as
@@ -14,6 +14,7 @@ mod channels;
 mod codex_bridge;
 mod codex_hook;
 mod codex_setup;
+mod link;
 mod mcp;
 mod session_discovery;
 mod statusline;
@@ -32,11 +33,14 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-const DEFAULT_DAEMON_ADDRESS: &str = "ws://localhost:6255";
+/// Where an unpaired shim connects: myko's internal loopback listener, which
+/// only exists on the daemon's own host. Every other machine pairs (`link`)
+/// and goes through the TLS gate on 6255 instead.
+const DEFAULT_DAEMON_ADDRESS: &str = "ws://localhost:6257";
 
-/// Env var that overrides the daemon WebSocket URL. Set this to point
-/// the shim at a daemon other than the default `ws://localhost:6255` —
-/// e.g. a daemon on another host or a non-default port. The plugin's
+/// Env var that overrides the daemon WebSocket URL for an unpaired shim.
+/// Set this to point the shim at a daemon other than the default
+/// `ws://localhost:6257` (a pairing takes precedence). The plugin's
 /// `.mcp.json` plumbs this through with `${MUSTER_DAEMON_ADDRESS}`
 /// substitution, so a user-shell `export` is enough to reach Claude
 /// Code's spawned shim. The legacy `MYKO_ADDRESS` name is honored as
@@ -107,6 +111,30 @@ fn main() -> Result<()> {
             let ep = argv.next().unwrap_or_else(|| "prompt-submit".to_string());
             let base = argv.next();
             codex_hook::run_for(codex_hook::Harness::Claude, &ep, base.as_deref());
+            return Ok(());
+        }
+        // Store the code `muster-daemon pair` printed, so this machine reaches
+        // the daemon through its TLS gate. See `link`.
+        Some("pair") => {
+            let code = argv
+                .next()
+                .context("usage: muster-shim pair <pairing code>")?;
+            let pairing = muster_entities::pairing::Pairing::from_code(&code)?;
+            let path = link::save_pairing(&pairing)?;
+            println!(
+                "paired with {} as {} (saved to {}); restart Claude Code sessions to use it",
+                pairing.address,
+                pairing.name,
+                path.display()
+            );
+            return Ok(());
+        }
+        Some("unpair") if argv.next().is_none() => {
+            if link::remove_pairing()? {
+                println!("removed this machine's pairing");
+            } else {
+                println!("this machine isn't paired");
+            }
             return Ok(());
         }
         // One-shot cross-platform setup: wire muster into a Codex install
@@ -182,12 +210,31 @@ async fn serve() -> Result<()> {
     // role-deployed per-host config file. Config-wins makes the file the
     // per-host source of truth; env becomes a deliberate one-off
     // override the operator can apply by deleting the file.
-    let daemon_address = read_address_from_config_file()
-        .or_else(|| std::env::var(ADDRESS_ENV).ok())
-        .or_else(|| std::env::var(ADDRESS_ENV_LEGACY).ok())
-        .unwrap_or_else(|| DEFAULT_DAEMON_ADDRESS.to_string());
-
-    log::info!("[muster-shim] connecting to {daemon_address}");
+    //
+    // A pairing (`muster-shim pair`) wins over all of these: myko's client
+    // dials a loopback tunnel that carries the connection over pinned TLS to
+    // the daemon's gate, with the access token in the URL.
+    let daemon_address = match link::load_pairing() {
+        Some(pairing) => {
+            let port = link::start_tunnel(&pairing)
+                .await
+                .context("starting the TLS tunnel to the paired daemon")?;
+            log::info!(
+                "[muster-shim] paired as {}: connecting to {} over TLS",
+                pairing.name,
+                pairing.address
+            );
+            format!("ws://127.0.0.1:{port}/myko?token={}", pairing.token)
+        }
+        None => {
+            let address = read_address_from_config_file()
+                .or_else(|| std::env::var(ADDRESS_ENV).ok())
+                .or_else(|| std::env::var(ADDRESS_ENV_LEGACY).ok())
+                .unwrap_or_else(|| DEFAULT_DAEMON_ADDRESS.to_string());
+            log::info!("[muster-shim] not paired: connecting to {address} without TLS");
+            address
+        }
+    };
 
     let client = Arc::new(MykoClient::new());
 
@@ -373,6 +420,9 @@ async fn serve() -> Result<()> {
         if let hyphae::Signal::Value(status) = signal {
             match &**status {
                 ConnectionStatus::Connected(addr) => {
+                    // The paired address carries the access token in its
+                    // query; Claude Code keeps MCP stderr on disk.
+                    let addr = addr.split('?').next().unwrap_or_default();
                     // Under Codex the shim owns no Session (the SessionStart
                     // hook registers the authoritative one) — so skip the
                     // re-SET, which would publish the placeholder id.

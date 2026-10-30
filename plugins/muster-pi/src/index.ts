@@ -15,7 +15,7 @@
 //   • deliver → `pi.sendMessage` on inbound push, plus an authoritative
 //               per-turn inbox pull injected through `before_agent_start`.
 //
-// Config: set MUSTER_DAEMON_ADDRESS (default ws://localhost:6255) and
+// Config: set MUSTER_DAEMON_ADDRESS (default ws://localhost:6257) and
 // MUSTER_OPERATOR (optional) in the environment pi runs under.
 
 import { createHash, randomUUID } from "node:crypto";
@@ -29,7 +29,7 @@ import { MusterDaemon } from "./daemon.ts";
 import { resolveIdentity, type Identity } from "./identity.ts";
 import type { NotifyChannelMeta, SessionItem } from "./entities.ts";
 
-const DEFAULT_ADDRESS = "ws://localhost:6255";
+const DEFAULT_ADDRESS = "ws://localhost:6257";
 type MusterToolResult = AgentToolResult<Record<string, unknown>>;
 
 // @myko/core emits an unconditional ws-timing diagnostic via console.info every

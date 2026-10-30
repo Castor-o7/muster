@@ -41,7 +41,7 @@ use std::{
 
 const FRAME_POLL: Duration = Duration::from_millis(150);
 const RECENT_LIMIT: usize = 50;
-const DEFAULT_DAEMON_ADDRESS: &str = "ws://localhost:6255";
+const DEFAULT_DAEMON_ADDRESS: &str = "ws://localhost:6257";
 /// Env var that overrides the daemon WebSocket URL. Same name the shim
 /// uses, so a single `export MUSTER_DAEMON_ADDRESS=...` configures
 /// every muster client. `MYKO_ADDRESS` is honored as a legacy fallback.
@@ -53,7 +53,7 @@ const ADDRESS_ENV_LEGACY: &str = "MYKO_ADDRESS";
 struct Args {
     /// Override the daemon WebSocket URL. Defaults to
     /// MUSTER_DAEMON_ADDRESS env var (then MYKO_ADDRESS for back-compat),
-    /// then ws://localhost:6255.
+    /// then ws://localhost:6257.
     #[arg(long)]
     address: Option<String>,
 

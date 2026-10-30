@@ -109,6 +109,10 @@ fn parse_host_port(addr: &str) -> Option<(String, u16)> {
 /// `daemon-address` file the deploy role writes. `None` if nothing is
 /// configured.
 fn daemon_address() -> Option<String> {
+    // A paired machine talks to the daemon's gate.
+    if let Some(pairing) = crate::link::load_pairing() {
+        return Some(pairing.address);
+    }
     for var in ["MUSTER_DAEMON_ADDRESS", "MYKO_ADDRESS"] {
         if let Ok(v) = std::env::var(var) {
             let v = v.trim();

@@ -42,10 +42,13 @@ Peer messages reach the session two ways:
 - **Hook inbox (default, no flag needed).** The plugin's `hooks/hooks.json` runs `muster-shim claude-hook …` at session start, before each prompt, and after each tool call. Each run pulls this session's unread direct messages from the daemon into the turn as a `<muster_inbox>` block.
 - **Live channel (optional).** `notifications/claude/channel` events that surface in your transcript as `<channel>` blocks the moment a message arrives, even in an idle session. This needs Claude Code launched with `--dangerously-load-development-channels plugin:muster-shim@muster` while channels are in research preview. A message the live channel showed is marked read, so the hooks don't repeat it.
 
-The hook talks to the daemon's plain-HTTP hook listener, port **6256** on the daemon's host. Two things to check when the daemon is on another machine:
+Both the shim and the hooks reach the daemon through its TLS gate (port **6255**), using this machine's pairing. Pair once with the command `muster-daemon pair` prints on the daemon's host:
 
-1. The daemon binds that listener to loopback by default. Start it with `MUSTER_HOOK_BIND=0.0.0.0:6256` (or the host's LAN/mesh address) so other machines can reach it.
-2. Hooks are not launched by the MCP server, so they don't see the `env` block of `.mcp.json`. Put the daemon address in `~/.config/muster/daemon-address` (one line, e.g. `ws://my-daemon-host:6255`), export `MUSTER_DAEMON_ADDRESS` in your shell, or set `MUSTER_BASE_URL=http://my-daemon-host:6256`. Otherwise the hook falls back to localhost.
+```bash
+muster-shim pair muster-pair:v1:…
+```
+
+See "Pair each machine" in the main README. Without a pairing, the shim and the hooks connect unencrypted to the daemon's internal loopback listener (`ws://localhost:6257`, or `~/.config/muster/daemon-address` / `MUSTER_DAEMON_ADDRESS` if set). That only works on the daemon's own host.
 
 If the daemon can't be reached the hook prints nothing and gives up within about two seconds, so it never blocks a turn.
 

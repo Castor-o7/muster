@@ -106,7 +106,16 @@ pub fn run_for(harness: Harness, ep: &str, base_override: Option<&str>) {
         harness.name()
     );
 
-    let Some(resp) = http_post(&base, &path, &body, harness.timeout()) else {
+    // A paired machine reaches the hooks through the daemon's TLS gate,
+    // unless an explicit base URL (argument or `MUSTER_BASE_URL`) says
+    // otherwise.
+    let explicit = base_override.is_some_and(|b| !b.is_empty())
+        || std::env::var("MUSTER_BASE_URL").is_ok_and(|b| !b.is_empty());
+    let response = match crate::link::load_pairing().filter(|_| !explicit) {
+        Some(pairing) => crate::link::https_post(&pairing, &path, &body, harness.timeout()),
+        None => http_post(&base, &path, &body, harness.timeout()),
+    };
+    let Some(resp) = response else {
         return;
     };
     let resp = resp.trim_end_matches(['\n', '\r', ' ']);

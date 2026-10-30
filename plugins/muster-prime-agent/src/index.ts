@@ -16,7 +16,7 @@
 //   • deliver → `pi.sendMessage` on inbound push, plus an authoritative
 //               per-turn inbox pull injected through `before_agent_start`.
 //
-// Config: set MUSTER_DAEMON_ADDRESS (default ws://localhost:6255) and
+// Config: set MUSTER_DAEMON_ADDRESS (default ws://localhost:6257) and
 // MUSTER_OPERATOR (optional) in the environment Prime Agent runs under.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -27,7 +27,7 @@ import { resolveIdentity, type Identity } from "./identity.ts";
 import type { NotifyChannelMeta, SessionItem } from "./entities.ts";
 import { shouldRegisterPrimeAgentSession } from "./runtime.ts";
 
-const DEFAULT_ADDRESS = "ws://localhost:6255";
+const DEFAULT_ADDRESS = "ws://localhost:6257";
 
 // @myko/core emits an unconditional ws-timing diagnostic via console.info every
 // 250ms on any WS traffic. Drop those lines so they don't flood the log.

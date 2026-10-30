@@ -44,16 +44,35 @@ muster-daemon &
 # or under your favorite supervisor (systemd user unit, launchd, tmux pane, ...)
 ```
 
-The daemon listens on two ports, both on loopback by default:
+The daemon has three listeners. Only the gate is meant to be reachable from other machines:
 
-| Port | Variable | Serves |
-|---|---|---|
-| 6255 | `MUSTER_BIND` | WebSocket and MCP for `muster-shim`, the TUI and the web UI |
-| 6256 | `MUSTER_HOOK_BIND` | Plain HTTP for the Claude Code and Codex hooks |
+| Port | Variable | Default | Serves |
+|---|---|---|---|
+| 6255 | `MUSTER_BIND` | `127.0.0.1:6255` | **The gate**: TLS plus a per-machine access token, in front of the two below |
+| 6257 | `MUSTER_INTERNAL_BIND` | `127.0.0.1:6257` | myko's WebSocket/MCP listener (no TLS or auth; keep it on loopback) |
+| 6256 | `MUSTER_HOOK_BIND` | `127.0.0.1:6256` | The plain-HTTP hook listener (no TLS or auth; keep it on loopback) |
 
-To accept sessions from other machines, bind both to a reachable address, e.g. `MUSTER_BIND=0.0.0.0:6255 MUSTER_HOOK_BIND=0.0.0.0:6256`. Neither port has authentication or encryption yet, so only expose them on a network you trust.
+To accept sessions from other machines, set `MUSTER_BIND=0.0.0.0:6255` (or a LAN/mesh address) and pair each machine (below). Tools running on the daemon's own host, like the TUI and the web UI, can still connect to `ws://127.0.0.1:6257` directly.
 
-Set `MYKO_POSTGRES_URL` to keep the roster, rooms and messages across restarts. Without it the daemon runs in memory and starts empty each time.
+The daemon keeps its TLS certificate and the paired machines' token hashes in `MUSTER_STATE_DIR` (default `~/.local/state/muster`). Set `MYKO_POSTGRES_URL` to keep the roster, rooms and messages across restarts. Without it the daemon runs in memory and starts empty each time.
+
+### 2b. Pair each machine
+
+Every machine other than the daemon's own host needs a pairing. (On the daemon's host, an unpaired shim connects to the internal loopback listener on 6257, so it works without one. Pair it too if other people can log in to that machine.) On the daemon's host:
+
+```bash
+muster-daemon pair --name a1 --address 192.168.1.241:6255
+```
+
+It prints a `muster-shim pair muster-pair:v1:…` command. Run that on the machine you're pairing. The code holds the gate's address, the certificate fingerprint to pin, and that machine's access token, so treat it like a password. Then restart that machine's Claude Code sessions.
+
+- `--address` is how the paired machine should reach the gate. It can be left out when `MUSTER_BIND` is a specific address rather than `0.0.0.0`.
+- `muster-daemon pairs` lists paired machines, and `muster-daemon unpair a1` revokes one. Its next connection is refused; nothing needs restarting.
+- `muster-shim unpair` removes a machine's own pairing.
+- Pairing again under the same name replaces that machine's token.
+- If the daemon's state directory is lost, it makes a new certificate, and every machine must pair again: their pinned fingerprint no longer matches.
+
+A paired shim never sends anything unencrypted. myko's client can only trust certificates the operating system trusts, so the shim runs a small loopback tunnel: myko connects to `127.0.0.1`, and the tunnel carries the connection over TLS, with the daemon's certificate pinned, to the gate. The hooks make the same pinned TLS connection themselves. Codex, Pi, opencode and Prime Agent clients don't support pairing yet.
 
 ### 3. Add the plugin in Claude Code
 
@@ -116,7 +135,7 @@ If you wired the MCP server by hand (step 3) instead of installing the plugin, a
 }
 ```
 
-Hooks don't inherit the MCP server's `env` block, so tell them where the daemon is with `~/.config/muster/daemon-address` (one line, e.g. `ws://my-daemon-host:6255`). The shim reads the same file. If the daemon can't be reached, the hook prints nothing and gives up within about two seconds, so it never blocks a turn.
+The hooks find the daemon from this machine's pairing (step 2b), the same way the shim does. If the daemon can't be reached, the hook prints nothing and gives up within about two seconds, so it never blocks a turn.
 
 #### Optional: live push
 

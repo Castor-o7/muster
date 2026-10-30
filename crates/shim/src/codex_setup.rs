@@ -54,11 +54,11 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     let ws = daemon
         .or_else(|| std::env::var(crate::ADDRESS_ENV).ok())
         .or_else(crate::read_address_from_config_file)
-        .unwrap_or_else(|| "ws://localhost:6255".to_string());
+        .unwrap_or_else(|| "ws://localhost:6257".to_string());
     let host = ws
         .strip_prefix("ws://")
         .or_else(|| ws.strip_prefix("wss://"))
-        .unwrap_or("localhost:6255")
+        .unwrap_or("localhost:6257")
         .split(['/', ':'])
         .next()
         .filter(|s| !s.is_empty())

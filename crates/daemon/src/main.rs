@@ -16,27 +16,123 @@ use std::{
     sync::Arc,
 };
 
-/// Default MCP/WS bind. Loopback by default: muster carries no auth and
-/// its `asSession` self-identify is trust-on-assert, so it must not be
-/// reachable off-box unless deliberately exposed. Production binds the
-/// NetBird mesh hostname via `MUSTER_BIND` — making exposure an explicit
-/// act, not a default. Port 6255 is distinct from myko's default 5155.
+/// Default public bind: the TLS + token gate (see `gate`), the only listener
+/// meant to be reachable from other machines. Loopback by default; set
+/// `MUSTER_BIND=0.0.0.0:6255` (or a LAN/mesh address) to accept other hosts.
+/// Port 6255 is distinct from myko's default 5155 and Marshal's 6155.
 const DEFAULT_BIND: &str = "127.0.0.1:6255";
 
-/// Default plain-HTTP hook listener bind (the `/hook/*` endpoints). Same
-/// loopback-by-default posture; override with `MUSTER_HOOK_BIND`. A
-/// second port because it speaks plain HTTP, not MCP — see `http_listener`.
+/// myko's own WebSocket/MCP listener. No TLS or auth, so keep it on
+/// loopback (`MUSTER_INTERNAL_BIND`); the gate forwards to it. Local tools
+/// on the daemon's host (the TUI, the web UI) may connect here directly.
+const DEFAULT_INTERNAL_BIND: &str = "127.0.0.1:6257";
+
+/// The plain-HTTP hook listener (the `/hook/*` endpoints), also behind the
+/// gate. Keep it on loopback (`MUSTER_HOOK_BIND`) — see `http_listener`.
 const DEFAULT_HOOK_BIND: &str = "127.0.0.1:6256";
 
+const USAGE: &str = "\
+usage:
+  muster-daemon                       run the daemon
+  muster-daemon pair --name NAME [--address HOST:PORT]
+                                      pair a machine; prints its pairing code
+  muster-daemon unpair NAME           revoke a machine's access
+  muster-daemon pairs                 list paired machines";
+
+fn main() -> Result<()> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match args.first().map(String::as_str) {
+        None => run_daemon(),
+        Some("pair") => pair(&args[1..]),
+        Some("unpair") => match args.get(1) {
+            Some(name) if args.len() == 2 => {
+                let dir = daemon::credentials::state_dir()?;
+                if daemon::credentials::remove_token(&dir, name)? {
+                    println!("unpaired {name}; its token stops working on its next connection");
+                } else {
+                    println!("no paired machine named {name}");
+                }
+                Ok(())
+            }
+            _ => anyhow::bail!("{USAGE}"),
+        },
+        Some("pairs") if args.len() == 1 => {
+            let dir = daemon::credentials::state_dir()?;
+            let names = daemon::credentials::token_names(&dir)?;
+            if names.is_empty() {
+                println!("no paired machines");
+            }
+            for name in names {
+                println!("{name}");
+            }
+            Ok(())
+        }
+        Some("-h" | "--help") => {
+            println!("{USAGE}");
+            Ok(())
+        }
+        Some(other) => anyhow::bail!("unknown argument: {other}\n{USAGE}"),
+    }
+}
+
+/// `pair --name NAME [--address HOST:PORT]`: mint a token and print the code.
+fn pair(args: &[String]) -> Result<()> {
+    let (mut name, mut address) = (None, None);
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "--name" => name = it.next().cloned(),
+            "--address" => address = it.next().cloned(),
+            _ => anyhow::bail!("unknown argument: {arg}\n{USAGE}"),
+        }
+    }
+    let name = name.with_context(|| format!("--name is required\n{USAGE}"))?;
+    let address = match address {
+        Some(a) => a,
+        None => pairing_address_from_bind()?,
+    };
+
+    let dir = daemon::credentials::state_dir()?;
+    let identity = daemon::credentials::load_or_create_identity(&dir)?;
+    let token = daemon::credentials::add_token(&dir, &name)?;
+    let code = muster_entities::pairing::Pairing {
+        address,
+        fingerprint: identity.fingerprint(),
+        token,
+        name: name.clone(),
+    }
+    .to_code();
+    eprintln!("Paired {name}. On that machine, run:\n");
+    println!("muster-shim pair {code}");
+    eprintln!("\nThe code contains the access token; treat it like a password.");
+    Ok(())
+}
+
+/// The address to put in a pairing code when `--address` isn't given: the
+/// bind spec itself, unless it's a wildcard that other machines can't dial.
+fn pairing_address_from_bind() -> Result<String> {
+    let spec = std::env::var("MUSTER_BIND").unwrap_or_else(|_| DEFAULT_BIND.to_string());
+    let wildcard = spec.starts_with("0.0.0.0:") || spec.starts_with("[::]:");
+    if wildcard {
+        anyhow::bail!(
+            "MUSTER_BIND is {spec}, which other machines can't dial; \
+             pass --address with this host's LAN address, e.g. --address 192.168.1.241:6255"
+        );
+    }
+    Ok(spec)
+}
+
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn run_daemon() -> Result<()> {
     init_logging();
 
     // Resolve via the system resolver (not bare `parse`) so a mesh DNS
     // name like `muster-01.lucid.host:6255` works and survives the peer's
     // mesh IP being reassigned (next start re-resolves).
-    let bind_addr = resolve_bind("MUSTER_BIND", DEFAULT_BIND)?;
+    let gate_bind = resolve_bind("MUSTER_BIND", DEFAULT_BIND)?;
+    let bind_addr = resolve_bind("MUSTER_INTERNAL_BIND", DEFAULT_INTERNAL_BIND)?;
     let hook_bind = resolve_bind("MUSTER_HOOK_BIND", DEFAULT_HOOK_BIND)?;
+    let state_dir = daemon::credentials::state_dir()?;
 
     // Force-link entities + sagas so their `inventory` registrations aren't
     // dead-code-eliminated.
@@ -108,8 +204,24 @@ async fn main() -> Result<()> {
         });
     }
 
-    log::info!("muster-daemon listening on ws://{bind_addr}, hooks on http://{hook_bind}");
-    server.run().await.map_err(|e| anyhow::anyhow!(e))?;
+    log::info!(
+        "muster-daemon: gate on {gate_bind} (TLS), myko on ws://{bind_addr}, hooks on http://{hook_bind}"
+    );
+    let gate = daemon::gate::run(daemon::gate::GateConfig {
+        bind: gate_bind,
+        myko: bind_addr,
+        hooks: hook_bind,
+        state_dir,
+    });
+    // The gate is the daemon's only public surface: if it can't bind or
+    // stops, exit rather than keep running unreachable.
+    tokio::select! {
+        r = server.run() => r.map_err(|e| anyhow::anyhow!(e))?,
+        r = gate => {
+            r.with_context(|| format!("gate on {gate_bind}"))?;
+            anyhow::bail!("gate on {gate_bind} stopped");
+        }
+    }
     Ok(())
 }
 

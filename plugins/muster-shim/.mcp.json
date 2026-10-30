@@ -3,7 +3,7 @@
     "muster": {
       "command": "muster-shim",
       "env": {
-        "MUSTER_DAEMON_ADDRESS": "${MUSTER_DAEMON_ADDRESS:-ws://localhost:6255}"
+        "MUSTER_DAEMON_ADDRESS": "${MUSTER_DAEMON_ADDRESS:-ws://localhost:6257}"
       }
     }
   }

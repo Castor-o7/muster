@@ -16,7 +16,7 @@
 //               `experimental.chat.system.transform` (the documented context
 //               injection point — mirrors Claude's UserPromptSubmit inbox).
 //
-// Config: set MUSTER_DAEMON_ADDRESS (default ws://localhost:6255) and
+// Config: set MUSTER_DAEMON_ADDRESS (default ws://localhost:6257) and
 // MUSTER_OPERATOR (optional) in the environment opencode runs under.
 
 import { tool, type Hooks, type Plugin } from "@opencode-ai/plugin";
@@ -25,7 +25,7 @@ import type { Event } from "@opencode-ai/sdk";
 import { MusterDaemon } from "./daemon.js";
 import { resolveIdentity } from "./identity.js";
 
-const DEFAULT_ADDRESS = "ws://localhost:6255";
+const DEFAULT_ADDRESS = "ws://localhost:6257";
 
 // @myko/core emits an UNCONDITIONAL ws-timing diagnostic via console.info every
 // 250ms on any WS traffic. Under the Rust shim that's stderr (invisible); in

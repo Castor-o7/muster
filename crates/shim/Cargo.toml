@@ -35,6 +35,8 @@ gethostname = "1"
 notify-debouncer-mini = { workspace = true }
 futures-util = { workspace = true }
 tokio-tungstenite = { workspace = true }
+rustls = { workspace = true }
+tokio-rustls = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

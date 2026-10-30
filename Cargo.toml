@@ -20,6 +20,11 @@ notify-debouncer-mini = "0.7"
 futures-util = "0.3"
 tokio-tungstenite = "0.29"
 
+# TLS for the daemon gate and the shim tunnel. ring only, so no C toolchain
+# (cmake/nasm) is needed for aws-lc.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+
 # Myko stack — pulled from crates.io. Stock (no fork patch): ships the
 # HTTP MCP router (POST /myko/mcp request/response + SSE) and the
 # `mcp::filter` tool-visibility allowlist the pull model relies on.
