@@ -116,12 +116,17 @@ fn main() -> Result<()> {
         // Live inbox without the channels flag: Claude runs `muster-shim watch
         // <session_id>` under its Monitor tool, and each message the daemon
         // hands back is printed as a Monitor event that wakes the session.
+        // `--once` exits after one delivery, for a background Bash command.
         Some("watch") => {
-            let sid = argv
+            let mut args: Vec<String> = argv.by_ref().collect();
+            let once = args.iter().any(|a| a == "--once");
+            args.retain(|a| a != "--once");
+            let mut args = args.into_iter();
+            let sid = args
                 .next()
-                .context("usage: muster-shim watch <session_id> [base-url]")?;
-            let base = argv.next();
-            codex_hook::watch(&sid, base.as_deref());
+                .context("usage: muster-shim watch <session_id> [base-url] [--once]")?;
+            let base = args.next();
+            codex_hook::watch(&sid, base.as_deref(), once);
             return Ok(());
         }
         // Store the code `muster-daemon pair` printed, so this machine reaches
