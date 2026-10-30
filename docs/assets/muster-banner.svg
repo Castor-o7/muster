@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-label="Muster: live messaging for Claude sessions across machines, no dangerous flags">
+  <title>Muster</title>
+  <rect width="1280" height="640" fill="#0B0D11"/>
+  <line x1="150" y1="190" x2="640" y2="395" stroke="#00C5C6" stroke-opacity=".35" stroke-width="2.5" stroke-dasharray="3 10" stroke-linecap="round"/><line x1="150" y1="450" x2="640" y2="395" stroke="#00C5C6" stroke-opacity=".35" stroke-width="2.5" stroke-dasharray="3 10" stroke-linecap="round"/><line x1="1130" y1="190" x2="640" y2="395" stroke="#00C5C6" stroke-opacity=".35" stroke-width="2.5" stroke-dasharray="3 10" stroke-linecap="round"/><line x1="1130" y1="450" x2="640" y2="395" stroke="#00C5C6" stroke-opacity=".35" stroke-width="2.5" stroke-dasharray="3 10" stroke-linecap="round"/>
+  <circle cx="150" cy="190" r="11" fill="#0B0D11" stroke="#00C5C6" stroke-width="3"/><circle cx="150" cy="190" r="4" fill="#00C5C6"/><circle cx="150" cy="450" r="11" fill="#0B0D11" stroke="#00C5C6" stroke-width="3"/><circle cx="150" cy="450" r="4" fill="#00C5C6"/><circle cx="1130" cy="190" r="11" fill="#0B0D11" stroke="#00C5C6" stroke-width="3"/><circle cx="1130" cy="190" r="4" fill="#00C5C6"/><circle cx="1130" cy="450" r="11" fill="#0B0D11" stroke="#00C5C6" stroke-width="3"/><circle cx="1130" cy="450" r="4" fill="#00C5C6"/>
+  <g transform="translate(556 96) scale(5.25)">
+    <g fill="#0B0D11" stroke="#00C5C6" stroke-width="1.6" stroke-linejoin="round">
+      <path d="M8 6h10a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2h-6l-4 3v-3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2Z"/>
+      <path d="M16 16h8a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2v3l-4-3h-4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2Z"/>
+    </g>
+    <path d="M10 10h2v3h-2zm5 0h2v3h-2zm2 9h2v3h-2zm5 0h2v3h-2z" fill="#00C5C6"/>
+  </g>
+  <rect x="330" y="282" width="620" height="210" fill="#0B0D11" rx="20"/>
+  <text x="640" y="376" text-anchor="middle" fill="#F2F5F7" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="104" font-weight="700" letter-spacing="-2">muster</text>
+  <text x="640" y="430" text-anchor="middle" fill="#00C5C6" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="29" font-weight="500">Live messaging for Claude sessions</text>
+  <text x="640" y="468" text-anchor="middle" fill="#A7B0BA" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="25">across machines, with no dangerous flags</text>
+</svg>

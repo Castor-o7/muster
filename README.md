@@ -1,17 +1,41 @@
-# muster
+<p align="center">
+  <img src="docs/assets/muster-banner.svg" alt="Muster: live messaging for Claude sessions, across machines, with no dangerous flags" width="720">
+</p>
 
-A coordination service that lets Claude Code, Codex, Pi, Prime Agent, and
-opencode sessions—on one machine or spread across a network—see each other and
-pass messages. After install, the `roster` resource shows every live session,
-`send_message` reaches them, and harness-specific delivery surfaces inbound
-peer messages.
+Muster lets Claude Code sessions find each other and talk, on one machine or across
+your network. A message wakes an idle session by itself, even one nobody has typed to
+yet, and it does this without `--dangerously-load-development-channels`.
+
+It's built for teams of agents working through a roadmap together: a session can ask
+another for help, hand off work, or report that a story is ready for review, while you
+get on with something else.
+
+- **Live, with no flag.** An ordinary Claude Code hook waits for mail and wakes the
+  session when a message arrives. It uses no model turns while waiting.
+- **Across machines.** One daemon serves every paired machine over TLS, with its
+  certificate pinned and a revocable token for each machine.
+- **Durable.** With Postgres, messages and the roster survive a daemon restart. Messages
+  to a session that has ended are eventually deleted with it.
+- **Built on [myko](https://crates.io/crates/myko), in Rust.** New code is Rust. Codex is
+  supported through the same shim, and Pi, opencode and Prime Agent have plugins inherited
+  from Marshal that aren't being actively developed.
+
+> [!IMPORTANT]
+> **Muster is young, and you should only pair machines you trust.** It's designed for
+> one operator's own machines on a private network, or over Tailscale or WireGuard, not
+> the open internet. Session ownership is still being finished (see
+> [docs/session-binding.md](docs/session-binding.md)). The wake hook also relies on
+> `asyncRewake` working before a session's first prompt, which Claude Code doesn't document,
+> so check it after upgrades.
+
+See the [roadmap](docs/roadmap.md) for where this is heading and
+[the board](docs/board.md) for how the teams work together.
 
 Muster is a fork of [Marshal](https://github.com/ignition-is-go/marshal) by
-ignition-is-go, used under its MIT OR Apache-2.0 licence (see `LICENSE-MIT`
-and `LICENSE-APACHE`). It runs side by side with Marshal: its own binaries
-(`muster-shim`, `muster-daemon`), ports 6255/6256, `MUSTER_*` variables and
-`~/.config/muster`. Issue and PR numbers in older comments and docs (#139 and
-so on) refer to the Marshal repository.
+ignition-is-go, used under its MIT OR Apache-2.0 licence, and it can run side by side with
+Marshal: it has its own binaries (`muster-shim`, `muster-daemon`), ports (6255 to 6257),
+`MUSTER_*` variables and `~/.config/muster`. Issue and PR numbers in older comments and
+docs (#139 and so on) refer to the Marshal repository.
 
 ## Install
 
@@ -145,21 +169,12 @@ If you wired the MCP server by hand (step 3) instead of installing the plugin, a
 
 The hooks find the daemon from this machine's pairing (step 2b), the same way the shim does. If the daemon can't be reached, the hook prints nothing and gives up within about two seconds, so it never blocks a turn.
 
-#### Optional: live push
+#### The channels flag
 
-You don't need this: the hooks above already wake idle sessions. Muster can also push through Claude Code's experimental `notifications/claude/channel` capability. While that capability is in research preview, Claude Code drops channel notifications from servers that aren't on its allowlist unless you opt in at launch:
-
-```bash
-# If you installed via the plugin (recommended)
-claude --dangerously-load-development-channels plugin:muster-shim@muster
-
-# If you wired the MCP server directly via .mcp.json
-claude --dangerously-load-development-channels server:muster
-```
-
-Both forms key on the same name you set: `plugin:<plugin>@<marketplace>` for plugin installs, `server:<mcpServers-key>` for direct wiring. Set whichever fits as a shell alias to make it permanent (e.g. `alias claude='claude --dangerously-load-development-channels plugin:muster-shim@muster'`).
-
-With the flag, a message also appears the moment it's sent. A message shown by the live push is marked read, so the hooks don't repeat it. Without the flag, the shim detects that live push can't render and leaves messages for the hooks.
+You don't need `--dangerously-load-development-channels`, and we don't recommend it: the
+hooks above already wake idle sessions. The shim still supports Claude Code's experimental
+`notifications/claude/channel` push if you launch with that flag, and leaves messages for
+the hooks when you don't.
 
 ### Pi: native extension
 
@@ -415,16 +430,18 @@ a burst can join the active turn.
 ## Architecture
 
 ```
-Claude Code ── muster-shim (stdio MCP) ──────┐
-Codex ──────── muster-shim hooks/bridge ─────┤
-opencode ───── muster-opencode plugin ───────┼── ws://localhost:6255
-Pi ─────────── muster-pi extension ──────────┤          │
-Prime Agent ── muster-prime-agent extension ─┘          └── muster-daemon
-                                                            (roster + event log)
+Claude Code ── muster-shim (MCP + hooks) ──┐        paired machines:
+Codex ──────── muster-shim hooks/bridge ───┤        TLS gate on :6255
+opencode ───── muster-opencode plugin ─────┼─────►  or, on the daemon's own host:
+Pi ─────────── muster-pi extension ────────┤        myko :6257 and hooks :6256
+Prime Agent ── muster-prime-agent ─────────┘                 │
+                                                       muster-daemon
+                                                  (roster + messages, in memory
+                                                   or in Postgres)
 ```
 
-- **`muster-daemon`** owns the live roster and the event log under `~/.local/state/muster/events.jsonl`. One daemon serves every session that points its shim at it (local or remote). Run it under your favorite supervisor (or just `muster-daemon &` in a terminal).
-- **`muster-shim`** is the per-session stdio MCP server Claude Code spawns. It announces the session to the daemon on connect, watches for inbound messages, and forwards them onto stdout as channel notifications.
+- **`muster-daemon`** owns the roster and messages. One daemon serves every session that points at it, local or remote. It keeps them in Postgres when `MYKO_POSTGRES_URL` is set, and otherwise in memory. Its gate is the only listener meant for other machines: it checks each machine's token and filters what that machine can send.
+- **`muster-shim`** is the per-session stdio MCP server Claude Code spawns, and also the command its hooks run. It announces the session to the daemon, and `muster-shim claude-hook wait` wakes an idle session when mail arrives.
 - **`muster-pi`** is the in-process Pi extension that registers sessions, exposes native tools, and injects direct messages as steering input.
 - **`muster-prime-agent`** is the in-process Prime Agent extension that registers conversations, exposes tools, and injects live direct messages.
 - **`muster-opencode`** provides the equivalent in-process opencode integration.
@@ -432,21 +449,13 @@ Prime Agent ── muster-prime-agent extension ─┘          └── muster
 
 ## Configuring the daemon address
 
-Muster clients default to `ws://localhost:6255`. To point one elsewhere, set
-`MUSTER_DAEMON_ADDRESS` in the shell that launches the harness. For Claude
-Code, you can instead pin it in a per-project `.mcp.json`:
+A paired machine finds the daemon from its pairing (step 2b), so most setups need nothing
+here. An unpaired shim on the daemon's own host defaults to `ws://localhost:6257`. To point
+an unpaired client elsewhere, set `MUSTER_DAEMON_ADDRESS` in the shell that launches the
+harness.
 
-```json
-{
-  "mcpServers": {
-    "muster": {
-      "env": { "MUSTER_DAEMON_ADDRESS": "ws://10.0.0.5:6255" }
-    }
-  }
-}
-```
-
-The daemon's bind address is set with `MUSTER_BIND` (default `0.0.0.0:6255` — set `MUSTER_BIND=127.0.0.1:6255` to restrict to localhost).
+The gate's bind address is set with `MUSTER_BIND`. It defaults to `127.0.0.1:6255`, so set
+it to a LAN or mesh address, or `0.0.0.0:6255`, to accept other machines.
 
 ## Workspace layout
 
