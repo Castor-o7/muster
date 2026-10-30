@@ -55,6 +55,37 @@ check "MCP shim connects through the TLS tunnel" 'grep -q "connected to ws://127
 check "token never appears in the shim's log" '! grep -q "token=" $WORK/shim.log'
 check "token never appears in the daemon's log" '! grep -qF "$TOKEN" $WORK/daemon.log'
 
+check "the shim's real traffic isn't refused" '! grep -q "refused e2e" $WORK/daemon.log'
+
+# Raw frames from a second machine, over TLS, trying to bypass the commands.
+ATTACK=$WORK/attack.py
+cat >$ATTACK <<'PY'
+import base64, json, os, socket, ssl, sys, time
+token, frames = sys.argv[1], sys.argv[2:]
+ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
+s = ctx.wrap_socket(socket.create_connection(("127.0.0.1", 16255), 5))
+s.sendall(("GET /myko?token=%s HTTP/1.1\r\nHost: h\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n"
+           "Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n" % token).encode())
+assert s.recv(4096).startswith(b"HTTP/1.1 101")
+for f in frames:
+    data = f.encode(); mask = os.urandom(4)
+    head = bytes([0x81, 0x80 | 126]) + len(data).to_bytes(2, "big") + mask
+    s.sendall(head + bytes(b ^ mask[i % 4] for i, b in enumerate(data)))
+time.sleep(1)
+PY
+T $BIN/muster-daemon pair --name attacker >$WORK/attacker.code 2>/dev/null
+ATTACKER=$(python3 -I -c 'import sys,json,base64; s=open(sys.argv[1]).read().split()[2].split(":",2)[2]; print(json.loads(base64.urlsafe_b64decode(s+"="*(-len(s)%4)))["token"])' $WORK/attacker.code)
+EVENT='{"event":"ws:m:event","data":{"item":{"id":"m1"},"changeType":"DEL","itemType":"Message","createdAt":"t"}}'
+SEND='{"event":"ws:m:command","data":{"command":{"asSession":"e2e-ws-session","toSessionId":"x","body":"forged"},"commandId":"SendMessage"}}'
+QUERY='{"event":"ws:m:query","data":{"query":{"tx":"t"},"queryId":"GetAllMessages","queryItemType":"Message"}}'
+python3 -I $ATTACK "$ATTACKER" "$EVENT" "$SEND" "$QUERY"
+check "a raw write to another entity is refused" 'grep -q "refused attacker: event on Message" $WORK/daemon.log'
+check "sending as another machine's session is refused" 'grep -q "refused attacker: SendMessage for session e2e-ws-session" $WORK/daemon.log'
+check "reading all messages is refused" 'grep -q "refused attacker: query GetAllMessages" $WORK/daemon.log'
+curl -s -m 3 -o /dev/null -X POST http://127.0.0.1:16256/hook/session-start -d '{"session_id":"e2e-local-hook","cwd":"/tmp/demo"}'
+check "a paired machine can't take a session on the daemon's own host" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_code} -H "Authorization: Bearer $ATTACKER" -X POST "https://127.0.0.1:16255/hook/wait?timeout=1" -d "{\"session_id\":\"e2e-local-hook\",\"cwd\":\"/tmp/demo\"}") == 403 ]]'
+check "myko's other routes are closed to paired machines" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_code} -H "Authorization: Bearer $ATTACKER" -X POST https://127.0.0.1:16255/myko/mcp -d "{}") == 403 ]]'
+
 # A pairing whose fingerprint doesn't match: the hook must get nothing.
 BAD=$(python3 -I -c 'import sys,json,base64; s=sys.argv[1].split(":",2)[2]; d=json.loads(base64.urlsafe_b64decode(s+"="*(-len(s)%4))); d["fingerprint"]="0"*64; print("muster-pair:v1:"+base64.urlsafe_b64encode(json.dumps(d).encode()).decode().rstrip("="))' "$CODE")
 T $BIN/muster-shim pair "$BAD" >/dev/null

@@ -2856,7 +2856,9 @@ dependencies = [
  "anyhow",
  "base64",
  "chrono",
+ "ciborium",
  "env_logger",
+ "futures-util",
  "getrandom 0.3.4",
  "hyphae",
  "log",
@@ -2870,6 +2872,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-rustls",
+ "tokio-tungstenite",
  "uuid",
 ]
 

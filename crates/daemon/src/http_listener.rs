@@ -163,16 +163,22 @@ async fn handle_conn(
 }
 
 /// Whether the machine the gate named in `query` may act for the session in
-/// `body`. Without a machine the request came from the daemon's own host, and
-/// without a session id the handlers have nothing to act on.
+/// `body`. Without a session id the handlers have nothing to act on. Without a
+/// machine the request came from the daemon's own host, which is always allowed
+/// and claims the session, so a paired machine can't take it by getting there
+/// first.
 fn machine_may_act(state_dir: &Path, query: &str, body: &[u8]) -> bool {
-    let Some(machine) = query.split('&').find_map(|kv| kv.strip_prefix("machine=")) else {
-        return true;
-    };
     let session = serde_json::from_slice::<serde_json::Value>(body)
         .ok()
         .and_then(|v| v.get("session_id")?.as_str().map(str::to_string));
     let Some(session) = session else {
+        return true;
+    };
+    let Some(machine) = query.split('&').find_map(|kv| kv.strip_prefix("machine=")) else {
+        if let Err(e) = credentials::claim_session(state_dir, credentials::LOCAL_MACHINE, &session)
+        {
+            log::warn!("[hook] can't record local session {session}: {e}");
+        }
         return true;
     };
     match credentials::claim_session(state_dir, machine, &session) {

@@ -47,9 +47,24 @@ HTTP-MCP route too, unless that route is simply closed to paired machines.
 
 ## Status
 
-Hook binding (steps 1 and 2) is built: the gate names the verified machine, and hook
-handlers refuse a session bound to another machine. The WebSocket filter (step 3) isn't
-built, so holes 2 and 3 are still open, and MUS-5 isn't done.
+Built: hook binding, and a gate filter that reads each WebSocket frame from a paired
+machine (`crates/daemon/src/gate_filter.rs`). Unknown commands, queries, events and
+unparseable frames are refused, and myko's other routes are closed to paired machines.
+The allowlist comes from what the shim sends, and the gate script checks that a real
+shim's traffic isn't refused.
+
+Still open:
+
+- **First use wins.** A session nobody has used through a hook or the gate can still be
+  claimed by whichever machine names it first. Roster ids are visible to paired machines,
+  and this matters most for sessions already running during a rollout.
+- **Reads are only partly limited.** The roster, rooms and memberships stay readable by
+  every paired machine. Message bodies no longer are, except through a session's own
+  `ReadMessages`.
+- **`operator` and `host`** are still client-supplied (MUS-6), including on a machine's own
+  Session events.
+- **Codex over the gate** would need `GetAllMessages` and `GetAllMessageReads` to be
+  handled differently before MUS-18.
 
 ## Alternatives
 
@@ -61,15 +76,12 @@ built, so holes 2 and 3 are still open, and MUS-5 isn't done.
 
 ## Open questions
 
-- Which frame encodings does the shim's myko client use? The filter must parse them all,
-  and refuse any it can't parse.
-- Which events does the shim really send? The allowlist should come from observing them.
-- Does a filter stop queries leaking other sessions' message bodies? Filtering writes
-  doesn't protect reads, so queries may need limits too.
 - Who owns a session that moves between machines? Probably nobody: it stays refused until
   the operator releases it.
 
 ## Done when
 
 A test shows that one paired machine can't read, clear or send as another machine's
-session, including by raw event. Until then, treat every paired machine as fully trusted.
+session, including by raw event. The gate script now covers this, but it isn't in effect
+until the daemon is rebuilt and restarted. Until then, treat every paired machine as fully
+trusted.

@@ -13,7 +13,7 @@
 //!    WebSocket upgrades and plain request/response work the same way.
 
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -22,7 +22,15 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::TlsAcceptor;
 
+use futures_util::{SinkExt as _, StreamExt as _};
+use tokio_tungstenite::{WebSocketStream, tungstenite::protocol::Role};
+
 use crate::credentials;
+use crate::gate_filter::{self, Refused};
+
+/// The WebSocket route the shim uses. It's the only myko route open to paired
+/// machines.
+const MYKO_WS_PATH: &str = "/myko";
 
 /// Cap on the request head (request line + headers).
 const MAX_HEAD: usize = 16 * 1024;
@@ -120,25 +128,83 @@ async fn handle(
         return respond(&mut tls, "401 Unauthorized").await;
     };
 
-    let upstream_addr = if request.path().starts_with("/hook/") {
-        config.hooks
-    } else {
-        config.myko
-    };
+    let is_hook = request.path().starts_with("/hook/");
+    if !is_hook && !(request.path() == MYKO_WS_PATH && request.is_websocket_upgrade()) {
+        // myko's other routes (MCP, HTTP) would bypass the frame filter.
+        log::warn!("[gate] refused {name}: {}", request.path());
+        return respond(&mut tls, "403 Forbidden").await;
+    }
+    let upstream_addr = if is_hook { config.hooks } else { config.myko };
     log::debug!(
         "[gate] {peer} ({name}) -> {} {}",
         upstream_addr,
         request.path()
     );
     let mut upstream = TcpStream::connect(upstream_addr).await?;
-    let head = if request.path().starts_with("/hook/") {
-        request.forwarded_head_as(&name)
-    } else {
-        request.forwarded_head()
+    if is_hook {
+        upstream
+            .write_all(request.forwarded_head_as(&name).as_bytes())
+            .await?;
+        upstream.write_all(&rest).await?;
+        tokio::io::copy_bidirectional(&mut tls, &mut upstream).await?;
+        return Ok(());
+    }
+    upstream
+        .write_all(request.forwarded_head().as_bytes())
+        .await?;
+    filter_websocket(tls, upstream, &name, &config.state_dir).await
+}
+
+/// Finish the WebSocket handshake with myko, then relay frames: everything from
+/// myko, but from the client only what `gate_filter` allows.
+async fn filter_websocket<S>(
+    mut client: S,
+    mut upstream: TcpStream,
+    machine: &str,
+    state_dir: &Path,
+) -> std::io::Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let (head, after_head) = read_head(&mut upstream).await?;
+    // `read_head` leaves off the blank line that ends the head.
+    client
+        .write_all(format!("{head}\r\n\r\n").as_bytes())
+        .await?;
+    client.flush().await?;
+    if !head.starts_with("HTTP/1.1 101") {
+        return Ok(());
+    }
+
+    let client_ws = WebSocketStream::from_raw_socket(client, Role::Server, None).await;
+    let upstream_ws =
+        WebSocketStream::from_partially_read(upstream, after_head, Role::Client, None).await;
+    let (mut client_tx, mut client_rx) = client_ws.split();
+    let (mut upstream_tx, mut upstream_rx) = upstream_ws.split();
+
+    let from_client = async {
+        while let Some(Ok(frame)) = client_rx.next().await {
+            match gate_filter::check_frame(state_dir, machine, &frame) {
+                Ok(()) => {
+                    if upstream_tx.send(frame).await.is_err() {
+                        break;
+                    }
+                }
+                Err(Refused(why)) => log::warn!("[gate] refused {machine}: {why}"),
+            }
+        }
     };
-    upstream.write_all(head.as_bytes()).await?;
-    upstream.write_all(&rest).await?;
-    tokio::io::copy_bidirectional(&mut tls, &mut upstream).await?;
+    let from_myko = async {
+        while let Some(Ok(frame)) = upstream_rx.next().await {
+            if client_tx.send(frame).await.is_err() {
+                break;
+            }
+        }
+    };
+    tokio::select! {
+        () = from_client => {}
+        () = from_myko => {}
+    }
     Ok(())
 }
 
@@ -233,6 +299,15 @@ impl Request {
             version: version.to_string(),
             headers,
             token,
+        })
+    }
+
+    fn is_websocket_upgrade(&self) -> bool {
+        self.headers.iter().any(|h| {
+            h.split_once(':').is_some_and(|(k, v)| {
+                k.trim().eq_ignore_ascii_case("upgrade")
+                    && v.trim().eq_ignore_ascii_case("websocket")
+            })
         })
     }
 
