@@ -25,14 +25,13 @@ evidence from a real run by the person or team named.
 
 - [ ] **MUS-1: Fix watcher expiry.** Monitor stops at 30 minutes; the expiry
   notice wakes an idle session, so re-arming works but costs about 48 wake-ups
-  per session per day. `watch --once` under background Bash avoids that. Update
-  every machine's shim before its daemon: an older shim takes `--once` for a
-  server address and retries silently. Done when: a session idle overnight still wakes on a
+  per session per day. The `asyncRewake` hook `muster-shim claude-hook wait` avoids
+  that: it costs no model turns while idle, and Stop restarts it after every turn. Done when: a session idle overnight still wakes on a
   message, and an idle session uses at most 2 model turns per hour, with 0 as the
   target. Needs a run: the Muster team, overnight.
-- [ ] **MUS-2: Close the first-prompt gap.** Done when: a restarted session wakes
-  on a message before anyone has typed to it. Needs a run: the Muster team, on both
-  machines.
+- [ ] **MUS-2: Close the first-prompt gap.** The same hook runs on SessionStart.
+  Done when: a restarted session wakes on a message before anyone has typed to it.
+  Needs a run: the Muster team, on both machines.
 - [ ] **MUS-3: Stable identity across restarts.** Done when: a session keeps its
   nickname through a restart, and the watchman can be reached by role.
 - [ ] **MUS-4: Show dead watchers.** Done when: the roster distinguishes a
