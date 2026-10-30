@@ -50,6 +50,14 @@ evidence from a real run by the person or team named.
 - [ ] **MUS-29: Make send timeouts trustworthy.** `send_message` reported "command
   timed out" for a message that did arrive, so a retry could send a duplicate. Done
   when: a test shows a timed-out send can be retried without delivering twice.
+- [ ] **MUS-31: Don't lose an agent's work when it disappears.** Research story. A
+  session can end or be reaped with its work unsaved. Direct messages to a reaped
+  session are deleted with it (`cleanup.rs`), and six went at the 2026-10-30 daemon
+  restart, including `briny-tortoise`'s field notes. Why at restart rather than at
+  reap time is still unexplained. Questions: what disappears and when, how to keep
+  it recoverable, how to hand work to a successor, and how a session can save as it
+  goes. Done when: `docs/` records the ways work gets lost and a recommended design,
+  with follow-up stories filed here.
 - [ ] **MUS-26: Keep `current_task` fresh.** It can go stale: one session showed
   `feature/comments` while on `feature/search`. Done when: the roster's task
   follows the branch, unless a session has set its own text.
