@@ -18,6 +18,9 @@ evidence from a real run by the person or team named.
   exposed to the open internet.
 - **Platforms.** macOS and Linux are fully supported. Windows is best effort,
   for the shim only.
+- **Language.** New Muster code is Rust. No new TypeScript. The Pi, opencode and
+  Prime Agent plugins are TypeScript inherited from Marshal, because they run inside
+  those TypeScript hosts; they get no new features for now.
 - **Ordering.** Anything that lets a Claude act without the operator waits until
   Phase 2 is done.
 
@@ -44,6 +47,9 @@ evidence from a real run by the person or team named.
   a line at about 500 characters and an event at about 3,000. Done when: a message
   up to the daemon's 2,000-character limit reaches an idle session complete. Needs
   a run: the Muster team, with a peer sending.
+- [ ] **MUS-29: Make send timeouts trustworthy.** `send_message` reported "command
+  timed out" for a message that did arrive, so a retry could send a duplicate. Done
+  when: a test shows a timed-out send can be retried without delivering twice.
 - [ ] **MUS-26: Keep `current_task` fresh.** It can go stale: one session showed
   `feature/comments` while on `feature/search`. Done when: the roster's task
   follows the branch, unless a session has set its own text.
@@ -93,8 +99,9 @@ evidence from a real run by the person or team named.
 - [ ] **MUS-17: Keep messages across daemon restarts without Postgres.** Check
   first whether myko allows it. Done when: an unread message survives a daemon
   restart with no Postgres configured.
-- [ ] **MUS-18: Extend pairing to other clients.** Done when: Codex, Pi, opencode
-  and Prime Agent can each connect through the gate.
+- [ ] **MUS-18: Extend pairing to Codex.** Codex goes through the Rust shim. Done
+  when: Codex can connect through the gate. The Pi, opencode and Prime Agent plugins
+  are left out under the language decision.
 - [ ] **MUS-19: Fix stale docs.** The README still says `ws://localhost:6255`,
   which now requires TLS. Done when: following the README on a clean machine works. Needs a run: the Muster team, on a clean machine.
 
@@ -113,5 +120,8 @@ evidence from a real run by the person or team named.
   Verified are independent, so it needs a merge field too. Wait for MUS-5, and use
   what the Version 0 board teaches. Done when: the watchman no longer needs
   the hand-kept table.
+- [ ] **MUS-30: Decide the future of the TypeScript plugins.** The operator decides
+  whether to keep, freeze or remove them. Done when: the decision is recorded here,
+  and if they're removed, the repository's `package.json` workspace goes with them.
 - [ ] **MUS-24: Stretch goals.** Once the operator has listed them. Not ready to
   claim yet.
