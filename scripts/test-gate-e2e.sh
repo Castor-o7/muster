@@ -21,7 +21,7 @@ CODE=$(T $BIN/muster-daemon pair --name e2e 2>/dev/null | awk '{print $3}')
 OTHER=$(T $BIN/muster-daemon pair --name revoked 2>/dev/null | awk '{print $3}')
 export XDG_CONFIG_HOME=$WORK/client
 T $BIN/muster-shim pair "$CODE" >/dev/null
-check "pairing stored owner-only" '[[ $(stat -f %Lp $WORK/client/muster/pairing) == 600 ]]'
+check "pairing stored owner-only" '[[ $(python3 -I -c "import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777))" $WORK/client/muster/pairing) == 0o600 ]]'
 
 HOOK='{"session_id":"e2e-hook","cwd":"/tmp/demo"}'
 OUT=$(echo $HOOK | T $BIN/muster-shim claude-hook session-start)

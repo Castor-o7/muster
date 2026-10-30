@@ -572,7 +572,7 @@ fn macos_process_cmdline(pid: u32) -> Vec<String> {
     // ps command= returns a single space-separated line; argv reconstruction
     // is imprecise but adequate for `--session-id <uuid>` / `--resume <path>`
     // detection (neither flag's value should contain a literal space).
-    s.trim().split_whitespace().map(str::to_string).collect()
+    s.split_whitespace().map(str::to_string).collect()
 }
 
 #[cfg(windows)]

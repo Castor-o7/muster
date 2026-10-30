@@ -453,8 +453,8 @@ The daemon's bind address is set with `MUSTER_BIND` (default `0.0.0.0:6255` — 
 | [`muster-prime-agent`](plugins/muster-prime-agent/) | Prime Agent live-conversation extension. |
 | [`muster-opencode`](plugins/muster-opencode/) | opencode native plugin. |
 
-Releases are driven by [`cargo-flux`](https://github.com/ignition-is-go/cargo-flux): conventional-commit `feat:` / `fix:` / breaking changes on `main` cut a stable release; the same on `dev` cuts a prerelease. See `flux.toml` and `.github/workflows/release.yml`.
+Muster has no release pipeline or published packages yet; install from the repository (see Install). CI (`.github/workflows/ci.yml`) runs fmt, clippy, the tests and `scripts/test-gate-e2e.sh` on every push and pull request to `main`.
 
 ## License
 
-MIT OR Apache-2.0
+MIT OR Apache-2.0, at your option (`LICENSE-MIT`, `LICENSE-APACHE`). Muster is a fork of [Marshal](https://github.com/ignition-is-go/marshal), under the same licence.

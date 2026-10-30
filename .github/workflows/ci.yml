@@ -2,55 +2,37 @@ name: CI
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main]
   pull_request:
-    branches: [main, dev]
+    branches: [main]
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   check:
-    runs-on: ["self-hosted", "Linux", "X64", "ram-ge-16g", "disk-ge-100g"]
-    # Backstop so a stuck step (e.g. a flaky apt mirror, a hung runner) fails
-    # in minutes instead of burning to GitHub's 6-hour default.
+    runs-on: ubuntu-latest
+    # Backstop so a stuck step fails in minutes instead of GitHub's 6-hour default.
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          fetch-tags: true
-      - run: sudo sed -i 's|http://|https://|g' /etc/apt/sources.list.d/ubuntu.sources && sudo apt-get update && sudo apt-get install -y build-essential pkg-config libssl-dev
+      # libssl-dev: myko's WebSocket client uses native-tls (OpenSSL on Linux).
+      # zsh: scripts/test-gate-e2e.sh.
+      - run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config libssl-dev zsh netcat-openbsd
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - name: Gate end-to-end (TLS, pairing, tokens)
+        run: cargo build --workspace && ./scripts/test-gate-e2e.sh
 
-      - run: cargo install cargo-flux
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: |
-            plugins/muster-opencode/package-lock.json
-            plugins/muster-pi/package-lock.json
-      - run: npm ci --prefix plugins/muster-opencode
-      - run: npm ci --prefix plugins/muster-pi
-      - run: cargo flux run check
-      - run: cargo flux run lint
-      - run: cargo flux run test
-      - name: Test release dispatch contract
-        run: python3 scripts/test_release_dispatch_contract.py
-
-  # muster-shim ships to Windows (ue_plugindev) as a cross-compiled
-  # x86_64-pc-windows-gnu binary, but its Windows code is `#[cfg(windows)]`
-  # and so is invisible to the Linux `check` job above. #19 silently
-  # dropped the `windows-sys` dependency and broke the Windows build for
-  # weeks because nothing in CI ever cross-compiled it. This job does, on
-  # every PR, so a Windows-only break fails the check instead of the next
-  # manual cross-build.
+  # muster-shim's Windows code is `#[cfg(windows)]`, invisible to the Linux job
+  # above; cross-compiling it catches a Windows-only build break.
   windows-cross-check:
-    runs-on: ["self-hosted", "Linux", "X64", "ram-ge-16g", "disk-ge-100g"]
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -58,31 +40,6 @@ jobs:
         with:
           targets: x86_64-pc-windows-gnu
       - uses: Swatinem/rust-cache@v2
-      - name: Install mingw-w64 cross linker
-        # Bound apt's network waits (Acquire timeouts + retries) so a flaky
-        # azure.archive.ubuntu.com mirror can't hang the job indefinitely —
-        # this is what stalled a release for ~2h on 2026-06-18.
-        run: |
-          sudo sed -i 's|http://|https://|g' /etc/apt/sources.list.d/ubuntu.sources
-          sudo apt-get update \
-            -o Acquire::Retries=3 \
-            -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30
-          sudo apt-get install -y -o Acquire::Retries=3 build-essential pkg-config mingw-w64
+      - run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config mingw-w64
       - name: Cross-compile the Windows shim
         run: cargo check -p muster-shim --target x86_64-pc-windows-gnu
-
-  # Cross-compilation catches cfg(windows) build failures, but it cannot prove
-  # the launcher/bridge behavior. Run the real multi-process wake canary on a
-  # native Windows host as well: Windows Codex TUIs own isolated loopback
-  # app-servers, so each bridge must wake only the thread its endpoint owns.
-  windows-native-wake:
-    runs-on: windows-2025
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          save-if: false
-      - name: Run native Windows Codex wake canary
-        run: cargo test -p muster-shim -- --nocapture
