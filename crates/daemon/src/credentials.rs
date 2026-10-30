@@ -170,6 +170,10 @@ fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
     options.open(path)?.write_all(bytes)
 }
 
+/// The owner of a session on the daemon's own host. `valid_name` can't produce
+/// it, so no paired machine can share it.
+pub const LOCAL_MACHINE: &str = "(local)";
+
 /// Session ids bound to the paired machine that first used them.
 const BINDINGS_FILE: &str = "session-bindings";
 
@@ -260,6 +264,11 @@ mod tests {
         assert!(claim_session(dir.path(), "a1", "s-1").unwrap());
         assert!(!claim_session(dir.path(), "murph", "s-1").unwrap());
         assert!(claim_session(dir.path(), "murph", "s-2").unwrap());
+    }
+
+    #[test]
+    fn no_pairing_can_be_named_like_the_local_machine() {
+        assert!(!valid_name(LOCAL_MACHINE));
     }
 
     #[test]

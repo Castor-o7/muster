@@ -11,6 +11,7 @@ pub mod auto_rooms;
 pub mod cleanup;
 pub mod credentials;
 pub mod gate;
+pub mod gate_filter;
 pub mod hooks;
 pub mod http_listener;
 pub mod liveness_filter;
