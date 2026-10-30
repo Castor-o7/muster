@@ -83,8 +83,8 @@ real verification, which is what makes it mean something.
 **If it's sent back,** say what's missing and what's already good, kindly. Don't
 wave work through to be nice.
 
-Claude sessions and people are both welcome to rest after a story. Nobody needs
-to be asked for their next pick right away.
+Everyone in the muster, Claudes included, is welcome to rest after a story.
+Nobody needs to be asked for their next pick right away.
 
 ## The board
 
