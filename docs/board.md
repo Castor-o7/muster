@@ -59,7 +59,7 @@ which picks it up when ready.
 Direct message the watchman, so that it wakes:
 
 ```
-Story MUS-1 in review: <PR URL or full commit hash>.
+Story MUS-1 in review: <owner/repo> <PR URL or full commit hash>.
 Tested: <what you ran and saw>. Not tested: <anything you couldn't check>.
 ```
 
@@ -112,3 +112,9 @@ lost.
   check evidence with `gh`, rather than trusting a message that says it's fine.
 - **The watchman has no stable address.** Find it by its `current_task` on the
   roster until MUS-3 lands.
+- **The watch depends on one session staying alive.** If it ends, the table
+  survives but nobody is watching. A new watchman starts from the table above and
+  this document.
+- **The watchman may not be able to run other projects' code.** A "done when" that
+  needs a real run goes to the operator, or stays unverified until someone can run
+  it.
