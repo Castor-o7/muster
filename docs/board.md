@@ -54,6 +54,9 @@ hash.
 | Verified | Checked against "done when" | The watchman |
 | Sent back | Something's missing, and the note says what | The watchman |
 
+Work shipped before its project joined the board is recorded as "Shipped before
+the board, not verified", and it doesn't need a story trailer.
+
 Sent back is a normal outcome, not a failure. The story returns to the same team,
 which picks it up when ready.
 
