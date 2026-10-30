@@ -432,6 +432,10 @@ here. An unpaired shim on the daemon's own host defaults to `ws://localhost:6257
 an unpaired client elsewhere, set `MUSTER_DAEMON_ADDRESS` in the shell that launches the
 harness.
 
+Set `MUSTER_OPERATOR` on the daemon to the operator it serves. Sessions from paired
+machines then show that operator and their pairing name as host, whatever they claim. On
+the daemon's own host, a session's claim is taken as given.
+
 The gate's bind address is set with `MUSTER_BIND`. It defaults to `127.0.0.1:6255`, so set
 it to a LAN or mesh address, or `0.0.0.0:6255`, to accept other machines.
 

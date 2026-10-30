@@ -317,11 +317,9 @@ fn resolve_recipient(
     sessions: &[Arc<Session>],
     token: &str,
 ) -> Result<ResolvedRecipient, CommandError> {
-    // 1. Exact session id.
-    if let Some(s) = sessions.iter().find(|s| s.id.0.as_ref() == token) {
-        return Ok((s.clone(), None));
-    }
-    // 2. Unique nickname.
+    // 1. Unique nickname. The daemon assigns these, whereas a client chooses its
+    // session id, so a nickname must win: otherwise a client could register an id
+    // equal to a peer's nickname and receive that peer's mail.
     let mut by_nick: Vec<Arc<Session>> = Vec::new();
     for s in sessions {
         if crate::nickname_for(ctx, s.id.0.as_ref())? == token {
@@ -333,6 +331,10 @@ fn resolve_recipient(
     }
     if by_nick.len() > 1 {
         return Err(err(ctx, &ambiguous(ctx, "nickname", token, &by_nick)));
+    }
+    // 2. Exact session id.
+    if let Some(s) = sessions.iter().find(|s| s.id.0.as_ref() == token) {
+        return Ok((s.clone(), None));
     }
     // 3. Operator identity — human-via-agent routing. Record the operator we
     // addressed (the resolved session's canonical operator string, falling back
@@ -380,11 +382,8 @@ pub(crate) fn resolve_mention(
     sessions: &[Arc<Session>],
     token: &str,
 ) -> Result<Option<ResolvedRecipient>, CommandError> {
-    // 1. Exact session id.
-    if let Some(s) = sessions.iter().find(|s| s.id.0.as_ref() == token) {
-        return Ok(Some((s.clone(), None)));
-    }
-    // 2. Unique nickname (ambiguous → treat as prose, not a hard error).
+    // 1. Unique nickname (ambiguous → treat as prose, not a hard error). As in
+    // `resolve_recipient`, a daemon-assigned nickname wins over a chosen id.
     let mut by_nick: Vec<Arc<Session>> = Vec::new();
     for s in sessions {
         if crate::nickname_for(ctx, s.id.0.as_ref())? == token {
@@ -396,6 +395,10 @@ pub(crate) fn resolve_mention(
     }
     if by_nick.len() > 1 {
         return Ok(None);
+    }
+    // 2. Exact session id.
+    if let Some(s) = sessions.iter().find(|s| s.id.0.as_ref() == token) {
+        return Ok(Some((s.clone(), None)));
     }
     // 3. Operator identity — human-via-agent.
     let op = token

@@ -170,6 +170,15 @@ fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
     options.open(path)?.write_all(bytes)
 }
 
+/// The operator this daemon serves, from `MUSTER_OPERATOR`. When set, it's what
+/// sessions from paired machines show, whatever they claim. Without it their
+/// own claim stands.
+pub fn daemon_operator() -> Option<String> {
+    std::env::var("MUSTER_OPERATOR")
+        .ok()
+        .filter(|s| !s.is_empty())
+}
+
 /// The owner of a session on the daemon's own host. `valid_name` can't produce
 /// it, so no paired machine can share it.
 pub const LOCAL_MACHINE: &str = "(local)";
@@ -207,8 +216,20 @@ pub fn claim_session(dir: &Path, machine: &str, session: &str) -> io::Result<boo
             return Ok(owner == machine);
         }
     }
-    write_private(&path, format!("{text}{machine} {session}\n").as_bytes())?;
+    write_bindings(&path, &format!("{text}{machine} {session}\n"))?;
     Ok(true)
+}
+
+/// [`claim_session`] for a paired machine, whose session ids must be UUIDs, as
+/// Claude Code's are. Recipients are also addressed by nickname, operator and id
+/// prefix, so a machine free to choose any id could register one of those and
+/// receive mail meant for someone else.
+pub fn claim_machine_session(dir: &Path, machine: &str, session: &str) -> io::Result<bool> {
+    let is_uuid = session.len() == 36 && uuid::Uuid::try_parse(session).is_ok();
+    if !is_uuid {
+        return Ok(false);
+    }
+    claim_session(dir, machine, session)
 }
 
 /// Forget every session bound to `machine`, when it's unpaired.
@@ -228,7 +249,16 @@ fn release_sessions(dir: &Path, machine: &str) -> io::Result<()> {
         })
         .map(|line| format!("{line}\n"))
         .collect();
-    write_private(&path, kept.as_bytes())
+    write_bindings(&path, &kept)
+}
+
+/// Replace the bindings file in one step. A crash or full disk partway through
+/// must not leave it cut short, because a missing binding lets any machine claim
+/// that session.
+fn write_bindings(path: &Path, text: &str) -> io::Result<()> {
+    let tmp = path.with_extension("tmp");
+    write_private(&tmp, text.as_bytes())?;
+    std::fs::rename(&tmp, path)
 }
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
@@ -269,6 +299,29 @@ mod tests {
     #[test]
     fn no_pairing_can_be_named_like_the_local_machine() {
         assert!(!valid_name(LOCAL_MACHINE));
+    }
+
+    #[test]
+    fn failing_to_write_keeps_the_existing_bindings() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(claim_session(dir.path(), "a1", "s-1").unwrap());
+        // A directory where the temp file goes makes the write fail.
+        std::fs::create_dir(dir.path().join("session-bindings.tmp")).unwrap();
+        assert!(claim_session(dir.path(), "a1", "s-2").is_err());
+        assert!(!claim_session(dir.path(), "murph", "s-1").unwrap());
+    }
+
+    #[test]
+    fn a_machine_cannot_claim_an_id_that_could_pose_as_someone() {
+        let dir = tempfile::tempdir().unwrap();
+        for id in ["copper-komodo", "josh", "josh@example.com", "4a212405"] {
+            assert!(
+                !claim_machine_session(dir.path(), "a1", id).unwrap(),
+                "{id}"
+            );
+        }
+        let id = "4a212405-0246-4c12-98f6-2359ca28c533";
+        assert!(claim_machine_session(dir.path(), "a1", id).unwrap());
     }
 
     #[test]

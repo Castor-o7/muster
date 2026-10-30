@@ -53,16 +53,30 @@ unparseable frames are refused, and myko's other routes are closed to paired mac
 The allowlist comes from what the shim sends, and the gate script checks that a real
 shim's traffic isn't refused.
 
+An adversarial review on 2026-10-30 broke the first version: a NUL-suffixed `id` key passed
+the filter and became the real `id` when myko stripped NUL afterwards, and a tab in the
+request line lost the machine name. A recheck then found that a command body sent as a JSON
+array skipped the `asSession` check, because serde fills fields by position. All are fixed
+with regression tests. Paired machines' session ids must now be UUIDs, so they can't pose as
+a nickname or operator. Further findings are in MUS-33 and MUS-34.
+
+A third round found free-text room names reaching mention banners, also fixed. That round
+wasn't a clean pass: its hook-surface reviewer stopped early, so the hook surface was traced
+by reading the code instead, with no bypass found, and it wasn't tested with attacks.
+
 Still open:
 
+- **The filter is an allowlist over a parser myko also interprets.** Three bypasses came from
+  myko reading a frame differently from the filter. Treat more as possible, and prefer an
+  authorization hook in myko in the long term.
 - **First use wins.** A session nobody has used through a hook or the gate can still be
   claimed by whichever machine names it first. Roster ids are visible to paired machines,
   and this matters most for sessions already running during a rollout.
 - **Reads are only partly limited.** The roster, rooms and memberships stay readable by
   every paired machine. Message bodies no longer are, except through a session's own
   `ReadMessages`.
-- **`operator` and `host`** are still client-supplied (MUS-6), including on a machine's own
-  Session events.
+- **Local sessions' `operator` and `host`** are still taken as given, since the daemon's own
+  host is trusted (MUS-7 protects its ports). Paired machines' are attested (MUS-6).
 - **Codex over the gate** would need `GetAllMessages` and `GetAllMessageReads` to be
   handled differently before MUS-18.
 

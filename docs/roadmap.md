@@ -49,6 +49,16 @@ evidence from a real run by the person or team named.
   a line at about 500 characters and an event at about 3,000. Done when: a message
   up to the daemon's 2,000-character limit reaches an idle session complete. Needs
   a run: the Muster team, with a peer sending.
+- [ ] **MUS-34: Don't lose mail between delivery and ack.** From the 2026-10-30 review.
+  A message is marked read once it reaches the gate's loopback socket, so a silent network
+  drop loses it. A waiter whose session just closed can also take mail and drop it, a plain
+  `watch` has no parent check, and a resumed session can lose its wake to the old waiter.
+  Concurrent readers can deliver a message twice. Done when: delivery is acknowledged by
+  the client, and a test covers a dropped path.
+- [ ] **MUS-35: Say why a watcher can't reach the daemon.** A 401 or 403 and a real outage
+  print the same "can't reach" line, and a daemon whose hook port failed to bind keeps
+  running with hooks dead. Done when: the message names the cause, and a failed hook bind
+  stops the daemon or is plainly reported.
 - [ ] **MUS-29: Make send timeouts trustworthy.** `send_message` reported "command
   timed out" for a message that did arrive, so a retry could send a duplicate. Done
   when: a test shows a timed-out send can be retried without delivering twice.
@@ -76,6 +86,13 @@ evidence from a real run by the person or team named.
   to the store. Design: [session-binding.md](session-binding.md). Done when: a test shows
   one paired machine can't read, clear or send as another machine's session, including
   by raw event.
+- [ ] **MUS-33: Harden the gate further.** From the 2026-10-30 adversarial review, not
+  fixed yet: a compromised machine can capture operator-addressed mail by being the most
+  active session, including with a far-future `lastActivityAt`; `project` is unattested,
+  so it can join any `project:` room; `unpair` can race the daemon's bindings file; a
+  `/hook/wait` opened before `unpair` keeps running for up to 10 minutes; and oversized
+  message bodies can break a peer's `ReadMessages`. Done when: each is fixed or recorded
+  as accepted, with a test for each fix.
 - [ ] **MUS-6: Verify `operator` and `host` on the daemon.** The client supplies
   both. Done when: the roster shows values the daemon established, and a test
   shows a client can't fake them.
