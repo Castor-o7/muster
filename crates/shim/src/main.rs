@@ -113,6 +113,17 @@ fn main() -> Result<()> {
             codex_hook::run_for(codex_hook::Harness::Claude, &ep, base.as_deref());
             return Ok(());
         }
+        // Live inbox without the channels flag: Claude runs `muster-shim watch
+        // <session_id>` under its Monitor tool, and each message the daemon
+        // hands back is printed as a Monitor event that wakes the session.
+        Some("watch") => {
+            let sid = argv
+                .next()
+                .context("usage: muster-shim watch <session_id> [base-url]")?;
+            let base = argv.next();
+            codex_hook::watch(&sid, base.as_deref());
+            return Ok(());
+        }
         // Store the code `muster-daemon pair` printed, so this machine reaches
         // the daemon through its TLS gate. See `link`.
         Some("pair") => {

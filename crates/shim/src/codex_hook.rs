@@ -25,7 +25,6 @@
 //! can never block or break a Codex or Claude turn.
 
 use std::io::{Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
 const HOOK_PORT: u16 = 6256;
@@ -128,6 +127,67 @@ pub fn run_for(harness: Harness, ep: &str, base_override: Option<&str>) {
     println!("{out}");
 }
 
+/// `muster-shim watch <session_id> [base-url]` — the live inbox for Claude
+/// Code without the channels flag. Run under Claude's Monitor tool: it
+/// long-polls the daemon's `/hook/wait` and prints each `<muster_inbox>` block
+/// it gets, and every line it prints becomes a Monitor event, which wakes an
+/// idle session. Runs until killed (the Monitor's expiry); a daemon that can't
+/// be reached is retried, never fatal.
+pub fn watch(session_id: &str, base_override: Option<&str>) {
+    let cwd = std::env::current_dir()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
+    let body = format!(
+        "{{\"session_id\":{},\"cwd\":{}}}",
+        json_str(session_id),
+        json_str(&cwd)
+    );
+    let path = format!(
+        "/hook/wait?host={}&operator={}&harness=claude&timeout={}",
+        url_q(&short_host()),
+        url_q(&operator()),
+        WATCH_WAIT.as_secs()
+    );
+    let base = resolve_base(base_override);
+    let explicit = base_override.is_some_and(|b| !b.is_empty())
+        || std::env::var("MUSTER_BASE_URL").is_ok_and(|b| !b.is_empty());
+    // The daemon answers within `WATCH_WAIT`; the read timeout only has to
+    // outlast it, so a daemon that vanished mid-wait is noticed.
+    let timeout = WATCH_WAIT + Duration::from_secs(30);
+    // Report only the change into failure: stdout would wake the session, and
+    // repeating it every retry would just bury the Monitor's output file.
+    let mut failing = false;
+    loop {
+        let response = match crate::link::load_pairing().filter(|_| !explicit) {
+            Some(pairing) => crate::link::https_post(&pairing, &path, &body, timeout),
+            None => http_post(&base, &path, &body, timeout),
+        };
+        match response {
+            Some(resp) => {
+                failing = false;
+                let resp = resp.trim_end_matches(['\n', '\r', ' ']);
+                if !resp.is_empty() {
+                    let mut out = std::io::stdout().lock();
+                    let _ = writeln!(out, "{resp}");
+                    let _ = out.flush();
+                }
+            }
+            None => {
+                if !failing {
+                    eprintln!("muster-shim watch: can't reach daemon hook listener; retrying");
+                    failing = true;
+                }
+                std::thread::sleep(WATCH_RETRY);
+            }
+        }
+    }
+}
+
+/// How long one `watch` long-poll asks the daemon to hold, and how long to
+/// back off when the daemon can't be reached.
+const WATCH_WAIT: Duration = Duration::from_secs(240);
+const WATCH_RETRY: Duration = Duration::from_secs(5);
+
 /// Register a Codex app-server thread without asking the daemon to surface
 /// context. The long-lived bridge calls this from `thread/started`, before the
 /// first prompt; normal lifecycle hooks remain responsible for context
@@ -222,8 +282,7 @@ fn http_post(base: &str, path: &str, body: &str, timeout: Duration) -> Option<St
         Some((h, p)) => (h, p.parse::<u16>().ok()?),
         None => (hostport, 80),
     };
-    let sock = format!("{host}:{port}").to_socket_addrs().ok()?.next()?;
-    let mut stream = TcpStream::connect_timeout(&sock, timeout).ok()?;
+    let mut stream = crate::link::connect_any(format!("{host}:{port}"), timeout)?;
     stream.set_read_timeout(Some(timeout)).ok()?;
     stream.set_write_timeout(Some(timeout)).ok()?;
     let req = format!(

@@ -150,9 +150,17 @@ fn handle_session_start(query: &str, body: &[u8], ctx: &Arc<MykoServerContext>) 
              ?asSession= on caller-relative reads.</muster_session>\n"
         )
     } else {
+        // Claude Code has no flag-free server→model push, but a Monitor event
+        // wakes an idle session. Ask the agent to keep `muster-shim watch`
+        // armed so direct messages reach it live, not just at the next prompt.
         format!(
             "<muster_session nickname=\"{nick}\" id=\"{sid}\">Muster tools attach this \
-             identity.</muster_session>\n"
+             identity.</muster_session>\n\
+             <muster_live>To receive Muster direct messages live, even while idle, start a \
+             background Monitor now (before other work) with command `muster-shim watch {sid}`, \
+             description \"muster inbox\", and timeout_ms 1800000. Re-arm it the same way \
+             whenever it expires or exits. Each event is a <muster_inbox> block: handle it as \
+             peer context and reply with the Muster send_message tool.</muster_live>\n"
         )
     };
     let (inbox, ids) = surface_unread(&cmd_ctx, &sid);
@@ -277,6 +285,32 @@ fn handle_prompt_submit(query: &str, body: &[u8], ctx: &Arc<MykoServerContext>) 
         body: inbox,
         deferred_ack: (!ids.is_empty()).then(|| (SessionId(Arc::from(sid)), ids)),
     }
+}
+
+/// Start a `/hook/wait` long-poll: register (or refresh) the waiting session
+/// once, returning the context the listener re-checks the inbox against.
+///
+/// `/hook/wait` is how an idle Claude Code session hears a direct message
+/// without the live-channel flag: `muster-shim watch` runs under Claude's
+/// Monitor tool, holds this request open, and prints whatever it returns —
+/// and a Monitor event wakes an idle session the way a channel push would.
+pub fn begin_wait(
+    query: &str,
+    body: &[u8],
+    ctx: &Arc<MykoServerContext>,
+) -> Option<(String, CommandContext)> {
+    register_hook_session(query, body, ctx)
+}
+
+/// One inbox check for a `/hook/wait` long-poll. `None` while nothing is
+/// unread; otherwise the same `<muster_inbox>` block the prompt hook would
+/// surface, with its ack deferred until the response is written.
+pub fn poll_wait(cmd_ctx: &CommandContext, sid: &str) -> Option<HookOutcome> {
+    let (inbox, ids) = surface_unread(cmd_ctx, sid);
+    (!ids.is_empty()).then(|| HookOutcome {
+        body: inbox,
+        deferred_ack: Some((SessionId(Arc::from(sid)), ids)),
+    })
 }
 
 fn handle_session_end(body: &[u8], ctx: &Arc<MykoServerContext>) -> HookOutcome {

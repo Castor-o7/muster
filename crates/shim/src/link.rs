@@ -204,11 +204,24 @@ pub async fn start_tunnel(pairing: &Pairing) -> io::Result<u16> {
     Ok(port)
 }
 
+/// Connect to the first address of `target` that accepts. A name like
+/// `localhost` can resolve to `::1` ahead of the `127.0.0.1` the daemon binds,
+/// so stopping at the first address would be refused forever. Each attempt is
+/// capped at [`CONNECT_ATTEMPT`], however long the caller's request may run.
+pub fn connect_any(target: impl ToSocketAddrs, timeout: Duration) -> Option<TcpStream> {
+    let attempt = timeout.min(CONNECT_ATTEMPT);
+    target
+        .to_socket_addrs()
+        .ok()?
+        .find_map(|addr| TcpStream::connect_timeout(&addr, attempt).ok())
+}
+
+const CONNECT_ATTEMPT: Duration = Duration::from_secs(5);
+
 /// POST `body` to `path` on the paired gate over pinned TLS and return the
 /// response body. `None` on any failure, a non-2xx status included.
 pub fn https_post(pairing: &Pairing, path: &str, body: &str, timeout: Duration) -> Option<String> {
-    let addr = pairing.address.to_socket_addrs().ok()?.next()?;
-    let tcp = TcpStream::connect_timeout(&addr, timeout).ok()?;
+    let tcp = connect_any(pairing.address.as_str(), timeout)?;
     tcp.set_read_timeout(Some(timeout)).ok()?;
     tcp.set_write_timeout(Some(timeout)).ok()?;
     let conn =
@@ -238,4 +251,34 @@ pub fn https_post(pairing: &Pairing, path: &str, body: &str, timeout: Duration) 
         return None;
     }
     Some(text[idx + 4..].to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{SocketAddr, TcpListener};
+
+    #[test]
+    fn connect_any_skips_an_address_that_refuses() {
+        // Bind then drop to get a loopback port nothing is listening on.
+        let refused: SocketAddr = {
+            let gone = TcpListener::bind("127.0.0.1:0").unwrap();
+            gone.local_addr().unwrap()
+        };
+        let live = TcpListener::bind("127.0.0.1:0").unwrap();
+        let live_addr = live.local_addr().unwrap();
+
+        let stream = connect_any(&[refused, live_addr][..], Duration::from_secs(1))
+            .expect("should fall through to the address that accepts");
+        assert_eq!(stream.peer_addr().unwrap(), live_addr);
+    }
+
+    #[test]
+    fn connect_any_is_none_when_every_address_refuses() {
+        let refused: SocketAddr = {
+            let gone = TcpListener::bind("127.0.0.1:0").unwrap();
+            gone.local_addr().unwrap()
+        };
+        assert!(connect_any(&[refused][..], Duration::from_secs(1)).is_none());
+    }
 }

@@ -13,7 +13,7 @@
 //! per connection, `Connection: close`. Hook bodies are a few hundred
 //! bytes; anything fancier would be a dependency we don't need.
 
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use myko::server::MykoServerContext;
 use tokio::{
@@ -27,6 +27,12 @@ use crate::hooks;
 /// this only exists so a malformed/hostile `Content-Length` can't make us
 /// allocate unboundedly.
 const MAX_BODY: usize = 256 * 1024;
+
+/// `/hook/wait` bounds: how long one long-poll is held when the caller names
+/// no `timeout`, the most it may ask for, and how often the inbox is checked.
+const WAIT_DEFAULT_SECS: u64 = 240;
+const WAIT_MAX_SECS: u64 = 600;
+const WAIT_POLL: Duration = Duration::from_millis(500);
 
 /// Run the hook listener forever. Spawn on a tokio task.
 pub async fn run(bind: SocketAddr, ctx: Arc<MykoServerContext>) -> std::io::Result<()> {
@@ -108,6 +114,10 @@ async fn handle_conn(mut stream: TcpStream, ctx: Arc<MykoServerContext>) -> std:
         return write_response(&mut stream, 405, "method not allowed").await;
     }
 
+    if path == "/hook/wait" {
+        return handle_wait(stream, query, &body, &ctx).await;
+    }
+
     match hooks::dispatch(path, query, &body, &ctx) {
         Some(outcome) => {
             write_response(&mut stream, 200, &outcome.body).await?;
@@ -122,6 +132,46 @@ async fn handle_conn(mut stream: TcpStream, ctx: Arc<MykoServerContext>) -> std:
             Ok(())
         }
         None => write_response(&mut stream, 404, "not found").await,
+    }
+}
+
+/// `/hook/wait`: hold the request until the session has an unread direct
+/// message (respond with it, then ack) or `timeout` seconds pass (respond
+/// empty). The caller sends nothing after its request, so the socket turning
+/// readable means it went away — stop then, before a message is written into
+/// a dead connection and acked as delivered.
+async fn handle_wait(
+    mut stream: TcpStream,
+    query: &str,
+    body: &[u8],
+    ctx: &Arc<MykoServerContext>,
+) -> std::io::Result<()> {
+    let Some((sid, cmd_ctx)) = hooks::begin_wait(query, body, ctx) else {
+        return write_response(&mut stream, 200, "").await;
+    };
+    let secs = query
+        .split('&')
+        .find_map(|kv| kv.strip_prefix("timeout="))
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(WAIT_DEFAULT_SECS)
+        .min(WAIT_MAX_SECS);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(secs);
+    let mut probe = [0u8; 64];
+    loop {
+        if let Some(outcome) = hooks::poll_wait(&cmd_ctx, &sid) {
+            write_response(&mut stream, 200, &outcome.body).await?;
+            if let Some((session, ids)) = outcome.deferred_ack {
+                hooks::ack_surfaced(ctx, &session, ids);
+            }
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return write_response(&mut stream, 200, "").await;
+        }
+        tokio::select! {
+            _ = tokio::time::sleep(WAIT_POLL) => {}
+            _ = stream.read(&mut probe) => return Ok(()),
+        }
     }
 }
 
