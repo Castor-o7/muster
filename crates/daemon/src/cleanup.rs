@@ -71,16 +71,46 @@ const MESSAGE_SWEEP_EVERY: u64 = 100;
 /// (lower) vs. wake-ups per minute (higher).
 pub const TICK_INTERVAL: Duration = Duration::from_secs(3);
 
+/// How long `SweepState::client_last_live` remembers a client id after it
+/// leaves the Client store. Only feeds the reap log.
+const CLIENT_MEMORY: Duration = Duration::from_secs(60 * 60);
+
+/// The sweeper's memory across ticks. In-memory only: a restart resets it.
+#[derive(Default)]
+struct SweepState {
+    /// Session id → when it was first seen without a live client.
+    disconnected_since: HashMap<Arc<str>, Instant>,
+    /// Client id → when it was last in the live Client store. Diagnostic:
+    /// lets the reap log tell a session stamped with a client id that never
+    /// existed from one whose client row went away.
+    client_last_live: HashMap<Arc<str>, Instant>,
+}
+
+/// For the reap log: when `cid` was last in the live Client store.
+fn describe_client(
+    client_last_live: &HashMap<Arc<str>, Instant>,
+    cid: &str,
+    now: Instant,
+) -> String {
+    match client_last_live.get(cid) {
+        Some(seen) => format!(
+            "client {cid} was last live {}s ago",
+            now.duration_since(*seen).as_secs()
+        ),
+        None => format!("client {cid} hasn't been live in the last hour"),
+    }
+}
+
 /// Run the sweeper forever. Spawn this on a tokio task and forget it.
 pub async fn run_sweeper(ctx: MykoServerContext) {
-    let mut disconnected_since: HashMap<Arc<str>, Instant> = HashMap::new();
+    let mut state = SweepState::default();
     let mut interval = tokio::time::interval(TICK_INTERVAL);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut tick: u64 = 0;
 
     loop {
         interval.tick().await;
-        sweep_once(&ctx, &mut disconnected_since);
+        sweep_once(&ctx, &mut state);
         sweep_rooms(&ctx);
         // Prune old messages on the first tick (boot cleanup) and every
         // MESSAGE_SWEEP_EVERY ticks thereafter — not every tick (the scan is
@@ -175,7 +205,7 @@ fn sweep_rooms(ctx: &MykoServerContext) {
     }
 }
 
-fn sweep_once(ctx: &MykoServerContext, disconnected_since: &mut HashMap<Arc<str>, Instant>) {
+fn sweep_once(ctx: &MykoServerContext, state: &mut SweepState) {
     let Some(session_store) = ctx.registry.get(Session::ENTITY_NAME_STATIC) else {
         return;
     };
@@ -195,7 +225,14 @@ fn sweep_once(ctx: &MykoServerContext, disconnected_since: &mut HashMap<Arc<str>
         .collect();
 
     let now = Instant::now();
-    let mut to_delete: Vec<Arc<str>> = Vec::new();
+    for cid in &live_client_ids {
+        state.client_last_live.insert(cid.clone(), now);
+    }
+    state
+        .client_last_live
+        .retain(|_, seen| now.duration_since(*seen) < CLIENT_MEMORY);
+    let disconnected_since = &mut state.disconnected_since;
+    let mut to_delete: Vec<(Arc<str>, String)> = Vec::new();
     let mut still_disconnected: HashSet<Arc<str>> = HashSet::new();
 
     for (id, item) in session_store.entries().materialize().get() {
@@ -225,19 +262,37 @@ fn sweep_once(ctx: &MykoServerContext, disconnected_since: &mut HashMap<Arc<str>
                 .unwrap_or(0);
                 let now_ms = Utc::now().timestamp_millis();
                 if now_ms.saturating_sub(last_signal_ms) >= PULL_STALE_AFTER.as_millis() as i64 {
-                    to_delete.push(id);
+                    to_delete.push((id, "no hook activity for a day".to_string()));
                 }
             }
             // WS shim session bound to a live client: healthy.
             Some(cid) if live_client_ids.contains(&cid.0) => {
-                disconnected_since.remove(&id);
+                if disconnected_since.remove(&id).is_some() {
+                    log::info!("[cleanup] session {id} is back on live client {}", cid.0);
+                }
             }
             // WS shim session whose client has gone: reconnect grace.
-            Some(_) => {
+            Some(cid) => {
                 still_disconnected.insert(id.clone());
-                let first_seen = *disconnected_since.entry(id.clone()).or_insert(now);
+                let first_seen = *disconnected_since.entry(id.clone()).or_insert_with(|| {
+                    log::info!(
+                        "[cleanup] session {id} has no live client: {}; {} client(s) live; \
+                         reaping in {}s unless it re-registers",
+                        describe_client(&state.client_last_live, &cid.0, now),
+                        live_client_ids.len(),
+                        STALE_AFTER.as_secs()
+                    );
+                    now
+                });
                 if now.duration_since(first_seen) >= STALE_AFTER {
-                    to_delete.push(id);
+                    to_delete.push((
+                        id,
+                        format!(
+                            "{}; no live client for {}s",
+                            describe_client(&state.client_last_live, &cid.0, now),
+                            now.duration_since(first_seen).as_secs()
+                        ),
+                    ));
                 }
             }
         }
@@ -247,8 +302,8 @@ fn sweep_once(ctx: &MykoServerContext, disconnected_since: &mut HashMap<Arc<str>
     // someone DEL'd them out from under us).
     disconnected_since.retain(|id, _| still_disconnected.contains(id));
 
-    for id in to_delete {
-        log::info!("[cleanup] DELing abandoned session {}", id);
+    for (id, reason) in to_delete {
+        log::info!("[cleanup] DELing abandoned session {id}: {reason}");
         if let Err(e) = ctx.del_by_id(Session::ENTITY_NAME_STATIC, &id) {
             log::warn!("[cleanup] del session {} failed: {}", id, e);
             continue;
@@ -326,7 +381,7 @@ mod tests {
         let ctx = setup();
         set_hook_session(&ctx, "idle-codex", Utc::now().timestamp_millis());
 
-        sweep_once(&ctx, &mut HashMap::new());
+        sweep_once(&ctx, &mut SweepState::default());
 
         assert!(
             session_ids(&ctx).contains("idle-codex"),
@@ -347,6 +402,64 @@ mod tests {
         ctx.apply_event_batch(vec![ev]).expect("apply Client SET");
     }
 
+    fn set_ws_session(ctx: &MykoServerContext, id: &str, client: &str) {
+        let session = Session {
+            id: SessionId(Arc::from(id)),
+            client_id: Some(myko::entities::client::ClientId(Arc::from(client))),
+            pid: 1,
+            cwd: "/repo".into(),
+            git_branch: None,
+            current_task: None,
+            session_name: None,
+            activity: None,
+            kind: None,
+            connected_at: 0,
+            last_activity_at: None,
+            last_tool: None,
+            last_tool_at: None,
+            operator: None,
+            host: None,
+            project: None,
+            channels_enabled: None,
+        };
+        let event = MEvent::from_item(&session, MEventType::SET, &Uuid::new_v4().to_string());
+        ctx.apply_event_batch(vec![event])
+            .expect("apply ws Session SET");
+    }
+
+    #[test]
+    fn ws_sessions_live_while_their_client_does_and_are_reaped_after_the_grace() {
+        let ctx = setup();
+        set_client(&ctx, "live-client");
+        set_ws_session(&ctx, "connected", "live-client");
+        set_ws_session(&ctx, "orphaned", "gone-client");
+        set_ws_session(&ctx, "just-orphaned", "gone-client-2");
+
+        let mut state = SweepState::default();
+        // "orphaned" has been without its client for longer than the grace.
+        state.disconnected_since.insert(
+            Arc::from("orphaned"),
+            Instant::now() - STALE_AFTER - Duration::from_secs(1),
+        );
+        sweep_once(&ctx, &mut state);
+
+        let ids = session_ids(&ctx);
+        assert!(ids.contains("connected"), "a live client keeps its session");
+        assert!(
+            !ids.contains("orphaned"),
+            "past the grace, the session is reaped"
+        );
+        assert!(
+            ids.contains("just-orphaned"),
+            "a client that just went gets the reconnect grace"
+        );
+        assert!(state.disconnected_since.contains_key("just-orphaned"));
+        assert!(
+            state.client_last_live.contains_key("live-client"),
+            "the sweeper remembers live clients for the reap log"
+        );
+    }
+
     #[test]
     fn sweep_reaps_hook_sessions_past_the_activity_backstop() {
         let ctx = setup();
@@ -355,7 +468,7 @@ mod tests {
         set_hook_session(&ctx, "dead-codex", stale);
         set_hook_session(&ctx, "live-codex", Utc::now().timestamp_millis());
 
-        sweep_once(&ctx, &mut HashMap::new());
+        sweep_once(&ctx, &mut SweepState::default());
 
         let ids = session_ids(&ctx);
         assert!(
