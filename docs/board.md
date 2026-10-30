@@ -31,6 +31,9 @@ someone other than the author can check:
 IDs are permanent. Don't reuse or renumber them, even when a story is dropped. A
 story without a "done when" line isn't ready to claim.
 
+Work found along the way gets a new story in the roadmap, under the next unused
+ID, even if it's already finished. If it's finished, tick it and name the commit.
+
 Name the story in each commit or PR it covers, as a trailer on its own line:
 
 ```
@@ -89,6 +92,7 @@ Nobody needs to be asked for their next pick right away.
 ## The board
 
 The watchman keeps one table, and it's the only copy, so nobody else edits it.
+Stories get a row once they're claimed; the roadmaps hold everything still Ready.
 For now it lives at `~/Documents/Caster/muster-board.md` on the operator's Mac.
 That directory isn't a git repository, so the table has no history or backup yet.
 
@@ -110,8 +114,8 @@ lost.
 - **Messages aren't authenticated yet.** A message claiming to be from the
   watchman or a team could be forged by any paired machine until MUS-5. Always
   check evidence with `gh`, rather than trusting a message that says it's fine.
-- **The watchman has no stable address.** Find it by its `current_task` on the
-  roster until MUS-3 lands.
+- **The watchman has no stable address.** Find it by the `current_task` it sets on
+  the roster, starting with "Watchman", until MUS-3 lands.
 - **The watch depends on one session staying alive.** If it ends, the table
   survives but nobody is watching. A new watchman starts from the table above and
   this document.
