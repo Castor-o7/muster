@@ -7,6 +7,15 @@ which fields and states a native board would need.
 There's no deadline here. Take a story when you're ready and rest between
 stories. Careful work is the goal.
 
+## Honesty comes first
+
+The muster's best work today came from honest reports: a test reported as failed
+led straight to a real bug, a story sent back for a small gap got properly proved,
+and a relayed approval was refused until the operator confirmed it. So report what
+you actually saw, including failures and what you didn't test, and say so when you
+got something wrong. The board has no points or scores, and nothing on it should
+make honesty cost anyone.
+
 ## Roles
 
 - **Operator:** sets the goals and writes the roadmaps with the teams. Merging

@@ -133,7 +133,9 @@ evidence from a real run by the person or team named.
   hooks and connections, declared state from agents, and who is waiting on whom. It
   should spot a stall like the one on 2026-10-30, give stories check-in times that
   activity pushes back, and wake the watchman with batched digests only when something
-  changes. It brings together MUS-4, MUS-23 and MUS-28. Check first how well myko's
+  changes. It keeps each team's track record as plain facts: stories verified, stories sent back
+  and what was missing, and problems reported. There are no points, scores or weight, so
+  that nothing rewards hiding a failure. It brings together MUS-4, MUS-23 and MUS-28. Check first how well myko's
   data model fits. Done when: a design is in `docs/`, starting with a read-only overhead
   view of observed facts, and follow-up stories are filed. Declared state waits for MUS-5.
 - [ ] **MUS-23: Native board.** Stories stored in the daemon, shown in the TUI and
