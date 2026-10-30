@@ -5,6 +5,8 @@ waking idle sessions, without `--dangerously-load-development-channels`, and
 Muster is secure and portable enough to run unattended.
 
 Stories follow the process in [board.md](board.md). IDs are permanent.
+"Needs a run" means `gh` can't show the result, so the submission must include
+evidence from a real run by the person or team named.
 
 ## Decisions
 
@@ -24,13 +26,22 @@ Stories follow the process in [board.md](board.md). IDs are permanent.
 - [ ] **MUS-1: Fix watcher expiry.** Monitor stops at 30 minutes; the expiry
   notice wakes an idle session, so re-arming works but costs about 48 wake-ups
   per session per day. Done when: a session idle overnight still wakes on a
-  message, and idling costs as little as Claude Code allows.
+  message, and an idle session uses at most 2 model turns per hour, with 0 as the
+  target. Needs a run: the Muster team, overnight.
 - [ ] **MUS-2: Close the first-prompt gap.** Done when: a restarted session wakes
-  on a message before anyone has typed to it.
+  on a message before anyone has typed to it. Needs a run: the Muster team, on both
+  machines.
 - [ ] **MUS-3: Stable identity across restarts.** Done when: a session keeps its
   nickname through a restart, and the watchman can be reached by role.
 - [ ] **MUS-4: Show dead watchers.** Done when: the roster distinguishes a
   session that can be woken from one that can't.
+- [x] **MUS-25: Reach the daemon when `localhost` resolves to `::1` first.** Found
+  during live-delivery testing. Done when: an unpaired Linux host's watcher wakes
+  on a message with no explicit URL. Evidence: `090b2a9`, tested on Murph by
+  crimson-avocet.
+- [ ] **MUS-26: Keep `current_task` fresh.** It can go stale: one session showed
+  `feature/comments` while on `feature/search`. Done when: the roster's task
+  follows the branch, unless a session has set its own text.
 
 ## Phase 2: Security
 
@@ -54,7 +65,7 @@ Stories follow the process in [board.md](board.md). IDs are permanent.
   runs `cargo audit` or `cargo deny`, and the threat model is in `docs/`.
 - [ ] **MUS-12: Give the watchman a read-only GitHub token.** Done when: the
   watchman can verify a story in all three repositories and a merge attempt with
-  its token is refused.
+  its token is refused. Needs a run: the operator, who holds the token.
 
 ## Phase 3: Portability
 
@@ -65,24 +76,27 @@ Stories follow the process in [board.md](board.md). IDs are permanent.
   install without a Rust toolchain.
 - [ ] **MUS-15: One-command setup.** Done when: one command sets up a new machine,
   `muster doctor` reports what's wrong, and launchd and systemd units keep the
-  daemon running across reboots.
+  daemon running across reboots. Needs a run: the operator, on a clean machine and
+  through a reboot.
 - [ ] **MUS-16: Support addresses beyond one LAN IP.** Done when: a paired laptop
-  stays connected when it moves between home and a Tailscale or WireGuard network.
+  stays connected when it moves between home and a Tailscale or WireGuard network. Needs a run: the operator, who
+  has the laptop.
 - [ ] **MUS-17: Keep messages across daemon restarts without Postgres.** Check
   first whether myko allows it. Done when: an unread message survives a daemon
   restart with no Postgres configured.
 - [ ] **MUS-18: Extend pairing to other clients.** Done when: Codex, Pi, opencode
   and Prime Agent can each connect through the gate.
 - [ ] **MUS-19: Fix stale docs.** The README still says `ws://localhost:6255`,
-  which now requires TLS. Done when: following the README on a clean machine works.
+  which now requires TLS. Done when: following the README on a clean machine works. Needs a run: the Muster team, on a clean machine.
 
 ## Phase 4: Coordination
 
 - [ ] **MUS-20: Retire Marshal.** Done when: no session starts `marshal-shim`, and
   its `:6155` config is gone.
 - [ ] **MUS-21: Port the ghost-row and operator fixes.** From `fa626e5` and
-  `96fd28b` in the Marshal repo. Done when: the roster has no ghost rows, and each
-  operator appears once.
+  `96fd28b` in the Marshal repo. Done when: the roster has no ghost rows, each
+  operator appears once, and a broadcast's delivered and failed counts add up to
+  its total, with any other outcome reported.
 - [ ] **MUS-22: Print nicknames at session start.** Done when: the operator can see
   which session is which without asking.
 - [ ] **MUS-23: Native board.** Stories stored in the daemon, shown in the TUI and
