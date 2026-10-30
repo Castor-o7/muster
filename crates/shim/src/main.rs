@@ -110,7 +110,11 @@ fn main() -> Result<()> {
         Some("claude-hook") => {
             let ep = argv.next().unwrap_or_else(|| "prompt-submit".to_string());
             let base = argv.next();
-            codex_hook::run_for(codex_hook::Harness::Claude, &ep, base.as_deref());
+            if ep == "wait" {
+                codex_hook::wait_hook(base.as_deref());
+            } else {
+                codex_hook::run_for(codex_hook::Harness::Claude, &ep, base.as_deref());
+            }
             return Ok(());
         }
         // Live inbox without the channels flag: Claude runs `muster-shim watch

@@ -117,13 +117,21 @@ claude mcp add -s user muster muster-shim
 
 Muster delivers direct messages through Claude Code **hooks**; no launch flag is needed. The plugin's `hooks/hooks.json` runs `muster-shim claude-hook` at session start, before each prompt, and after each tool call. Each run pulls this session's unread direct messages into the turn as a `<muster_inbox>` block, so a busy session sees new messages between tool calls rather than waiting for its next prompt.
 
+An idle session wakes by itself, even if nobody has typed to it yet. `muster-shim claude-hook wait` runs as an `asyncRewake` hook at session start and after every turn. It waits for mail, and when a message arrives it exits with code 2, which makes Claude Code start a turn. It uses no model turns while waiting, and it exits when its session does.
+
 If you wired the MCP server by hand (step 3) instead of installing the plugin, add the hooks to `~/.claude/settings.json` yourself:
 
 ```json
 {
   "hooks": {
     "SessionStart": [
-      { "hooks": [{ "type": "command", "command": "muster-shim claude-hook session-start", "timeout": 10 }] }
+      { "hooks": [
+        { "type": "command", "command": "muster-shim claude-hook session-start", "timeout": 10 },
+        { "type": "command", "command": "muster-shim claude-hook wait", "asyncRewake": true, "timeout": 2592000 }
+      ] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "muster-shim claude-hook wait", "asyncRewake": true, "timeout": 2592000 }] }
     ],
     "UserPromptSubmit": [
       { "hooks": [{ "type": "command", "command": "muster-shim claude-hook prompt-submit", "timeout": 10 }] }
@@ -139,7 +147,7 @@ The hooks find the daemon from this machine's pairing (step 2b), the same way th
 
 #### Optional: live push
 
-Hooks deliver at turn boundaries. For instant delivery into an idle session, Muster can also push through Claude Code's experimental `notifications/claude/channel` capability. While that capability is in research preview, Claude Code drops channel notifications from servers that aren't on its allowlist unless you opt in at launch:
+You don't need this: the hooks above already wake idle sessions. Muster can also push through Claude Code's experimental `notifications/claude/channel` capability. While that capability is in research preview, Claude Code drops channel notifications from servers that aren't on its allowlist unless you opt in at launch:
 
 ```bash
 # If you installed via the plugin (recommended)

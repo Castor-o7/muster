@@ -174,6 +174,7 @@ fn shipped_hooks_answer_for_the_event_they_are_registered_under() {
     for event in ["SessionStart", "UserPromptSubmit", "PostToolUse"] {
         assert!(events.contains_key(event), "hooks.json is missing {event}");
     }
+    let mut waiter_events = Vec::new();
     for (event, groups) in events {
         for group in groups.as_array().unwrap() {
             for hook in group["hooks"].as_array().unwrap() {
@@ -183,10 +184,83 @@ fn shipped_hooks_answer_for_the_event_they_are_registered_under() {
                 let args: Vec<&str> = words.collect();
                 assert_eq!(args.first(), Some(&"claude-hook"), "{command}");
 
+                // The waiter answers by exiting 2, not with JSON; it has its
+                // own tests below.
+                if args.get(1) == Some(&"wait") {
+                    assert_eq!(hook["asyncRewake"], true, "{event}: {command}");
+                    waiter_events.push(event.as_str());
+                    continue;
+                }
+
                 let (base, _seen) = fake_hook_listener("<muster_session/>");
                 let stdout = run_hook(&args, &base);
                 additional_context(&stdout, event);
             }
         }
     }
+    waiter_events.sort_unstable();
+    assert_eq!(waiter_events, ["SessionStart", "Stop"]);
+}
+
+/// A config dir of its own, so a test's waiter lock stays out of the real one.
+fn temp_config(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("muster-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+fn spawn_waiter(base: &str, config: &std::path::Path) -> std::process::Child {
+    let mut child = Command::new(SHIM)
+        .args(["claude-hook", "wait"])
+        .env("MUSTER_BASE_URL", base)
+        .env("XDG_CONFIG_HOME", config)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn muster-shim claude-hook wait");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(HOOK_INPUT.as_bytes())
+        .unwrap();
+    child
+}
+
+#[test]
+fn waiter_prints_mail_to_stderr_and_exits_2() {
+    let inbox = "<muster_inbox count=\"1\">\n- from peer: hi\n</muster_inbox>\n";
+    let (base, seen) = fake_hook_listener(inbox);
+    let config = temp_config("waiter-mail");
+    let out = spawn_waiter(&base, &config).wait_with_output().unwrap();
+    let seen = seen.recv_timeout(Duration::from_secs(5)).unwrap();
+
+    assert!(
+        seen.request_line.starts_with("POST /hook/wait?"),
+        "{}",
+        seen.request_line
+    );
+    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(
+        String::from_utf8(out.stderr).unwrap().trim_end(),
+        inbox.trim_end()
+    );
+}
+
+#[test]
+fn second_waiter_for_a_session_exits_quietly() {
+    // Accepts the first waiter's connection and never answers, so it stays.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let config = temp_config("waiter-lock");
+    let mut first = spawn_waiter(&base, &config);
+    let _held = listener.accept().unwrap();
+
+    let second = spawn_waiter(&base, &config).wait_with_output().unwrap();
+    let _ = first.kill();
+    let _ = first.wait();
+    assert_eq!(second.status.code(), Some(0));
+    assert!(second.stderr.is_empty());
 }

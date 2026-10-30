@@ -143,30 +143,100 @@ pub fn watch(session_id: &str, base_override: Option<&str>, once: bool) {
     let cwd = std::env::current_dir()
         .map(|p| p.display().to_string())
         .unwrap_or_default();
+    wait_for_mail(session_id, &cwd, base_override, once, |resp| {
+        let wrapped = wrap_long_lines(resp, WATCH_LINE_CHARS);
+        for (i, chunk) in event_chunks(&wrapped, WATCH_EVENT_CHARS).iter().enumerate() {
+            if i > 0 {
+                std::thread::sleep(WATCH_EVENT_GAP);
+            }
+            let mut out = std::io::stdout().lock();
+            let _ = writeln!(out, "{chunk}");
+            let _ = out.flush();
+        }
+    });
+}
+
+/// `muster-shim claude-hook wait` — the flag-free wake for Claude Code, run as
+/// an `asyncRewake` hook on SessionStart and Stop. It holds a `/hook/wait`
+/// long-poll and, when mail arrives, prints it to stderr and exits 2, which
+/// starts a turn even in a session nobody has typed to. Stop runs it again, so
+/// no agent has to keep anything armed. Stop fires every turn, so a per-session
+/// lock keeps it to one waiter; the lock is released whenever the process ends.
+pub fn wait_hook(base_override: Option<&str>) {
+    let mut input = String::new();
+    let _ = std::io::stdin().read_to_string(&mut input);
+    let v: serde_json::Value =
+        serde_json::from_str(input.trim()).unwrap_or(serde_json::Value::Null);
+    let sid = v.get("session_id").and_then(|s| s.as_str()).unwrap_or("");
+    if sid.is_empty() {
+        return;
+    }
+    let cwd = v.get("cwd").and_then(|s| s.as_str()).unwrap_or("");
+    let Some(_lock) = waiter_lock(sid) else {
+        return;
+    };
+    let delivered = wait_for_mail(sid, cwd, base_override, true, |resp| {
+        eprintln!("{resp}");
+    });
+    if delivered {
+        std::process::exit(2);
+    }
+}
+
+/// Take this session's waiter lock, or `None` if another waiter holds it.
+fn waiter_lock(session_id: &str) -> Option<std::fs::File> {
+    let name = format!("waiter-{session_id}");
+    let path = crate::config_file_candidates(&name).into_iter().next()?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).ok()?;
+    }
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+        .ok()?;
+    file.try_lock().ok()?;
+    Some(file)
+}
+
+/// Long-poll `/hook/wait`, handing each delivery to `deliver`. Returns true
+/// after the first delivery when `once`, and false if the parent went away
+/// first. Without `once` it runs until killed.
+fn wait_for_mail(
+    session_id: &str,
+    cwd: &str,
+    base_override: Option<&str>,
+    once: bool,
+    deliver: impl Fn(&str),
+) -> bool {
+    // A one-shot waiter only notices its parent is gone between polls, and until
+    // then it could take mail for a closed session, so it polls more often.
+    let wait = if once { ONCE_WAIT } else { WATCH_WAIT };
     let body = format!(
         "{{\"session_id\":{},\"cwd\":{}}}",
         json_str(session_id),
-        json_str(&cwd)
+        json_str(cwd)
     );
     let path = format!(
         "/hook/wait?host={}&operator={}&harness=claude&timeout={}",
         url_q(&short_host()),
         url_q(&operator()),
-        WATCH_WAIT.as_secs()
+        wait.as_secs()
     );
     let base = resolve_base(base_override);
     let explicit = base_override.is_some_and(|b| !b.is_empty())
         || std::env::var("MUSTER_BASE_URL").is_ok_and(|b| !b.is_empty());
     // The daemon answers within `WATCH_WAIT`; the read timeout only has to
     // outlast it, so a daemon that vanished mid-wait is noticed.
-    let timeout = WATCH_WAIT + Duration::from_secs(30);
+    let timeout = wait + Duration::from_secs(30);
     // Report only the change into failure: stdout would wake the session, and
     // repeating it every retry would just bury the Monitor's output file.
     let mut failing = false;
     let parent = parent_pid();
     loop {
         if once && parent_pid() != parent {
-            return;
+            return false;
         }
         let response = match crate::link::load_pairing().filter(|_| !explicit) {
             Some(pairing) => crate::link::https_post(&pairing, &path, &body, timeout),
@@ -177,17 +247,9 @@ pub fn watch(session_id: &str, base_override: Option<&str>, once: bool) {
                 failing = false;
                 let resp = resp.trim_end_matches(['\n', '\r', ' ']);
                 if !resp.is_empty() {
-                    let wrapped = wrap_long_lines(resp, WATCH_LINE_CHARS);
-                    for (i, chunk) in event_chunks(&wrapped, WATCH_EVENT_CHARS).iter().enumerate() {
-                        if i > 0 {
-                            std::thread::sleep(WATCH_EVENT_GAP);
-                        }
-                        let mut out = std::io::stdout().lock();
-                        let _ = writeln!(out, "{chunk}");
-                        let _ = out.flush();
-                    }
+                    deliver(resp);
                     if once {
-                        return;
+                        return true;
                     }
                 }
             }
@@ -218,6 +280,7 @@ fn parent_pid() -> Option<u32> {
 /// How long one `watch` long-poll asks the daemon to hold, and how long to
 /// back off when the daemon can't be reached.
 const WATCH_WAIT: Duration = Duration::from_secs(240);
+const ONCE_WAIT: Duration = Duration::from_secs(30);
 const WATCH_RETRY: Duration = Duration::from_secs(5);
 /// Longest line `watch` prints. Monitor cuts an event's line at about 500
 /// characters, so a longer one would reach the session with its end missing.
