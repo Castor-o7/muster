@@ -167,9 +167,15 @@ pub fn watch(session_id: &str, base_override: Option<&str>) {
                 failing = false;
                 let resp = resp.trim_end_matches(['\n', '\r', ' ']);
                 if !resp.is_empty() {
-                    let mut out = std::io::stdout().lock();
-                    let _ = writeln!(out, "{resp}");
-                    let _ = out.flush();
+                    let wrapped = wrap_long_lines(resp, WATCH_LINE_CHARS);
+                    for (i, chunk) in event_chunks(&wrapped, WATCH_EVENT_CHARS).iter().enumerate() {
+                        if i > 0 {
+                            std::thread::sleep(WATCH_EVENT_GAP);
+                        }
+                        let mut out = std::io::stdout().lock();
+                        let _ = writeln!(out, "{chunk}");
+                        let _ = out.flush();
+                    }
                 }
             }
             None => {
@@ -187,6 +193,60 @@ pub fn watch(session_id: &str, base_override: Option<&str>) {
 /// back off when the daemon can't be reached.
 const WATCH_WAIT: Duration = Duration::from_secs(240);
 const WATCH_RETRY: Duration = Duration::from_secs(5);
+/// Longest line `watch` prints. Monitor cuts an event's line at about 500
+/// characters, so a longer one would reach the session with its end missing.
+const WATCH_LINE_CHARS: usize = 400;
+/// Longest single Monitor event. Monitor also cuts a whole event at about 3,000
+/// characters, and joins lines printed within 200ms into one event, so a large
+/// batch goes out in pieces with a pause between them.
+const WATCH_EVENT_CHARS: usize = 2_500;
+const WATCH_EVENT_GAP: Duration = Duration::from_millis(400);
+
+/// Group whole lines into chunks of at most `max` characters. A single longer
+/// line gets its own chunk; `wrap_long_lines` keeps that from happening here.
+fn event_chunks(text: &str, max: usize) -> Vec<String> {
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    let mut current_chars = 0;
+    for line in text.split('\n') {
+        let chars = line.chars().count();
+        if current_chars > 0 && current_chars + 1 + chars > max {
+            chunks.push(std::mem::take(&mut current));
+            current_chars = 0;
+        }
+        if current_chars > 0 {
+            current.push('\n');
+            current_chars += 1;
+        }
+        current.push_str(line);
+        current_chars += chars;
+    }
+    chunks.push(current);
+    chunks
+}
+
+/// Break lines longer than `max` characters, at a space when there is one.
+fn wrap_long_lines(text: &str, max: usize) -> String {
+    let mut out = String::with_capacity(text.len());
+    for (i, line) in text.split('\n').enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        let mut rest = line;
+        while let Some((limit, _)) = rest.char_indices().nth(max) {
+            // A space at the very start would leave an empty line behind.
+            let cut = match rest[..limit].rfind(' ') {
+                Some(space) if space > 0 => space,
+                _ => limit,
+            };
+            out.push_str(&rest[..cut]);
+            out.push('\n');
+            rest = rest[cut..].strip_prefix(' ').unwrap_or(&rest[cut..]);
+        }
+        out.push_str(rest);
+    }
+    out
+}
 
 /// Register a Codex app-server thread without asking the daemon to surface
 /// context. The long-lived bridge calls this from `thread/started`, before the
@@ -349,6 +409,40 @@ fn url_q(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn event_chunks_keep_lines_whole_and_under_the_limit() {
+        assert_eq!(
+            event_chunks("aaaa\nbbbb\ncc\ndddddd", 9),
+            ["aaaa\nbbbb", "cc\ndddddd"]
+        );
+    }
+
+    #[test]
+    fn event_chunks_lose_nothing() {
+        let text = "one\n\ntwo\nthree";
+        assert_eq!(event_chunks(text, 5).join("\n"), text);
+        assert_eq!(event_chunks("", 5), [""]);
+    }
+
+    #[test]
+    fn wrap_long_lines_keeps_every_word_under_the_limit() {
+        let text = "one two three four\nshort";
+        let wrapped = wrap_long_lines(text, 9);
+        assert_eq!(wrapped, "one two\nthree\nfour\nshort");
+    }
+
+    #[test]
+    fn wrap_long_lines_splits_a_long_word_on_a_char_boundary() {
+        let wrapped = wrap_long_lines("ééééé", 2);
+        assert_eq!(wrapped, "éé\néé\né");
+    }
+
+    #[test]
+    fn wrap_long_lines_leaves_short_text_alone() {
+        let text = "<muster_inbox count=\"1\">\n- from a: hi\n</muster_inbox>";
+        assert_eq!(wrap_long_lines(text, 400), text);
+    }
 
     #[test]
     fn hook_requests_preserve_the_non_default_port_in_host() {

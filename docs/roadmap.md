@@ -39,6 +39,10 @@ evidence from a real run by the person or team named.
   during live-delivery testing. Done when: an unpaired Linux host's watcher wakes
   on a message with no explicit URL. Evidence: `090b2a9`, tested on Murph by
   crimson-avocet.
+- [ ] **MUS-27: Deliver long messages whole through the watcher.** Monitor cuts
+  a line at about 500 characters and an event at about 3,000. Done when: a message
+  up to the daemon's 2,000-character limit reaches an idle session complete. Needs
+  a run: the Muster team, with a peer sending.
 - [ ] **MUS-26: Keep `current_task` fresh.** It can go stale: one session showed
   `feature/comments` while on `feature/search`. Done when: the roster's task
   follows the branch, unless a session has set its own text.
@@ -100,8 +104,9 @@ evidence from a real run by the person or team named.
 - [ ] **MUS-22: Print nicknames at session start.** Done when: the operator can see
   which session is which without asking.
 - [ ] **MUS-23: Native board.** Stories stored in the daemon, shown in the TUI and
-  web UI, with commands to claim a story and submit it for review. Wait for MUS-5,
-  and use what the Version 0 board teaches. Done when: the watchman no longer needs
+  web UI, with commands to claim a story and submit it for review. Merged and
+  Verified are independent, so it needs a merge field too. Wait for MUS-5, and use
+  what the Version 0 board teaches. Done when: the watchman no longer needs
   the hand-kept table.
 - [ ] **MUS-24: Stretch goals.** Once the operator has listed them. Not ready to
   claim yet.
