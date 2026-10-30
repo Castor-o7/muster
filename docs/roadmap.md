@@ -34,7 +34,7 @@ evidence from a real run by the person or team named.
   that: it costs no model turns while idle, and Stop restarts it after every turn. Done when: a session idle overnight still wakes on a
   message, and an idle session uses at most 2 model turns per hour, with 0 as the
   target. Needs a run: the Muster team, overnight.
-- [ ] **MUS-2: Close the first-prompt gap.** The same hook runs on SessionStart.
+- [x] **MUS-2: Close the first-prompt gap.** The same hook runs on SessionStart.
   Done when: a restarted session wakes on a message before anyone has typed to it.
   Needs a run: the Muster team, on both machines.
 - [ ] **MUS-3: Stable identity across restarts.** Done when: a session keeps its
@@ -45,7 +45,7 @@ evidence from a real run by the person or team named.
   during live-delivery testing. Done when: an unpaired Linux host's watcher wakes
   on a message with no explicit URL. Evidence: `090b2a9`, tested on Murph by
   crimson-avocet.
-- [ ] **MUS-27: Deliver long messages whole through the watcher.** Monitor cuts
+- [x] **MUS-27: Deliver long messages whole through the watcher.** Monitor cuts
   a line at about 500 characters and an event at about 3,000. Done when: a message
   up to the daemon's 2,000-character limit reaches an idle session complete. Needs
   a run: the Muster team, with a peer sending.
@@ -99,7 +99,8 @@ evidence from a real run by the person or team named.
 - [ ] **MUS-13: Run CI on macOS.** Done when: CI runs on macOS and passes,
   including `recovery_tracks_codex_effective_working_directory`, which fails on
   macOS today.
-- [ ] **MUS-14: Publish prebuilt binaries.** Done when: macOS and Linux can
+- [ ] **MUS-14: Publish prebuilt binaries.** There are no releases yet, so
+  `scripts/install-codex.sh` can't work and the plugins aren't on npm. Done when: macOS and Linux can
   install without a Rust toolchain.
 - [ ] **MUS-15: One-command setup.** Done when: one command sets up a new machine,
   `muster doctor` reports what's wrong, and launchd and systemd units keep the
@@ -114,8 +115,7 @@ evidence from a real run by the person or team named.
 - [ ] **MUS-18: Extend pairing to Codex.** Codex goes through the Rust shim. Done
   when: Codex can connect through the gate. The Pi, opencode and Prime Agent plugins
   are left out under the language decision.
-- [ ] **MUS-19: Fix stale docs.** The README still says `ws://localhost:6255`,
-  which now requires TLS. Done when: following the README on a clean machine works. Needs a run: the Muster team, on a clean machine.
+- [ ] **MUS-19: Fix stale docs.** Most were corrected on 2026-10-30. Done when: following the README on a clean machine works. Needs a run: the Muster team, on a clean machine.
 
 ## Phase 4: Coordination
 

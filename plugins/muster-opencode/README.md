@@ -17,7 +17,7 @@ It talks to the daemon with [`@myko/core`](https://www.npmjs.com/package/@myko/c
 
 ## Requirements
 
-- A reachable `muster-daemon` (see the [top-level README](../../README.md)). The plugin defaults to `ws://localhost:6255`.
+- A reachable `muster-daemon` (see the [top-level README](../../README.md)). The plugin defaults to `ws://localhost:6257`, so run it on the daemon's own host: it can't use the TLS gate yet.
 - opencode (the plugin runs under opencode's Bun runtime).
 
 ## Install
@@ -66,7 +66,7 @@ Set these in the environment opencode launches under:
 
 | Var | Default | Meaning |
 |---|---|---|
-| `MUSTER_DAEMON_ADDRESS` | `ws://localhost:6255` | daemon WebSocket URL (`MYKO_ADDRESS` honored as a fallback) |
+| `MUSTER_DAEMON_ADDRESS` | `ws://localhost:6257` | daemon WebSocket URL (`MYKO_ADDRESS` honored as a fallback) |
 | `MUSTER_OPERATOR` | `$USER` / `$USERNAME` | who this session belongs to (anchors the `op:*` room) |
 
 ## What you get
@@ -109,4 +109,4 @@ What's verified: typecheck against the real `@opencode-ai/plugin` + `@myko/core`
 - A pulse-deploy Ansible role to deploy + wire this on the fleet is a separate follow-up (parallel to `roles/muster_shim*`).
 - A couple of opencode-surface details (the exact field carrying the session id into `experimental.chat.system.transform`, and toast variant names) are handled defensively; verify against the opencode version you run.
 
-> Note: the daemon serves its WebSocket at the `/myko` path. The plugin accepts a bare `ws://host:6255` (the fleet convention) and appends `/myko` automatically — see `withMykoPath` in `src/daemon.ts`.
+> Note: the daemon serves its WebSocket at the `/myko` path. The plugin accepts a bare `ws://localhost:6257` (the fleet convention) and appends `/myko` automatically — see `withMykoPath` in `src/daemon.ts`.

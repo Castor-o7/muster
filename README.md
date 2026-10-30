@@ -178,12 +178,14 @@ the hooks when you don't.
 
 ### Pi: native extension
 
+Pi, Prime Agent and opencode connect over plain WebSocket, so they need to run on the daemon's own host, using `ws://localhost:6257`. They can't use the TLS gate on 6255 yet, and these plugins aren't published to npm, so install from a checkout of this repository.
+
 After starting a reachable daemon, install the published
-[`muster-pi`](https://www.npmjs.com/package/muster-pi)
+[`muster-pi`](plugins/muster-pi)
 package:
 
 ```bash
-pi install npm:muster-pi
+pi install ./plugins/muster-pi
 ```
 
 Restart Pi. The extension registers the session on the Muster roster, adds
@@ -192,10 +194,10 @@ Incoming messages are inserted into the visible transcript as steering input
 and start a turn when the recipient is idle. A durable inbox pull before each
 turn recovers messages received while disconnected.
 
-No MCP shim or launcher wrapper is required. To use a remote daemon:
+No MCP shim or launcher wrapper is required. The default address is `ws://localhost:6257`. To set it explicitly:
 
 ```bash
-export MUSTER_DAEMON_ADDRESS=ws://<muster-host>:6255
+export MUSTER_DAEMON_ADDRESS=ws://localhost:6257
 pi
 ```
 
@@ -208,7 +210,7 @@ tool, configuration, and development reference.
 Install the Prime Agent extension package after starting a reachable daemon:
 
 ```bash
-prime-agent package install npm:muster-prime-agent
+prime-agent package install ./plugins/muster-prime-agent
 ```
 
 Restart Prime Agent. The extension registers each top-level conversation on the
@@ -221,10 +223,10 @@ the recipient is idle. Messages received while disconnected are pulled from the
 durable inbox before the next turn.
 
 This is a dedicated Prime Agent package, separate from `muster-pi`; no MCP shim
-or launcher wrapper is needed. To use a remote daemon:
+or launcher wrapper is needed. The default address is `ws://localhost:6257`. To set it explicitly:
 
 ```bash
-export MUSTER_DAEMON_ADDRESS=ws://<muster-host>:6255
+export MUSTER_DAEMON_ADDRESS=ws://localhost:6257
 prime-agent
 ```
 
@@ -236,44 +238,20 @@ development loading, and delivery details.
 
 These steps give a laptop, workstation, or manually managed VM the same
 Muster behavior as an infrastructure-managed host. You need a reachable
-`muster-daemon`: use the daemon from step 2 above, or substitute the address
-of a shared daemon. Install the Codex CLI itself first and confirm that `codex`
+`muster-daemon` on the same host, from step 2 above: Codex can't use the TLS gate yet, so
+it can't reach a daemon on another machine (MUS-18). Install the Codex CLI itself first and confirm that `codex`
 is on `PATH`.
 
 #### 1. Install and wire the shim
 
-On Linux x86-64 or macOS, the release installer downloads the correct shim,
-copies it to `~/.local/bin`, adds the Muster MCP server and lifecycle hooks to
-`~/.codex/config.toml`, seeds the coordination instructions in
-`~/.codex/AGENTS.md`, and pre-trusts the hooks:
+Build `muster-shim` from source, then run setup. It adds the Muster MCP server and
+lifecycle hooks to `~/.codex/config.toml`, seeds the coordination instructions in
+`~/.codex/AGENTS.md`, and pre-trusts the hooks. This fork doesn't publish release
+binaries yet (MUS-14). Setup is idempotent, so rerun it to refresh the hooks or address.
 
 ```bash
-curl -fsSL \
-  https://github.com/Castor-o7/muster/releases/latest/download/install-codex.sh \
-  | sh -s -- --daemon ws://<muster-host>:6255
-```
-
-On Windows x64, run this from PowerShell:
-
-```powershell
-$download = Join-Path $env:TEMP 'muster-shim.exe'
-Invoke-WebRequest `
-  -Uri 'https://github.com/Castor-o7/muster/releases/latest/download/muster-shim-x86_64-pc-windows-gnu.exe' `
-  -OutFile $download
-& $download codex-setup --daemon 'ws://<muster-host>:6255'
-```
-
-Windows installs the stable copy under
-`%LOCALAPPDATA%\muster\bin` and adds that directory to the user `PATH`.
-Restart the shell after setup. Both commands are idempotent; rerun them to
-refresh the shim, hooks, or daemon address.
-
-For a source build, install `muster-shim` with Cargo and run the same setup
-command:
-
-```bash
-cargo install muster-shim
-muster-shim codex-setup --daemon ws://<muster-host>:6255
+cargo install --git https://github.com/Castor-o7/muster muster-shim
+muster-shim codex-setup --daemon ws://localhost:6257
 ```
 
 A normal `codex` launch now gets the Muster tools and pulls direct messages

@@ -7,7 +7,7 @@ Connects this Claude Code session to the [muster](https://github.com/Castor-o7/m
 This plugin assumes the `muster-shim` and `muster-daemon` binaries are already on your `PATH`. Install them once with:
 
 ```bash
-cargo install muster-shim muster-daemon
+cargo install --git https://github.com/Castor-o7/muster muster-shim muster-daemon
 ```
 
 Then start the daemon in a separate terminal (or your preferred process supervisor):
@@ -20,7 +20,7 @@ The plugin only registers the stdio MCP entry — it does not spawn the daemon f
 
 ## What you get
 
-Reads are MCP **resources**; writes are MCP **tools**. Sessions have no nickname — address peers by `session_id` (from `muster://roster`).
+Reads are MCP **resources**; writes are MCP **tools**. Each session has a nickname — address peers by nickname or `session_id` (from `muster://roster`).
 
 Resources (`resources/read`):
 
@@ -31,16 +31,17 @@ Resources (`resources/read`):
 
 Tools (`tools/call`):
 
-- `send_message(to, body)` — send to a peer by `session_id`
+- `send_message(to, body)` — send to a peer by nickname or `session_id`
 - `broadcast(to_room, body)` — fan-out to every member of a room
 - `join_room(room)` / `leave_room(room)` — create/join or leave an ad-hoc room
 - `set_status(text)` — set the free-form `current_task` text shown on the roster
 - `ack_messages(message_ids)` — mark messages read for this session
 
-Peer messages reach the session two ways:
+Peer messages reach the session these ways:
 
 - **Hook inbox (default, no flag needed).** The plugin's `hooks/hooks.json` runs `muster-shim claude-hook …` at session start, before each prompt, and after each tool call. Each run pulls this session's unread direct messages from the daemon into the turn as a `<muster_inbox>` block.
-- **Live channel (optional).** `notifications/claude/channel` events that surface in your transcript as `<channel>` blocks the moment a message arrives, even in an idle session. This needs Claude Code launched with `--dangerously-load-development-channels plugin:muster-shim@muster` while channels are in research preview. A message the live channel showed is marked read, so the hooks don't repeat it.
+- **Idle wake (default, no flag needed).** `muster-shim claude-hook wait` runs as an `asyncRewake` hook at session start and after every turn. It waits for mail and exits with code 2 when a message arrives, which starts a turn even in a session nobody has typed to. It uses no model turns while waiting.
+- **Live channel (optional, not needed).** `notifications/claude/channel` events that surface in your transcript as `<channel>` blocks the moment a message arrives, even in an idle session. This needs Claude Code launched with `--dangerously-load-development-channels plugin:muster-shim@muster` while channels are in research preview. A message the live channel showed is marked read, so the hooks don't repeat it.
 
 Both the shim and the hooks reach the daemon through its TLS gate (port **6255**), using this machine's pairing. Pair once with the command `muster-daemon pair` prints on the daemon's host:
 
@@ -78,29 +79,31 @@ Or run `/muster-statusline` to have the plugin merge the block into your user se
 /plugin install muster-shim@muster
 ```
 
-## Install — no plugin, declarative project config
+## Install — no plugin
 
-The plugin is optional. The MCP server and the statusLine renderer are both regular subcommands of the `muster-shim` binary, so a single project-tracked `.claude/settings.json` is enough to wire everything up — `git clone` and Claude Code picks it up on next open (after the trust prompt). No marketplace, no `/plugin install`, no per-machine config edits.
-
-Drop this at `<project>/.claude/settings.json`:
+The plugin is optional. `mcpServers` isn't a supported key in `settings.json`, so register the server in a project `.mcp.json` or your user `~/.claude.json`:
 
 ```json
 {
   "mcpServers": {
-    "muster": {
-      "command": "muster-shim",
-      "env": {
-        "MUSTER_DAEMON_ADDRESS": "${MUSTER_DAEMON_ADDRESS:-ws://localhost:6255}"
-      }
-    }
-  },
-  "statusLine": {
-    "type": "command",
-    "command": "muster-shim statusline"
-  },
+    "muster": { "command": "muster-shim" }
+  }
+}
+```
+
+Then add the hooks to a `settings.json` Claude Code reads:
+
+```json
+{
   "hooks": {
     "SessionStart": [
-      { "hooks": [{ "type": "command", "command": "muster-shim claude-hook session-start", "timeout": 10 }] }
+      { "hooks": [
+        { "type": "command", "command": "muster-shim claude-hook session-start", "timeout": 10 },
+        { "type": "command", "command": "muster-shim claude-hook wait", "asyncRewake": true, "timeout": 2592000 }
+      ] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "muster-shim claude-hook wait", "asyncRewake": true, "timeout": 2592000 }] }
     ],
     "UserPromptSubmit": [
       { "hooks": [{ "type": "command", "command": "muster-shim claude-hook prompt-submit", "timeout": 10 }] }
@@ -112,30 +115,8 @@ Drop this at `<project>/.claude/settings.json`:
 }
 ```
 
-The `hooks` block is the hook inbox described above; leave it out if you only want the live channel.
-
-Prereq is the same as the plugin path — `cargo install muster-shim muster-daemon` once per machine so the binaries are on `PATH`.
-
 ## Pointing at a non-default daemon
 
-By default the shim connects to `ws://localhost:6255`. To talk to a daemon on another host or port, set `MUSTER_DAEMON_ADDRESS` in your shell before starting Claude Code:
-
-```bash
-export MUSTER_DAEMON_ADDRESS=ws://my-daemon-host:6255
-```
-
-The plugin's `.mcp.json` plumbs the value through to the spawned shim with a `${MUSTER_DAEMON_ADDRESS:-ws://localhost:6255}` fallback, so an unset variable just keeps the localhost default.
-
-For a per-project override, drop a `.mcp.json` at your project root that pins the env block:
-
-```json
-{
-  "mcpServers": {
-    "muster": {
-      "env": { "MUSTER_DAEMON_ADDRESS": "ws://10.0.0.5:6255" }
-    }
-  }
-}
-```
+A paired machine finds the daemon from its pairing, so it needs nothing here. An unpaired shim on the daemon's own host connects to `ws://localhost:6257`. `MUSTER_DAEMON_ADDRESS` overrides that address for an unpaired shim, and the plugin's `.mcp.json` passes it through.
 
 The legacy `MYKO_ADDRESS` env var is still honored as a fallback for older configs.
