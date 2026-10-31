@@ -144,6 +144,20 @@ evidence from a real run by the person or team named.
   its total, with any other outcome reported.
 - [ ] **MUS-22: Print nicknames at session start.** Done when: the operator can see
   which session is which without asking.
+- [ ] **MUS-36: Message every active team from a terminal.** Requested by the operator
+  on 2026-10-31. A Rust command for the operator, for example `muster-shim all "<message>"`.
+  The web console can already broadcast, but not from a terminal. Active means a session
+  the daemon sees as live, including an idle one that can be woken. Done when: from a
+  terminal on a1 or Murph, one command reaches every active team on both machines and
+  wakes the idle ones; reaped sessions get nothing; the output names who received it and
+  who didn't; and recipients see it as from the operator. A session can't send that way
+  (needs MUS-5 and MUS-6).
+- [ ] **MUS-37: Message one team directly from a terminal.** Requested by the operator on
+  2026-10-31. The same command as MUS-36, for example `muster-shim tell <team> "<message>"`,
+  without being inside a Claude session. Takes a team name, nickname or session id. Done
+  when: from another terminal on either machine, a message reaches that team and wakes it
+  if idle; a team with several sessions gets one clear result for each; an unknown or
+  ambiguous name is refused, not guessed; and the sender is attested as in MUS-36.
 - [ ] **MUS-32: Design the muster ledger.** The muster's best current picture of who
   is doing what, kept as a myko service, so that no agent or team gets lost in the din,
   watchman included. It records and informs; it doesn't command. It's a best estimate
