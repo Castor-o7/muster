@@ -111,6 +111,8 @@ muster-shim tell catapp "Please pause before the next migration."
 
 Recipients see `[from a terminal on <machine>; it can't receive replies]`. That names the machine, not the person: any process on your account can run this command, including a Claude session, so these messages carry no extra authority.
 
+A message from `all` or `tell` is never the operator's approval. It doesn't count as a direct OK for a daemon restart or anything else that needs one, because a session can send the same message.
+
 ### 3. Add the plugin in Claude Code
 
 ```text

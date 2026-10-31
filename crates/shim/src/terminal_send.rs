@@ -9,6 +9,7 @@
 //!
 //! The gate attests the machine, not the person: any process on this account can
 //! run this command, so the label says which machine and carries no authority.
+//! It is never the operator's approval for a restart or anything similar.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
