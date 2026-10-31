@@ -150,14 +150,21 @@ evidence from a real run by the person or team named.
   the daemon sees as live, including an idle one that can be woken. Done when: from a
   terminal on a1 or Murph, one command reaches every active team on both machines and
   wakes the idle ones; reaped sessions get nothing; the output names who received it and
-  who didn't; and recipients see it as from the operator. A session can't send that way
-  (needs MUS-5 and MUS-6).
+  who didn't; and recipients see which machine sent it. That label is the machine, not
+  the person (see MUS-39). Needs a run: installed on both machines.
 - [ ] **MUS-37: Message one team directly from a terminal.** Requested by the operator on
   2026-10-31. The same command as MUS-36, for example `muster-shim tell <team> "<message>"`,
   without being inside a Claude session. Takes a team name, nickname or session id. Done
   when: from another terminal on either machine, a message reaches that team and wakes it
   if idle; a team with several sessions gets one clear result for each; an unknown or
-  ambiguous name is refused, not guessed; and the sender is attested as in MUS-36.
+  ambiguous name is refused, not guessed; and the label is as in MUS-36.
+- [ ] **MUS-39: Show that a terminal message came from the operator.** Found building
+  MUS-36. A session runs as the same account as the operator's terminal, so it can read
+  the pairing token and run the same command; MUS-5 and MUS-6 don't change that. Telling
+  them apart needs something a session can't reach, such as a key that needs the
+  operator's touch or passphrase. Until then these messages carry no extra authority.
+  Done when: a session on the operator's own account can't produce a message recipients
+  see as from the operator, shown by a test that tries.
 - [ ] **MUS-38: Muster team name not displaying correctly (adjective-animal).** Reported
   by the operator on 2026-10-31. Sessions show an adjective-animal nickname. The cause,
   and where the wrong name appears, aren't confirmed yet; the first step is to confirm

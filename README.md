@@ -98,6 +98,19 @@ It prints a `muster-shim pair muster-pair:v1:…` command. Run that on the machi
 
 A paired shim never sends anything unencrypted. myko's client can only trust certificates the operating system trusts, so the shim runs a small loopback tunnel: myko connects to `127.0.0.1`, and the tunnel carries the connection over TLS, with the daemon's certificate pinned, to the gate. The hooks make the same pinned TLS connection themselves. Codex, Pi, opencode and Prime Agent clients don't support pairing yet.
 
+### 2c. Message the muster from a terminal
+
+From any terminal on a paired machine, or on the daemon's own host, outside a Claude session:
+
+```bash
+muster-shim all "Full agenda today, please send your status."
+muster-shim tell catapp "Please pause before the next migration."
+```
+
+`all` reaches every session on the roster, and `tell` takes a team name, nickname or session id. Each session gets a direct message, which wakes it if idle, and you get one line per session. An unknown or ambiguous name is refused. The exit status is non-zero if anything wasn't sent.
+
+Recipients see `[from a terminal on <machine>; it can't receive replies]`. That names the machine, not the person: any process on your account can run this command, including a Claude session, so these messages carry no extra authority.
+
 ### 3. Add the plugin in Claude Code
 
 ```text

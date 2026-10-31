@@ -18,6 +18,7 @@ mod link;
 mod mcp;
 mod session_discovery;
 mod statusline;
+mod terminal_send;
 mod tools;
 
 use anyhow::{Context, Result};
@@ -133,6 +134,19 @@ fn main() -> Result<()> {
             codex_hook::watch(&sid, base.as_deref(), once);
             return Ok(());
         }
+        // Message the muster from a terminal, outside any session. See
+        // `terminal_send`.
+        Some("all") => {
+            let body = argv.collect::<Vec<_>>().join(" ");
+            return run_terminal_send(terminal_send::Target::All, body);
+        }
+        Some("tell") => {
+            let target = argv
+                .next()
+                .context("usage: muster-shim tell <team, nickname or session id> <message>")?;
+            let body = argv.collect::<Vec<_>>().join(" ");
+            return run_terminal_send(terminal_send::Target::Named(target), body);
+        }
         // Store the code `muster-daemon pair` printed, so this machine reaches
         // the daemon through its TLS gate. See `link`.
         Some("pair") => {
@@ -201,6 +215,40 @@ fn main() -> Result<()> {
         .block_on(serve())
 }
 
+fn run_terminal_send(target: terminal_send::Target, body: String) -> Result<()> {
+    anyhow::ensure!(!body.trim().is_empty(), "there's no message to send");
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("building tokio runtime")?
+        .block_on(terminal_send::run(target, body))
+}
+
+/// Where to reach the daemon; see the resolution order at the call in `serve`.
+async fn daemon_address() -> Result<String> {
+    Ok(match link::load_pairing() {
+        Some(pairing) => {
+            let port = link::start_tunnel(&pairing)
+                .await
+                .context("starting the TLS tunnel to the paired daemon")?;
+            log::info!(
+                "[muster-shim] paired as {}: connecting to {} over TLS",
+                pairing.name,
+                pairing.address
+            );
+            format!("ws://127.0.0.1:{port}/myko?token={}", pairing.token)
+        }
+        None => {
+            let address = read_address_from_config_file()
+                .or_else(|| std::env::var(ADDRESS_ENV).ok())
+                .or_else(|| std::env::var(ADDRESS_ENV_LEGACY).ok())
+                .unwrap_or_else(|| DEFAULT_DAEMON_ADDRESS.to_string());
+            log::info!("[muster-shim] not paired: connecting to {address} without TLS");
+            address
+        }
+    })
+}
+
 async fn serve() -> Result<()> {
     // Capture the spawner's pid FIRST — before any other startup work — so
     // the parent-death watchdog below baselines against the real spawner.
@@ -234,27 +282,7 @@ async fn serve() -> Result<()> {
     // A pairing (`muster-shim pair`) wins over all of these: myko's client
     // dials a loopback tunnel that carries the connection over pinned TLS to
     // the daemon's gate, with the access token in the URL.
-    let daemon_address = match link::load_pairing() {
-        Some(pairing) => {
-            let port = link::start_tunnel(&pairing)
-                .await
-                .context("starting the TLS tunnel to the paired daemon")?;
-            log::info!(
-                "[muster-shim] paired as {}: connecting to {} over TLS",
-                pairing.name,
-                pairing.address
-            );
-            format!("ws://127.0.0.1:{port}/myko?token={}", pairing.token)
-        }
-        None => {
-            let address = read_address_from_config_file()
-                .or_else(|| std::env::var(ADDRESS_ENV).ok())
-                .or_else(|| std::env::var(ADDRESS_ENV_LEGACY).ok())
-                .unwrap_or_else(|| DEFAULT_DAEMON_ADDRESS.to_string());
-            log::info!("[muster-shim] not paired: connecting to {address} without TLS");
-            address
-        }
-    };
+    let daemon_address = daemon_address().await?;
 
     let client = Arc::new(MykoClient::new());
 
