@@ -222,6 +222,7 @@ fn send_message_delivers_then_persists_when_recipient_is_live() {
         to_session_id: SessionId(Arc::from("sess-bravo")),
         body: "hello bravo".into(),
         as_session: None, // WS path: sender resolved from the connection
+        idempotency_key: None,
     };
     let response_cell = client_a.send_command::<SendMessage, SendMessageResult>(&cmd);
 
@@ -367,6 +368,7 @@ fn live_client_with_channels_off_is_not_delivered_live() {
         to_session_id: SessionId(Arc::from("sess-bravo-off")),
         body: "to a flag-off live client".into(),
         as_session: None,
+        idempotency_key: None,
     };
     let response_cell = client_a.send_command::<SendMessage, SendMessageResult>(&cmd);
     {
@@ -477,6 +479,7 @@ fn human_addressed_push_content_carries_the_relay_contract() {
         to_session_id: SessionId(Arc::from("max@lucid.rocks")),
         body: "please approve PR #527".into(),
         as_session: None,
+        idempotency_key: None,
     };
     let response_cell = client_a.send_command::<SendMessage, SendMessageResult>(&cmd);
     {

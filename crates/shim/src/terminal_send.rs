@@ -211,6 +211,7 @@ async fn send_all(
             to_session_id: session.id.clone(),
             body: body.clone(),
             as_session: Some(from.clone()),
+            idempotency_key: None,
         });
         let result = crate::tools::await_command(cell, SEND_TIMEOUT).await;
         let name = handle(nicknames, session);

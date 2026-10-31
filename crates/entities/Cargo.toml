@@ -38,7 +38,7 @@ serde_json = "1"
 chrono = { workspace = true }
 myko = { workspace = true }
 myko-macros = { workspace = true }
-uuid = { version = "1", features = ["v7"] }
+uuid = { version = "1", features = ["v5", "v7"] }
 log = { workspace = true }
 # Pairing codes (`pairing`): shared by the daemon and the shim.
 base64 = "0.22"
