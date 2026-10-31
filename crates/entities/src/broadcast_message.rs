@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    message::{CONTEXT_BODY_MAX_CHARS, Message, MessageId, context_preview},
+    message::{CONTEXT_BODY_MAX_CHARS, Message, MessageId, body_too_large, context_preview},
     room::{GetAllRooms, Room, RoomId},
     room_member::{GetAllRoomMembers, RoomMember},
     session::{GetAllSessions, Session, SessionId, resolve_caller},
@@ -90,6 +90,9 @@ impl CommandHandler for BroadcastMessage {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn execute(self, ctx: CommandContext) -> Result<Self::Result, CommandError> {
+        if let Some(refusal) = body_too_large(&self.body) {
+            return Err(err(&ctx, &refusal));
+        }
         // Resolve sender — WS connection (shim) or self-identified
         // `asSession` (HTTP-MCP agent). Same path as SendMessage.
         let sessions: Vec<Arc<Session>> = ctx.exec_query(GetAllSessions {})?;

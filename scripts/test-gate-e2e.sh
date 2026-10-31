@@ -136,6 +136,20 @@ sleep 3
 MAIL=$(RAWWAIT)
 check "and the mail still comes" '[[ $MAIL == *"forged ack"* ]]'
 
+# Unpairing ends a machine's open long-poll, rather than leaving it running.
+LATE=$(T $BIN/muster-daemon pair --name late 2>/dev/null | awk '{print $3}')
+LATE_TOKEN=$(python3 -I -c 'import sys,json,base64; s=sys.argv[1].split(":",2)[2]; print(json.loads(base64.urlsafe_b64decode(s+"="*(-len(s)%4)))["token"])' "$LATE")
+curl -sk -m 60 -o /dev/null -H "Authorization: Bearer $LATE_TOKEN" -X POST "https://127.0.0.1:16255/hook/wait?timeout=50" -d '{"session_id":"a0000000-0000-4000-8000-000000000009","cwd":"/tmp/late"}' &
+LATE_PID=$!
+sleep 1; T $BIN/muster-daemon unpair late >/dev/null; sleep 7
+check "unpair closes an open long-poll within seconds" '! kill -0 $LATE_PID 2>/dev/null'
+kill $LATE_PID 2>/dev/null; wait $LATE_PID 2>/dev/null
+
+# An oversized body is refused before it's stored.
+BIG=$(python3 -I -c 'print("x"*70000)')
+OUT=$(T $BIN/muster-shim tell demo "$BIG" 2>&1); RC=$?
+check "an oversized message is refused" '[[ $RC != 0 && $OUT == *"byte limit"* ]]'
+
 # A hook port that can't bind stops the daemon, rather than leaving hooks dead.
 env MUSTER_STATE_DIR=$WORK/state2 MUSTER_BIND=127.0.0.1:16355 MUSTER_INTERNAL_BIND=127.0.0.1:16357 RUST_LOG=error perl -e 'alarm 10; exec @ARGV' $BIN/muster-daemon >$WORK/bind.log 2>&1; RC=$?
 check "a failed hook bind stops the daemon and says why" '[[ $RC != 0 && $RC != 142 ]] && grep -q "hook listener on 127.0.0.1:16256" $WORK/bind.log'

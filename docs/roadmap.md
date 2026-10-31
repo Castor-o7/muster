@@ -93,9 +93,20 @@ evidence from a real run by the person or team named.
   `/hook/wait` opened before `unpair` keeps running for up to 10 minutes; and oversized
   message bodies can break a peer's `ReadMessages`. Done when: each is fixed or recorded
   as accepted, with a test for each fix.
-- [ ] **MUS-6: Verify `operator` and `host` on the daemon.** The client supplies
+  Fixed: a future `lastActivityAt` no longer wins operator mail, `unpair` and the daemon
+  lock the bindings across processes, `unpair` closes open connections within seconds, and
+  bodies over 64 KiB are refused. Accepted for now: a compromised machine can still win
+  operator mail by being genuinely most active, because routing to the busiest session is
+  the feature; and `project` stays client-claimed, so a machine can join any `project:` room
+  and read its broadcasts, which the threat model's one operator makes low value. Revisit
+  both when other people's machines come into scope.
+- [x] **MUS-6: Verify `operator` and `host` on the daemon.** The client supplies
   both. Done when: the roster shows values the daemon established, and a test
   shows a client can't fake them.
+- [ ] **MUS-40: Clear rooms left by self-reported operators.** Found rolling out MUS-6.
+  Sessions are still in `op:josh` (a1) and `op:joshd` (Murph) beside `op:joshd@pdx.edu`,
+  so a broadcast to an old room reaches only one machine. Done when: a paired session is
+  only in its attested `op:` room, shown by a test and on the live roster.
 - [ ] **MUS-7: Protect the local ports.** 6256 and 6257 have no authentication,
   and the hook listener doesn't check `Origin`. Done when: a test shows a
   cross-origin web page can't reach either port, including by WebSocket.

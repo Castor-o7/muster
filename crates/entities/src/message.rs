@@ -12,6 +12,21 @@ use crate::session::{Session, SessionId};
 /// available through `muster://messages`.
 pub const CONTEXT_BODY_MAX_CHARS: usize = 2_000;
 
+/// Largest body a message may have. Bodies are stored whole and returned whole by
+/// `ReadMessages`, so without a limit one sender could make a recipient's reads
+/// too large to deliver.
+pub const MESSAGE_BODY_MAX_BYTES: usize = 64 * 1024;
+
+/// The refusal for a body over [`MESSAGE_BODY_MAX_BYTES`], if this one is.
+pub fn body_too_large(body: &str) -> Option<String> {
+    (body.len() > MESSAGE_BODY_MAX_BYTES).then(|| {
+        format!(
+            "message body is {} bytes, over the {MESSAGE_BODY_MAX_BYTES} byte limit; put it in a file or a commit and send the reference",
+            body.len()
+        )
+    })
+}
+
 /// Return a UTF-8-safe model-context preview and whether it was truncated.
 pub fn context_preview(body: &str, max_chars: usize) -> (String, bool) {
     let Some((byte_end, _)) = body.char_indices().nth(max_chars) else {
