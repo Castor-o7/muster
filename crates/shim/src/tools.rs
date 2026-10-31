@@ -811,7 +811,7 @@ fn url_decode(s: &str) -> std::borrow::Cow<'_, str> {
 }
 
 /// Wait for a `send_command` Cell to settle.
-async fn await_command<R>(
+pub(crate) async fn await_command<R>(
     cell: Cell<Option<Result<R, String>>, CellImmutable>,
     timeout: Duration,
 ) -> Result<R, String>

@@ -91,6 +91,24 @@ check "a NUL-suffixed key is refused" 'grep -q "refused attacker: NUL" $WORK/dae
 check "a session id posing as a nickname is refused" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_code} -H "Authorization: Bearer $ATTACKER" -X POST "https://127.0.0.1:16255/hook/session-register" -d "{\"session_id\":\"copper-komodo\",\"cwd\":\"/tmp\"}") == 403 ]]'
 check "myko's other routes are closed to paired machines" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_code} -H "Authorization: Bearer $ATTACKER" -X POST https://127.0.0.1:16255/myko/mcp -d "{}") == 403 ]]'
 
+# Messaging from a terminal: reaches a named team's idle session, labelled.
+WAITSTATUS() { curl -sk -m 5 -H "Authorization: Bearer $TOKEN" -X POST "https://127.0.0.1:16255/hook/wait?timeout=2" -d "$HOOK"; }
+OUT=$(T $BIN/muster-shim tell demo hello from e2e 2>&1); RC=$?
+check "tell sends to a team and reports each session" '[[ $RC == 0 && $OUT == *" sent, 0 not sent"* ]]'
+MAIL=$(WAITSTATUS)
+check "the idle session receives it, labelled with the machine" '[[ $MAIL == *"from a terminal on e2e"* && $MAIL == *"hello from e2e"* ]]'
+OUT=$(T $BIN/muster-shim tell nobody-here hi 2>&1); RC=$?
+check "tell refuses an unknown name" '[[ $RC != 0 && $OUT == *"no team or session named"* ]]'
+OUT=$(T $BIN/muster-shim all to everyone 2>&1); RC=$?
+check "all sends to every active session" '[[ $RC == 0 && $OUT == *" sent, 0 not sent"* ]]'
+MAIL=$(WAITSTATUS)
+check "and that wakes the idle session too" '[[ $MAIL == *"to everyone"* ]]'
+OUT=$(T $BIN/muster-shim all 2>&1); RC=$?
+check "all refuses an empty message" '[[ $RC != 0 ]]'
+sleep 1
+OUT=$(T $BIN/muster-shim all last one 2>&1)
+check "a terminal doesn't message itself" '[[ $OUT != *"no team"* ]]'
+
 # A pairing whose fingerprint doesn't match: the hook must get nothing.
 BAD=$(python3 -I -c 'import sys,json,base64; s=sys.argv[1].split(":",2)[2]; d=json.loads(base64.urlsafe_b64decode(s+"="*(-len(s)%4))); d["fingerprint"]="0"*64; print("muster-pair:v1:"+base64.urlsafe_b64encode(json.dumps(d).encode()).decode().rstrip("="))' "$CODE")
 T $BIN/muster-shim pair "$BAD" >/dev/null
