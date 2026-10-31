@@ -67,8 +67,8 @@ by reading the code instead, with no bypass found, and it wasn't tested with att
 Still open:
 
 - **The filter is an allowlist over a parser myko also interprets.** Three bypasses came from
-  myko reading a frame differently from the filter. Treat more as possible, and prefer an
-  authorization hook in myko in the long term.
+  myko reading a frame differently from the filter. Treat more as possible. MUS-41 covers
+  an authorization hook in myko.
 - **First use wins.** A session nobody has used through a hook or the gate can still be
   claimed by whichever machine names it first. Roster ids are visible to paired machines,
   and this matters most for sessions already running during a rollout.
@@ -96,6 +96,6 @@ Still open:
 ## Done when
 
 A test shows that one paired machine can't read, clear or send as another machine's
-session, including by raw event. The gate script now covers this, but it isn't in effect
-until the daemon is rebuilt and restarted. Until then, treat every paired machine as fully
-trusted.
+session, including by raw event. The gate script covers this, and the filter has been live on Murph since the 7e7869b
+restart on 2026-10-31. It hasn't been attacked on the live daemon, and the limits under
+"Still open" remain.
