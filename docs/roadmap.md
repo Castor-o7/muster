@@ -158,6 +158,11 @@ evidence from a real run by the person or team named.
   when: from another terminal on either machine, a message reaches that team and wakes it
   if idle; a team with several sessions gets one clear result for each; an unknown or
   ambiguous name is refused, not guessed; and the sender is attested as in MUS-36.
+- [ ] **MUS-38: Muster team name not displaying correctly (adjective-animal).** Reported
+  by the operator on 2026-10-31. Sessions show an adjective-animal nickname. The cause,
+  and where the wrong name appears, aren't confirmed yet; the first step is to confirm
+  both with the operator. Related: MUS-3, MUS-22. Done when: the operator confirms that
+  the screens they named show the name they expect, on both machines.
 - [ ] **MUS-32: Design the muster ledger.** The muster's best current picture of who
   is doing what, kept as a myko service, so that no agent or team gets lost in the din,
   watchman included. It records and informs; it doesn't command. It's a best estimate
