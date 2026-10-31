@@ -121,6 +121,7 @@ fn offline_recipient_succeeds_and_persists_for_pull() {
         to_session_id: SessionId(Arc::from("recipient")),
         body: "hi".into(),
         as_session: None,
+        idempotency_key: None,
     };
     let result = cmd
         .execute(cmd_ctx(&ctx, Some("c-sender")))
@@ -149,6 +150,7 @@ fn stale_binding_succeeds_and_persists() {
         to_session_id: SessionId(Arc::from("recipient")),
         body: "hi".into(),
         as_session: None,
+        idempotency_key: None,
     };
     let result = cmd
         .execute(cmd_ctx(&ctx, Some("c-sender")))
@@ -173,6 +175,7 @@ fn self_identified_sender_via_as_session_succeeds() {
         to_session_id: SessionId(Arc::from("recipient")),
         body: "from http".into(),
         as_session: Some(SessionId(Arc::from("sender"))),
+        idempotency_key: None,
     };
     let result = cmd
         .execute(cmd_ctx(&ctx, None))
@@ -222,6 +225,7 @@ fn unknown_recipient_errors_and_does_not_persist() {
         to_session_id: SessionId(Arc::from("does-not-exist")),
         body: "?".into(),
         as_session: None,
+        idempotency_key: None,
     };
     let err = cmd
         .execute(cmd_ctx(&ctx, Some("c-sender")))
@@ -250,6 +254,7 @@ fn nickname_resolves_server_side() {
         to_session_id: SessionId(Arc::from(nick.as_str())),
         body: "hi".into(),
         as_session: None,
+        idempotency_key: None,
     };
     let result = cmd
         .execute(cmd_ctx(&ctx, Some("c-sender")))
@@ -281,12 +286,43 @@ fn direct_message_ids_are_uuid_v7() {
         to_session_id: SessionId(Arc::from("recipient")),
         body: "hi".into(),
         as_session: None,
+        idempotency_key: None,
     }
     .execute(cmd_ctx(&ctx, Some("c-sender")))
     .expect("send succeeds");
 
     let id = Uuid::parse_str(result.message_id.0.as_ref()).expect("message id is a UUID");
     assert_eq!(id.get_version_num(), 7);
+}
+
+#[test]
+fn a_retry_with_the_same_key_stores_one_message() {
+    let ctx = setup();
+    set_session(&ctx, &session("sender", Some("c-sender")));
+    set_session(&ctx, &session("recipient", None));
+    let send = |body: &str, key: &str| {
+        SendMessage {
+            to_session_id: SessionId(Arc::from("recipient")),
+            body: body.into(),
+            as_session: None,
+            idempotency_key: Some(key.into()),
+        }
+        .execute(cmd_ctx(&ctx, Some("c-sender")))
+    };
+
+    let first = send("hi", "k1").expect("first send succeeds");
+    let retry = send("hi", "k1").expect("a retry succeeds");
+    assert_eq!(retry.message_id, first.message_id);
+    assert_eq!(retry.sent_at, first.sent_at);
+    assert_eq!(retry.live_push, LivePushStatus::Unknown);
+    assert_eq!(only_message(&ctx).body, "hi");
+
+    assert!(
+        send("different", "k1").is_err(),
+        "a reused key can't carry a new message"
+    );
+    send("hi", "k2").expect("a new key is a new message");
+    assert_eq!(message_count(&ctx), 2);
 }
 
 #[test]
@@ -310,6 +346,7 @@ fn operator_token_routes_to_the_humans_most_recently_active_agent() {
         to_session_id: SessionId(Arc::from("max@lucid.rocks")),
         body: "your call on the redeploy".into(),
         as_session: None,
+        idempotency_key: None,
     };
     let result = cmd
         .execute(cmd_ctx(&ctx, Some("c-sender")))
@@ -352,6 +389,7 @@ fn operator_routing_prefers_a_live_agent_and_accepts_the_op_prefix() {
         to_session_id: SessionId(Arc::from("op:max@lucid.rocks")),
         body: "ping".into(),
         as_session: None,
+        idempotency_key: None,
     };
     let result = cmd
         .execute(cmd_ctx(&ctx, Some("c-sender")))
@@ -374,6 +412,7 @@ fn caller_without_session_errors() {
         to_session_id: SessionId(Arc::from("recipient")),
         body: "?".into(),
         as_session: None,
+        idempotency_key: None,
     };
     let err = cmd
         .execute(cmd_ctx(&ctx, Some("c-orphan")))
@@ -397,6 +436,7 @@ fn unidentified_caller_errors() {
         to_session_id: SessionId(Arc::from("recipient")),
         body: "?".into(),
         as_session: None,
+        idempotency_key: None,
     };
     let err = cmd
         .execute(cmd_ctx(&ctx, None))
