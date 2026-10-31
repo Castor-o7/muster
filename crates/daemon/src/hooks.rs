@@ -253,6 +253,21 @@ fn quote_body(body: &str) -> String {
     body.replace('<', "&lt;").replace('\n', "\n    ")
 }
 
+/// `new`, keeping an earlier `os` and `arch` if it has none: the wait hook sends
+/// neither, and they're display-only claims, so there's nothing to protect.
+fn with_known_platform(new: Option<HostInfo>, prior: Option<&HostInfo>) -> Option<HostInfo> {
+    let mut new = new?;
+    if let Some(prior) = prior {
+        if new.os.is_empty() {
+            new.os = prior.os.clone();
+        }
+        if new.arch.is_empty() {
+            new.arch = prior.arch.clone();
+        }
+    }
+    Some(new)
+}
+
 /// The operator and host to record. A request the gate marked with `machine` is
 /// from a paired machine, so that verified name and the daemon's operator replace
 /// what it claimed. A request from the daemon's own host is taken at its word.
@@ -344,7 +359,7 @@ fn register_hook_session(
                 updated.operator = operator;
             }
             if updated.host.is_none() || machine.is_some() {
-                updated.host = host;
+                updated.host = with_known_platform(host, updated.host.as_ref());
             }
             if updated.project.is_none() {
                 updated.project = project;
@@ -694,6 +709,25 @@ mod tests {
         let host = host.unwrap();
         assert_eq!(host.name, "a1");
         assert_eq!(host.os, "linux");
+    }
+
+    #[test]
+    fn a_hook_without_platform_details_keeps_the_known_ones() {
+        let prior = HostInfo {
+            name: "laptop".into(),
+            os: "macos".into(),
+            arch: "aarch64".into(),
+        };
+        let bare = HostInfo {
+            name: "a1".into(),
+            os: String::new(),
+            arch: String::new(),
+        };
+        let kept = with_known_platform(Some(bare), Some(&prior)).unwrap();
+        assert_eq!(
+            (kept.name.as_str(), kept.os.as_str(), kept.arch.as_str()),
+            ("a1", "macos", "aarch64")
+        );
     }
 
     #[test]
