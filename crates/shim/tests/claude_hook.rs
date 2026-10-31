@@ -250,6 +250,27 @@ fn waiter_prints_mail_to_stderr_and_exits_2() {
 }
 
 #[test]
+fn waiter_stops_and_names_the_cause_when_refused() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0u8; 2048];
+        let _ = std::io::Read::read(&mut stream, &mut buf);
+        stream
+            .write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
+            .unwrap();
+    });
+    let config = temp_config("waiter-refused");
+    let out = spawn_waiter(&base, &config).wait_with_output().unwrap();
+
+    // Exit 0: a wake here would repeat at every Stop.
+    assert_eq!(out.status.code(), Some(0));
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(stderr.contains("403"), "{stderr}");
+}
+
+#[test]
 fn second_waiter_for_a_session_exits_quietly() {
     // Accepts the first waiter's connection and never answers, so it stays.
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();

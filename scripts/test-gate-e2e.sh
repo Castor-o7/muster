@@ -109,11 +109,17 @@ sleep 1
 OUT=$(T $BIN/muster-shim all last one 2>&1)
 check "a terminal doesn't message itself" '[[ $OUT != *"no team"* ]]'
 
+# A hook port that can't bind stops the daemon, rather than leaving hooks dead.
+env MUSTER_STATE_DIR=$WORK/state2 MUSTER_BIND=127.0.0.1:16355 MUSTER_INTERNAL_BIND=127.0.0.1:16357 RUST_LOG=error perl -e 'alarm 10; exec @ARGV' $BIN/muster-daemon >$WORK/bind.log 2>&1; RC=$?
+check "a failed hook bind stops the daemon and says why" '[[ $RC != 0 && $RC != 142 ]] && grep -q "hook listener on 127.0.0.1:16256" $WORK/bind.log'
+
 # A pairing whose fingerprint doesn't match: the hook must get nothing.
 BAD=$(python3 -I -c 'import sys,json,base64; s=sys.argv[1].split(":",2)[2]; d=json.loads(base64.urlsafe_b64decode(s+"="*(-len(s)%4))); d["fingerprint"]="0"*64; print("muster-pair:v1:"+base64.urlsafe_b64encode(json.dumps(d).encode()).decode().rstrip("="))' "$CODE")
 T $BIN/muster-shim pair "$BAD" >/dev/null
 OUT=$(echo $HOOK | T $BIN/muster-shim claude-hook session-start)
 check "wrong certificate fingerprint: hook gets nothing" '[[ -z $OUT ]]'
+OUT=$(echo $HOOK | T $BIN/muster-shim claude-hook wait 2>&1); RC=$?
+check "wrong certificate fingerprint: waiter stops and says so" '[[ $RC == 0 && $OUT == *"certificate"* ]]'
 
 # Unpaired, on the daemon's own host: the shim falls back to myko's loopback port.
 mkdir -p $WORK/unpaired

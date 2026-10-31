@@ -195,17 +195,11 @@ async fn run_daemon() -> Result<()> {
     // Spawn muster's own plain-HTTP listener for the Claude Code `/hook/*`
     // endpoints. Shares the server ctx (same registry + event log); stock
     // myko's MCP listener is left untouched on its own port.
-    {
+    let hooks = {
         let hook_ctx = Arc::new(server.ctx());
         let bindings_dir = Arc::new(state_dir.clone());
-        tokio::spawn(async move {
-            if let Err(e) =
-                daemon::http_listener::run_bound(hook_bind, hook_ctx, Some(bindings_dir)).await
-            {
-                log::error!("[hook] listener exited: {e}");
-            }
-        });
-    }
+        daemon::http_listener::run_bound(hook_bind, hook_ctx, Some(bindings_dir))
+    };
 
     log::info!(
         "muster-daemon: gate on {gate_bind} (TLS), myko on ws://{bind_addr}, hooks on http://{hook_bind}"
@@ -217,15 +211,23 @@ async fn run_daemon() -> Result<()> {
         state_dir,
     });
     // The gate is the daemon's only public surface: if it can't bind or
-    // stops, exit rather than keep running unreachable.
+    // stops, exit rather than keep running unreachable. The same goes for the
+    // hook listener, without which no session can be woken.
     tokio::select! {
         r = server.run() => r.map_err(|e| anyhow::anyhow!(e))?,
-        r = gate => {
-            r.with_context(|| format!("gate on {gate_bind}"))?;
-            anyhow::bail!("gate on {gate_bind} stopped");
-        }
+        r = gate => exit_listener_stopped(&format!("gate on {gate_bind}"), r),
+        r = hooks => exit_listener_stopped(&format!("hook listener on {hook_bind}"), r),
     }
     Ok(())
+}
+
+/// Exit directly, so the cause is printed at once whatever myko's tasks are doing.
+fn exit_listener_stopped(what: &str, result: std::io::Result<()>) -> ! {
+    match result {
+        Ok(()) => eprintln!("muster-daemon: {what} stopped"),
+        Err(e) => eprintln!("muster-daemon: {what}: {e}"),
+    }
+    std::process::exit(1);
 }
 
 /// Resolve a bind spec from `env_var` (or `default`) via the system
