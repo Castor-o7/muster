@@ -203,6 +203,7 @@ pub fn claim_session(dir: &Path, machine: &str, session: &str) -> io::Result<boo
         return Ok(false);
     }
     let _guard = BINDINGS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _file_lock = lock_bindings(dir)?;
     let path = dir.join(BINDINGS_FILE);
     let text = match std::fs::read_to_string(&path) {
         Ok(t) => t,
@@ -233,8 +234,22 @@ pub fn claim_machine_session(dir: &Path, machine: &str, session: &str) -> io::Re
 }
 
 /// Forget every session bound to `machine`, when it's unpaired.
+/// Hold the bindings across processes: `muster-daemon unpair` edits them from
+/// outside the running daemon, and each side rewrites the whole file. Released
+/// when the returned file closes.
+fn lock_bindings(dir: &Path) -> io::Result<std::fs::File> {
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join(format!("{BINDINGS_FILE}.lock")))?;
+    file.lock()?;
+    Ok(file)
+}
+
 fn release_sessions(dir: &Path, machine: &str) -> io::Result<()> {
     let _guard = BINDINGS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _file_lock = lock_bindings(dir)?;
     let path = dir.join(BINDINGS_FILE);
     let text = match std::fs::read_to_string(&path) {
         Ok(t) => t,
@@ -331,6 +346,18 @@ mod tests {
         assert!(!claim_session(dir.path(), "attacker", "x y").unwrap());
         assert!(!claim_session(dir.path(), "attacker", "").unwrap());
         assert!(claim_session(dir.path(), "a1", "victim").unwrap());
+    }
+
+    #[test]
+    fn a_claim_waits_for_another_process_holding_the_bindings() {
+        let dir = tempfile::tempdir().unwrap();
+        let held = lock_bindings(dir.path()).unwrap();
+        let path = dir.path().to_path_buf();
+        let claim = std::thread::spawn(move || claim_session(&path, "a1", "s1").unwrap());
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(!claim.is_finished());
+        drop(held);
+        assert!(claim.join().unwrap());
     }
 
     #[test]

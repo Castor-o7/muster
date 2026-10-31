@@ -30,6 +30,8 @@ use crate::gate_filter::{self, Refused};
 
 /// The WebSocket route the shim uses. It's the only myko route open to paired
 /// machines.
+/// How often an open connection's token is checked again.
+const REVOCATION_CHECK: Duration = Duration::from_secs(5);
 const MYKO_WS_PATH: &str = "/myko";
 
 /// Cap on the request head (request line + headers).
@@ -141,18 +143,36 @@ async fn handle(
         request.path()
     );
     let mut upstream = TcpStream::connect(upstream_addr).await?;
+    let token = request.token.clone().unwrap_or_default();
     if is_hook {
         upstream
             .write_all(request.forwarded_head_as(&name).as_bytes())
             .await?;
         upstream.write_all(&rest).await?;
-        tokio::io::copy_bidirectional(&mut tls, &mut upstream).await?;
-        return Ok(());
+        return tokio::select! {
+            r = tokio::io::copy_bidirectional(&mut tls, &mut upstream) => r.map(|_| ()),
+            () = until_unpaired(&config.state_dir, &token, &name) => Ok(()),
+        };
     }
     upstream
         .write_all(request.forwarded_head().as_bytes())
         .await?;
-    filter_websocket(tls, upstream, &name, &config.state_dir).await
+    tokio::select! {
+        r = filter_websocket(tls, upstream, &name, &config.state_dir) => r,
+        () = until_unpaired(&config.state_dir, &token, &name) => Ok(()),
+    }
+}
+
+/// Finish once this token stops naming this machine, so `unpair` ends the
+/// connections already open: a `/hook/wait` can otherwise run on for minutes.
+async fn until_unpaired(state_dir: &Path, token: &str, name: &str) {
+    loop {
+        tokio::time::sleep(REVOCATION_CHECK).await;
+        if credentials::verify_token(state_dir, token).as_deref() != Some(name) {
+            log::info!("[gate] closing {name}'s connection: no longer paired");
+            return;
+        }
+    }
 }
 
 /// Finish the WebSocket handshake with myko, then relay frames: everything from

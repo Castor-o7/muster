@@ -91,7 +91,7 @@ muster-daemon pair --name a1 --address 192.168.1.241:6255
 It prints a `muster-shim pair muster-pair:v1:…` command. Run that on the machine you're pairing. The code holds the gate's address, the certificate fingerprint to pin, and that machine's access token, so treat it like a password. Then restart that machine's Claude Code sessions.
 
 - `--address` is how the paired machine should reach the gate. It can be left out when `MUSTER_BIND` is a specific address rather than `0.0.0.0`.
-- `muster-daemon pairs` lists paired machines, and `muster-daemon unpair a1` revokes one. Its next connection is refused; nothing needs restarting.
+- `muster-daemon pairs` lists paired machines, and `muster-daemon unpair a1` revokes one. Its open connections close within seconds and new ones are refused; nothing needs restarting.
 - `muster-shim unpair` removes a machine's own pairing.
 - Pairing again under the same name replaces that machine's token.
 - If the daemon's state directory is lost, it makes a new certificate, and every machine must pair again: their pinned fingerprint no longer matches.

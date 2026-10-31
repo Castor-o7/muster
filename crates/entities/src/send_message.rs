@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    message::{CONTEXT_BODY_MAX_CHARS, Message, MessageId, context_preview},
+    message::{CONTEXT_BODY_MAX_CHARS, Message, MessageId, body_too_large, context_preview},
     message_read::{MessageRead, MessageReadId},
     notify::NotifyChannel,
     session::{GetAllSessions, Session, SessionId, resolve_caller},
@@ -147,6 +147,9 @@ impl CommandHandler for SendMessage {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn execute(self, ctx: CommandContext) -> Result<Self::Result, CommandError> {
+        if let Some(refusal) = body_too_large(&self.body) {
+            return Err(err(&ctx, &refusal));
+        }
         let sessions: Vec<Arc<Session>> = ctx.exec_query(GetAllSessions {})?;
 
         let sender = resolve_caller(&ctx, &sessions, self.as_session.as_ref())?;
@@ -418,6 +421,7 @@ pub(crate) fn resolve_mention(
 /// policy is unit-testable without a live command context.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn pick_operator_session(sessions: &[Arc<Session>], op: &str) -> Option<Arc<Session>> {
+    let now = Utc::now().timestamp_millis();
     sessions
         .iter()
         .filter(|s| {
@@ -428,7 +432,10 @@ pub(crate) fn pick_operator_session(sessions: &[Arc<Session>], op: &str) -> Opti
         .cloned()
         .max_by_key(|s| {
             let live = s.client_id.is_some() && s.channels_enabled != Some(false);
-            (live as i64, s.last_activity_at.unwrap_or(s.connected_at))
+            // Clients report this time. One from the future isn't activity, and
+            // would otherwise win this session the operator's mail indefinitely.
+            let active = s.last_activity_at.unwrap_or(s.connected_at);
+            (live as i64, if active > now { 0 } else { active })
         })
 }
 
@@ -471,6 +478,44 @@ pub(crate) fn direct_push_content(from_nickname: &str, to_operator: Option<&str>
             crate::message::operator_relay_notice(op)
         ),
         None => format!("new message from {from_nickname}"),
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod operator_routing_tests {
+    use super::*;
+
+    fn session(id: &str, last_activity_at: i64) -> Arc<Session> {
+        Arc::new(Session {
+            id: SessionId(Arc::from(id)),
+            client_id: None,
+            pid: 0,
+            cwd: String::new(),
+            git_branch: None,
+            current_task: None,
+            session_name: None,
+            activity: None,
+            kind: None,
+            connected_at: 0,
+            last_activity_at: Some(last_activity_at),
+            last_tool: None,
+            last_tool_at: None,
+            operator: Some("op@example.test".to_string()),
+            host: None,
+            project: None,
+            channels_enabled: None,
+        })
+    }
+
+    #[test]
+    fn a_future_activity_time_does_not_win_operator_mail() {
+        let now = Utc::now().timestamp_millis();
+        let sessions = [
+            session("honest", now - 1_000),
+            session("liar", now + 86_400_000),
+        ];
+        let picked = pick_operator_session(&sessions, "op@example.test").unwrap();
+        assert_eq!(picked.id.0.as_ref(), "honest");
     }
 }
 
