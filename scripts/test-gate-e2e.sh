@@ -85,6 +85,11 @@ check "sending as another machine's session is refused" 'grep -q "refused attack
 check "reading all messages is refused" 'grep -q "refused attacker: query GetAllMessages" $WORK/daemon.log'
 curl -s -m 3 -o /dev/null -X POST http://127.0.0.1:16256/hook/session-start -d '{"session_id":"a0000000-0000-4000-8000-000000000002","cwd":"/tmp/demo"}'
 check "a paired machine can't take a session on the daemon's own host" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_code} -H "Authorization: Bearer $ATTACKER" -X POST "https://127.0.0.1:16255/hook/wait?timeout=1" -d "{\"session_id\":\"a0000000-0000-4000-8000-000000000002\",\"cwd\":\"/tmp/demo\"}") == 403 ]]'
+READAS='{"event":"ws:m:command","data":{"command":{"asSession":"a0000000-0000-4000-8000-000000000001","unread":true},"commandId":"ReadMessages"}}'
+ACKAS='{"event":"ws:m:command","data":{"command":{"asSession":"a0000000-0000-4000-8000-000000000001","messageIds":["m1"]},"commandId":"AckMessages"}}'
+python3 -I $ATTACK "$ATTACKER" "$READAS" "$ACKAS"
+check "reading as another machine's session is refused" 'grep -q "refused attacker: ReadMessages for session a0000000-0000-4000-8000-000000000001" $WORK/daemon.log'
+check "clearing another machine's mail is refused" 'grep -q "refused attacker: AckMessages for session a0000000-0000-4000-8000-000000000001" $WORK/daemon.log'
 ARRAY='{"event":"ws:m:command","data":{"command":[null,null,null,false,false,true,null,null,"a0000000-0000-4000-8000-000000000001"],"commandId":"ReadMessages"}}'
 python3 -I $ATTACK "$ATTACKER" "$ARRAY" '{"event":"ws:m:event","data":{"item":{"id":"m","id\u0000":"a0000000-0000-4000-8000-000000000001"},"changeType":"DEL","itemType":"Session","createdAt":"t"}}'
 check "a positional command body is refused" 'grep -q "refused attacker: command ReadMessages body" $WORK/daemon.log'
@@ -143,6 +148,23 @@ curl -sk -m 60 -o /dev/null -H "Authorization: Bearer $LATE_TOKEN" -X POST "http
 LATE_PID=$!
 sleep 1; T $BIN/muster-daemon unpair late >/dev/null; sleep 7
 check "unpair closes an open long-poll within seconds" '! kill -0 $LATE_PID 2>/dev/null'
+kill $LATE_PID 2>/dev/null; wait $LATE_PID 2>/dev/null
+
+# And its open WebSocket, the connection a revoked machine would keep longest.
+LATE=$(T $BIN/muster-daemon pair --name late-ws 2>/dev/null | awk '{print $3}')
+LATE_TOKEN=$(python3 -I -c 'import sys,json,base64; s=sys.argv[1].split(":",2)[2]; print(json.loads(base64.urlsafe_b64decode(s+"="*(-len(s)%4)))["token"])' "$LATE")
+python3 -I -c '
+import socket, ssl, sys
+ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
+s = ctx.wrap_socket(socket.create_connection(("127.0.0.1", 16255), 5))
+s.sendall(("GET /myko?token=%s HTTP/1.1\r\nHost: h\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n" % sys.argv[1]).encode())
+assert s.recv(4096).startswith(b"HTTP/1.1 101")
+s.settimeout(20)
+while s.recv(4096): pass
+' "$LATE_TOKEN" 2>/dev/null &
+LATE_PID=$!
+sleep 1; T $BIN/muster-daemon unpair late-ws >/dev/null; sleep 7
+check "unpair closes an open WebSocket within seconds" '! kill -0 $LATE_PID 2>/dev/null'
 kill $LATE_PID 2>/dev/null; wait $LATE_PID 2>/dev/null
 
 # An oversized body is refused before it's stored.

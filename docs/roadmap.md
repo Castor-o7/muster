@@ -86,6 +86,10 @@ evidence from a real run by the person or team named.
   to the store. Design: [session-binding.md](session-binding.md). Done when: a test shows
   one paired machine can't read, clear or send as another machine's session, including
   by raw event.
+- [ ] **MUS-41: Replace the gate's frame filter with authorization in myko.** The filter is
+  an allowlist over a format myko parses separately, which is where three bypasses came
+  from. Open for the operator: propose a hook upstream, or carry a fork meanwhile. Done
+  when: myko refuses these writes itself, a test shows it, and the filter is retired.
 - [ ] **MUS-33: Harden the gate further.** From the 2026-10-30 adversarial review, not
   fixed yet: a compromised machine can capture operator-addressed mail by being the most
   active session, including with a far-future `lastActivityAt`; `project` is unattested,
