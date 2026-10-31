@@ -284,6 +284,28 @@ fn a_refused_waiter_tells_the_session_once_per_cause() {
 }
 
 #[test]
+fn a_refused_watch_says_so_on_stdout_where_monitor_sees_it() {
+    let base = refusing_listener(1);
+    let config = temp_config("watch-refused");
+    let mut child = Command::new(SHIM)
+        .args(["watch", "11111111-1111-4111-8111-111111111111", &base])
+        .env("XDG_CONFIG_HOME", config)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn muster-shim watch");
+    let mut line = String::new();
+    std::io::BufRead::read_line(
+        &mut std::io::BufReader::new(child.stdout.take().unwrap()),
+        &mut line,
+    )
+    .unwrap();
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(line.contains("403"), "{line}");
+}
+
+#[test]
 fn second_waiter_for_a_session_exits_quietly() {
     // Accepts the first waiter's connection and never answers, so it stays.
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
