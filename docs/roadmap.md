@@ -188,6 +188,11 @@ evidence from a real run by the person or team named.
   and where the wrong name appears, aren't confirmed yet; the first step is to confirm
   both with the operator. Related: MUS-3, MUS-22. Done when: the operator confirms that
   the screens they named show the name they expect, on both machines.
+- [ ] **MUS-43: Give muster messages a deterministic structure.** Requested by the operator
+  on 2026-10-31: Muster is meant to be a reactive protocol, and today a message is free text
+  that only an agent can interpret. Starts with a design meeting with the operator; no code
+  until then. Done when: the design from that meeting is written down with the operator's
+  agreement, and follow-up stories are filed.
 - [ ] **MUS-32: Design the muster ledger.** The muster's best current picture of who
   is doing what, kept as a myko service, so that no agent or team gets lost in the din,
   watchman included. It records and informs; it doesn't command. It's a best estimate
