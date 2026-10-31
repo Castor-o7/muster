@@ -86,9 +86,10 @@ evidence from a real run by the person or team named.
   to the store. Design: [session-binding.md](session-binding.md). Done when: a test shows
   one paired machine can't read, clear or send as another machine's session, including
   by raw event.
-- [ ] **MUS-42: Run the gate e2e script in CI.** It's the main security test and runs only by
-  hand, so it can regress unseen. It needs zsh, curl, nc, python3 and perl, and spare ports.
-  Done when: CI runs it on each PR, and a deliberately broken gate check fails the build.
+- [x] **MUS-42: Run the gate e2e script in CI.** It turned out CI already ran it, in the
+  `check` job since `7d2c5d7`; we'd filed this believing it only ran by hand. Done when: CI
+  runs it on each PR, and a deliberately broken gate check fails the build. Shown by run
+  41245316360 on PR #28, closed unmerged: `check` failed with 47 passed, 1 failed.
 - [ ] **MUS-41: Replace the gate's frame filter with authorization in myko.** The filter is
   an allowlist over a format myko parses separately, which is where three bypasses came
   from. Open for the operator: propose a hook upstream, or carry a fork meanwhile. Done
