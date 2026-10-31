@@ -23,10 +23,18 @@ get on with something else.
 > [!IMPORTANT]
 > **Muster is young, and you should only pair machines you trust.** It's designed for
 > one operator's own machines on a private network, or over Tailscale or WireGuard, not
-> the open internet. Session ownership is still being finished (see
-> [docs/session-binding.md](docs/session-binding.md)). The wake hook also relies on
+> the open internet. A paired machine can no longer read, clear or send as another machine's
+> session, in tests, but the check is a filter over myko's parser, it hasn't been attacked on
+> a live daemon, and the roster stays readable by every paired machine (see
+> [docs/session-binding.md](docs/session-binding.md)). A message's sender also can't prove a
+> human wrote it, so don't treat one as approval. The wake hook also relies on
 > `asyncRewake` working before a session's first prompt, which Claude Code doesn't document,
 > so check it after upgrades.
+
+**Status (2026-10-31): early alpha, best guess.** Running day to day between two machines,
+one macOS and one Linux. An overnight idle wake isn't proved yet (MUS-1), and it hasn't been
+installed on a clean machine, or run on Windows beyond a cross-compile. 6 of 43 roadmap
+stories are verified, about 14%.
 
 See the [roadmap](docs/roadmap.md) for where this is heading and
 [the board](docs/board.md) for how the teams work together.

@@ -8,6 +8,12 @@ Stories follow the process in [board.md](board.md). IDs are permanent.
 "Needs a run" means `gh` can't show the result, so the submission must include
 evidence from a real run by the person or team named.
 
+## Status
+
+2026-10-31: 6 of 43 stories ticked, about 14%. Live on Murph: `7e7869b`, which includes
+MUS-5 and MUS-6. Merged and waiting for a later daemon restart and rebuilt shims: MUS-33,
+MUS-34, MUS-35 and MUS-40. Merged and needing a live run: MUS-36 and MUS-37.
+
 ## Decisions
 
 - **Threat model.** Muster defends against a malicious website, and against one

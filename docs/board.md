@@ -123,10 +123,11 @@ lost.
 - **The watchman's GitHub access isn't read-only.** It uses the operator's `gh`
   login, which has full `repo` and `workflow` scopes. Not merging is only a rule
   until MUS-12 gives it a read-only token.
-- **Messages aren't authenticated yet.** A message claiming to be from the
-  watchman or a team could be forged by any paired machine until MUS-5, which could also
-  write directly to Muster's store. Always
-  check evidence with `gh`, rather than trusting a message that says it's fine.
+- **Messages don't prove who wrote them.** Since MUS-5, a paired machine can't send as
+  another machine's session or write directly to Muster's store. But any process on a
+  machine's account can send as that machine, or run `muster-shim tell`, and a message's
+  text can claim anything. Always check evidence with `gh`, rather than trusting a message
+  that says it's fine, and take restart approval only from the operator directly.
 - **The watchman has no stable address.** Find it by the `current_task` it sets on
   the roster, starting with "Watchman", until MUS-3 lands.
 - **The watch depends on one session staying alive.** If it ends, the table
