@@ -146,8 +146,9 @@ LATE=$(T $BIN/muster-daemon pair --name late 2>/dev/null | awk '{print $3}')
 LATE_TOKEN=$(python3 -I -c 'import sys,json,base64; s=sys.argv[1].split(":",2)[2]; print(json.loads(base64.urlsafe_b64decode(s+"="*(-len(s)%4)))["token"])' "$LATE")
 curl -sk -m 60 -o /dev/null -H "Authorization: Bearer $LATE_TOKEN" -X POST "https://127.0.0.1:16255/hook/wait?timeout=50" -d '{"session_id":"a0000000-0000-4000-8000-000000000009","cwd":"/tmp/late"}' &
 LATE_PID=$!
-sleep 1; T $BIN/muster-daemon unpair late >/dev/null; sleep 7
-check "unpair closes an open long-poll within seconds" '! kill -0 $LATE_PID 2>/dev/null'
+sleep 1; kill -0 $LATE_PID 2>/dev/null; ALIVE=$?
+T $BIN/muster-daemon unpair late >/dev/null; sleep 7
+check "unpair closes an open long-poll within seconds" '[[ $ALIVE == 0 ]] && ! kill -0 $LATE_PID 2>/dev/null'
 kill $LATE_PID 2>/dev/null; wait $LATE_PID 2>/dev/null
 
 # And its open WebSocket, the connection a revoked machine would keep longest.
@@ -163,8 +164,9 @@ s.settimeout(20)
 while s.recv(4096): pass
 ' "$LATE_TOKEN" 2>/dev/null &
 LATE_PID=$!
-sleep 1; T $BIN/muster-daemon unpair late-ws >/dev/null; sleep 7
-check "unpair closes an open WebSocket within seconds" '! kill -0 $LATE_PID 2>/dev/null'
+sleep 1; kill -0 $LATE_PID 2>/dev/null; ALIVE=$?
+T $BIN/muster-daemon unpair late-ws >/dev/null; sleep 7
+check "unpair closes an open WebSocket within seconds" '[[ $ALIVE == 0 ]] && ! kill -0 $LATE_PID 2>/dev/null'
 kill $LATE_PID 2>/dev/null; wait $LATE_PID 2>/dev/null
 
 # An oversized body is refused before it's stored.
