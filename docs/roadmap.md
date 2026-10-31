@@ -80,12 +80,15 @@ evidence from a real run by the person or team named.
 
 ## Phase 2: Security
 
-- [ ] **MUS-5: Tie sessions to the machine's token.** The gate discards the
+- [x] **MUS-5: Tie sessions to the machine's token.** The gate discards the
   machine name and `session_id` is taken on trust, so any paired machine can claim
   another session and read and clear its mail. Paired clients can also write raw events
   to the store. Design: [session-binding.md](session-binding.md). Done when: a test shows
   one paired machine can't read, clear or send as another machine's session, including
   by raw event.
+- [ ] **MUS-42: Run the gate e2e script in CI.** It's the main security test and runs only by
+  hand, so it can regress unseen. It needs zsh, curl, nc, python3 and perl, and spare ports.
+  Done when: CI runs it on each PR, and a deliberately broken gate check fails the build.
 - [ ] **MUS-41: Replace the gate's frame filter with authorization in myko.** The filter is
   an allowlist over a format myko parses separately, which is where three bypasses came
   from. Open for the operator: propose a hook upstream, or carry a fork meanwhile. Done
