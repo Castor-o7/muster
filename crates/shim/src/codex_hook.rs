@@ -27,6 +27,8 @@
 use std::io::{Read, Write};
 use std::time::Duration;
 
+use crate::link::PostFailure;
+
 const HOOK_PORT: u16 = 6256;
 const TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -230,21 +232,21 @@ fn wait_for_mail(
     // The daemon answers within `WATCH_WAIT`; the read timeout only has to
     // outlast it, so a daemon that vanished mid-wait is noticed.
     let timeout = wait + Duration::from_secs(30);
-    // Report only the change into failure: stdout would wake the session, and
+    // Report only a change of cause: stdout would wake the session, and
     // repeating it every retry would just bury the Monitor's output file.
-    let mut failing = false;
+    let mut failing = None;
     let parent = parent_pid();
     loop {
         if once && parent_pid() != parent {
             return false;
         }
         let response = match crate::link::load_pairing().filter(|_| !explicit) {
-            Some(pairing) => crate::link::https_post(&pairing, &path, &body, timeout),
-            None => http_post(&base, &path, &body, timeout),
+            Some(pairing) => crate::link::https_post_why(&pairing, &path, &body, timeout),
+            None => http_post_why(&base, &path, &body, timeout),
         };
         match response {
-            Some(resp) => {
-                failing = false;
+            Ok(resp) => {
+                failing = None;
                 let resp = resp.trim_end_matches(['\n', '\r', ' ']);
                 if !resp.is_empty() {
                     deliver(resp);
@@ -253,12 +255,18 @@ fn wait_for_mail(
                     }
                 }
             }
-            None => {
+            Err(failure) => {
                 // A one-shot waiter's stderr is delivered to the model with its
-                // next message, by which time this would be long out of date.
-                if !failing && !once {
-                    eprintln!("muster-shim watch: can't reach daemon hook listener; retrying");
-                    failing = true;
+                // next message, by which time an outage would be long out of
+                // date. A refusal won't clear by itself, so stop rather than
+                // poll; waking the session would only repeat at every Stop.
+                if once && failure.is_refusal() {
+                    eprintln!("muster-shim watch: {failure}");
+                    return false;
+                }
+                if failing != Some(failure) && !once {
+                    eprintln!("muster-shim watch: {failure}; retrying");
+                    failing = Some(failure);
                 }
                 std::thread::sleep(WATCH_RETRY);
             }
@@ -428,29 +436,42 @@ fn base_from_daemon(daemon: &str) -> String {
 /// `Connection: close`, so we read to EOF and return the body. `None` on any
 /// transport failure. `timeout` bounds the connect and each read/write.
 fn http_post(base: &str, path: &str, body: &str, timeout: Duration) -> Option<String> {
-    let hostport = base.strip_prefix("http://")?.trim_end_matches('/');
+    http_post_why(base, path, body, timeout).ok()
+}
+
+/// [`http_post`], saying why it failed.
+fn http_post_why(
+    base: &str,
+    path: &str,
+    body: &str,
+    timeout: Duration,
+) -> Result<String, PostFailure> {
+    let unreachable = |_| PostFailure::Unreachable;
+    let hostport = base
+        .strip_prefix("http://")
+        .ok_or(PostFailure::Unreachable)?
+        .trim_end_matches('/');
     let (host, port) = match hostport.rsplit_once(':') {
-        Some((h, p)) => (h, p.parse::<u16>().ok()?),
+        Some((h, p)) => (h, p.parse::<u16>().map_err(|_| PostFailure::Unreachable)?),
         None => (hostport, 80),
     };
-    let mut stream = crate::link::connect_any(format!("{host}:{port}"), timeout)?;
-    stream.set_read_timeout(Some(timeout)).ok()?;
-    stream.set_write_timeout(Some(timeout)).ok()?;
+    let mut stream = crate::link::connect_any(format!("{host}:{port}"), timeout)
+        .ok_or(PostFailure::Unreachable)?;
+    stream
+        .set_read_timeout(Some(timeout))
+        .map_err(unreachable)?;
+    stream
+        .set_write_timeout(Some(timeout))
+        .map_err(unreachable)?;
     let req = format!(
         "POST {path} HTTP/1.1\r\nHost: {hostport}\r\nContent-Type: application/json\r\n\
          Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
-    stream.write_all(req.as_bytes()).ok()?;
+    stream.write_all(req.as_bytes()).map_err(unreachable)?;
     let mut buf = Vec::new();
-    stream.read_to_end(&mut buf).ok()?;
-    let text = String::from_utf8_lossy(&buf);
-    let idx = text.find("\r\n\r\n")?;
-    let status = text[..idx].lines().next()?.split_whitespace().nth(1)?;
-    if !status.starts_with('2') {
-        return None;
-    }
-    Some(text[idx + 4..].to_string())
+    stream.read_to_end(&mut buf).map_err(unreachable)?;
+    crate::link::parse_response(&buf)
 }
 
 fn short_host() -> String {

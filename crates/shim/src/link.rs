@@ -117,10 +117,9 @@ impl ServerCertVerifier for PinnedCert {
         if cert_fingerprint(end_entity) == self.fingerprint {
             Ok(ServerCertVerified::assertion())
         } else {
-            Err(rustls::Error::General(
-                "the daemon's certificate doesn't match this machine's pairing; \
-                 re-pair if the daemon was reinstalled"
-                    .into(),
+            // Named by `PostFailure::Certificate` when it reaches a caller.
+            Err(rustls::Error::InvalidCertificate(
+                rustls::CertificateError::ApplicationVerificationFailure,
             ))
         }
     }
@@ -221,12 +220,93 @@ const CONNECT_ATTEMPT: Duration = Duration::from_secs(5);
 /// POST `body` to `path` on the paired gate over pinned TLS and return the
 /// response body. `None` on any failure, a non-2xx status included.
 pub fn https_post(pairing: &Pairing, path: &str, body: &str, timeout: Duration) -> Option<String> {
-    let tcp = connect_any(pairing.address.as_str(), timeout)?;
-    tcp.set_read_timeout(Some(timeout)).ok()?;
-    tcp.set_write_timeout(Some(timeout)).ok()?;
-    let conn =
-        rustls::ClientConnection::new(client_config(&pairing.fingerprint).ok()?, server_name())
-            .ok()?;
+    https_post_why(pairing, path, body, timeout).ok()
+}
+
+/// Why a POST to the daemon got no usable answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PostFailure {
+    /// Nothing answered: the daemon is down, or this machine is asleep or off
+    /// the network.
+    Unreachable,
+    /// The daemon's certificate isn't the one this machine paired with.
+    Certificate,
+    /// The daemon answered with this non-2xx status.
+    Status(u16),
+}
+
+impl PostFailure {
+    /// Whether the daemon, not the network, said no, so retrying won't help
+    /// until someone changes something.
+    pub fn is_refusal(self) -> bool {
+        matches!(self, Self::Certificate | Self::Status(401 | 403))
+    }
+}
+
+impl std::fmt::Display for PostFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unreachable => write!(f, "can't reach the daemon (down, or no network)"),
+            Self::Certificate => write!(
+                f,
+                "the daemon's certificate doesn't match this machine's pairing; pair again if the daemon was reset"
+            ),
+            Self::Status(401) => write!(
+                f,
+                "the daemon refused this machine's token (401); it may need pairing again"
+            ),
+            Self::Status(403) => write!(
+                f,
+                "the daemon refused this request (403); this machine doesn't own that session"
+            ),
+            Self::Status(code) => write!(f, "the daemon answered with an error ({code})"),
+        }
+    }
+}
+
+/// The body of a complete HTTP response, or why there isn't a usable one.
+pub fn parse_response(buf: &[u8]) -> Result<String, PostFailure> {
+    let text = String::from_utf8_lossy(buf);
+    let idx = text.find("\r\n\r\n").ok_or(PostFailure::Unreachable)?;
+    let status = text[..idx]
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|code| code.parse::<u16>().ok())
+        .ok_or(PostFailure::Unreachable)?;
+    if !(200..300).contains(&status) {
+        return Err(PostFailure::Status(status));
+    }
+    Ok(text[idx + 4..].to_string())
+}
+
+/// rustls reports a certificate it rejected as an I/O error wrapping its own.
+fn tls_failure(e: &io::Error) -> PostFailure {
+    let certificate = e
+        .get_ref()
+        .and_then(|inner| inner.downcast_ref::<rustls::Error>())
+        .is_some_and(|tls| matches!(tls, rustls::Error::InvalidCertificate(_)));
+    if certificate {
+        PostFailure::Certificate
+    } else {
+        PostFailure::Unreachable
+    }
+}
+
+/// [`https_post`], saying why it failed.
+pub fn https_post_why(
+    pairing: &Pairing,
+    path: &str,
+    body: &str,
+    timeout: Duration,
+) -> Result<String, PostFailure> {
+    let unreachable = |_| PostFailure::Unreachable;
+    let tcp = connect_any(pairing.address.as_str(), timeout).ok_or(PostFailure::Unreachable)?;
+    tcp.set_read_timeout(Some(timeout)).map_err(unreachable)?;
+    tcp.set_write_timeout(Some(timeout)).map_err(unreachable)?;
+    let config = client_config(&pairing.fingerprint).map_err(unreachable)?;
+    let conn = rustls::ClientConnection::new(config, server_name())
+        .map_err(|_| PostFailure::Unreachable)?;
     let mut tls = rustls::StreamOwned::new(conn, tcp);
     let request = format!(
         "POST {path} HTTP/1.1\r\nHost: {}\r\nAuthorization: Bearer {}\r\n\
@@ -235,28 +315,40 @@ pub fn https_post(pairing: &Pairing, path: &str, body: &str, timeout: Duration) 
         pairing.token,
         body.len()
     );
-    tls.write_all(request.as_bytes()).ok()?;
+    tls.write_all(request.as_bytes())
+        .map_err(|e| tls_failure(&e))?;
     let mut buf = Vec::new();
     // A peer that closes without TLS close_notify ends the read with
     // UnexpectedEof; what arrived before it is still the whole response.
     match tls.read_to_end(&mut buf) {
         Ok(_) => {}
         Err(e) if e.kind() == io::ErrorKind::UnexpectedEof && !buf.is_empty() => {}
-        Err(_) => return None,
+        Err(e) => return Err(tls_failure(&e)),
     }
-    let text = String::from_utf8_lossy(&buf);
-    let idx = text.find("\r\n\r\n")?;
-    let status = text[..idx].lines().next()?.split_whitespace().nth(1)?;
-    if !status.starts_with('2') {
-        return None;
-    }
-    Some(text[idx + 4..].to_string())
+    parse_response(&buf)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::net::{SocketAddr, TcpListener};
+
+    #[test]
+    fn a_response_says_why_it_failed() {
+        assert_eq!(
+            parse_response(b"HTTP/1.1 200 OK\r\n\r\nbody"),
+            Ok("body".to_string())
+        );
+        for code in [401, 403] {
+            let raw = format!("HTTP/1.1 {code} No\r\n\r\n");
+            let failure = parse_response(raw.as_bytes()).unwrap_err();
+            assert_eq!(failure, PostFailure::Status(code));
+            assert!(failure.is_refusal());
+        }
+        let outage = parse_response(b"HTTP/1.1 502 Bad Gateway\r\n\r\n").unwrap_err();
+        assert!(!outage.is_refusal());
+        assert_eq!(parse_response(b""), Err(PostFailure::Unreachable));
+    }
 
     #[test]
     fn connect_any_skips_an_address_that_refuses() {
