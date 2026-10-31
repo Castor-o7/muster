@@ -27,7 +27,7 @@
 use std::io::{Read, Write};
 use std::time::Duration;
 
-use crate::link::PostFailure;
+use crate::link::{PostFailure, Reply};
 
 const HOOK_PORT: u16 = 6256;
 const TIMEOUT: Duration = Duration::from_secs(5);
@@ -174,8 +174,16 @@ pub fn wait_hook(base_override: Option<&str>) {
         return;
     }
     let cwd = v.get("cwd").and_then(|s| s.as_str()).unwrap_or("");
-    let Some(_lock) = waiter_lock(sid) else {
-        return;
+    // A resumed session's old waiter holds the lock until its next poll notices
+    // the parent is gone, so wait that out rather than leave the session without
+    // a waiter. If that waiter's parent is alive, this just exits a bit later.
+    let deadline = std::time::Instant::now() + lock_wait();
+    let _lock = loop {
+        match waiter_lock(sid) {
+            Some(lock) => break lock,
+            None if std::time::Instant::now() >= deadline => return,
+            None => std::thread::sleep(LOCK_RETRY),
+        }
     };
     let delivered = wait_for_mail(sid, cwd, base_override, true, |resp| {
         eprintln!("{resp}");
@@ -202,9 +210,9 @@ fn waiter_lock(session_id: &str) -> Option<std::fs::File> {
     Some(file)
 }
 
-/// Long-poll `/hook/wait`, handing each delivery to `deliver`. Returns true
-/// after the first delivery when `once`, and false if the parent went away
-/// first. Without `once` it runs until killed.
+/// Long-poll `/hook/wait`, handing each delivery to `deliver` and then acking it.
+/// Returns true after the first delivery when `once`, and false if the parent
+/// went away first. Without `once` it runs until killed or orphaned.
 fn wait_for_mail(
     session_id: &str,
     cwd: &str,
@@ -221,7 +229,7 @@ fn wait_for_mail(
         json_str(cwd)
     );
     let path = format!(
-        "/hook/wait?host={}&operator={}&harness=claude&timeout={}",
+        "/hook/wait?host={}&operator={}&harness=claude&ack=client&timeout={}",
         url_q(&short_host()),
         url_q(&operator()),
         wait.as_secs()
@@ -237,19 +245,43 @@ fn wait_for_mail(
     let mut failing = None;
     let parent = parent_pid();
     loop {
-        if once && parent_pid() != parent {
+        if parent_pid() != parent {
             return false;
         }
-        let response = match crate::link::load_pairing().filter(|_| !explicit) {
-            Some(pairing) => crate::link::https_post_why(&pairing, &path, &body, timeout),
-            None => http_post_why(&base, &path, &body, timeout),
+        let post = |path: &str, body: &str, timeout| match crate::link::load_pairing()
+            .filter(|_| !explicit)
+        {
+            Some(pairing) => crate::link::https_post_why(&pairing, path, body, timeout),
+            None => http_post_why(&base, path, body, timeout),
         };
-        match response {
-            Ok(resp) => {
+        match post(&path, &body, timeout) {
+            Ok(reply) => {
                 failing = None;
-                let resp = resp.trim_end_matches(['\n', '\r', ' ']);
+                if once {
+                    clear_refusal(session_id);
+                }
+                let resp = reply.body.trim_end_matches(['\n', '\r', ' ']);
                 if !resp.is_empty() {
+                    // The session closed during the poll: leave the mail unacked,
+                    // for whoever reads next once the daemon's lease lapses.
+                    if parent_pid() != parent {
+                        return false;
+                    }
                     deliver(resp);
+                    // Only now has it been handed on. A lost ack means the mail
+                    // comes again, which beats losing it.
+                    if !reply.ack_ids.is_empty() {
+                        let ack = serde_json::json!({
+                            "session_id": session_id,
+                            "message_ids": reply.ack_ids,
+                        })
+                        .to_string();
+                        if let Err(e) = post("/hook/ack", &ack, ACK_TIMEOUT) {
+                            eprintln!(
+                                "muster-shim watch: couldn't ack delivered mail, so it may arrive again: {e}"
+                            );
+                        }
+                    }
                     if once {
                         return true;
                     }
@@ -258,11 +290,17 @@ fn wait_for_mail(
             Err(failure) => {
                 // A one-shot waiter's stderr is delivered to the model with its
                 // next message, by which time an outage would be long out of
-                // date. A refusal won't clear by itself, so stop rather than
-                // poll; waking the session would only repeat at every Stop.
+                // date. A refusal won't clear by itself, so stop polling and
+                // wake the session once per cause, so someone hears of it; every
+                // Stop starts another waiter, which mustn't wake it again.
                 if once && failure.is_refusal() {
-                    eprintln!("muster-shim watch: {failure}");
-                    return false;
+                    if !refusal_is_new(session_id, failure) {
+                        return false;
+                    }
+                    deliver(&format!(
+                        "Muster can't deliver mail to this session: {failure}. Please tell your operator. This notice won't repeat."
+                    ));
+                    return true;
                 }
                 if failing != Some(failure) && !once {
                     eprintln!("muster-shim watch: {failure}; retrying");
@@ -271,6 +309,37 @@ fn wait_for_mail(
                 std::thread::sleep(WATCH_RETRY);
             }
         }
+    }
+}
+
+fn refusal_marker(session_id: &str) -> Option<std::path::PathBuf> {
+    crate::config_file_candidates(&format!("refused-{session_id}"))
+        .into_iter()
+        .next()
+}
+
+/// Whether this session hasn't yet been told of this cause, recording that it
+/// now has. If the marker can't be written, it says no: staying quiet beats
+/// waking the session at every Stop.
+fn refusal_is_new(session_id: &str, failure: PostFailure) -> bool {
+    let Some(path) = refusal_marker(session_id) else {
+        return false;
+    };
+    let cause = failure.to_string();
+    if std::fs::read_to_string(&path).is_ok_and(|seen| seen == cause) {
+        return false;
+    }
+    if let Some(dir) = path.parent()
+        && std::fs::create_dir_all(dir).is_err()
+    {
+        return false;
+    }
+    std::fs::write(&path, cause).is_ok()
+}
+
+fn clear_refusal(session_id: &str) {
+    if let Some(path) = refusal_marker(session_id) {
+        let _ = std::fs::remove_file(path);
     }
 }
 
@@ -292,6 +361,16 @@ fn parent_pid() -> Option<u32> {
 const WATCH_WAIT: Duration = Duration::from_secs(240);
 const ONCE_WAIT: Duration = Duration::from_secs(30);
 const WATCH_RETRY: Duration = Duration::from_secs(5);
+const ACK_TIMEOUT: Duration = Duration::from_secs(10);
+const LOCK_RETRY: Duration = Duration::from_secs(1);
+
+/// How long a waiter waits for another to let go: past one poll of `ONCE_WAIT`.
+fn lock_wait() -> Duration {
+    std::env::var("MUSTER_WAITER_LOCK_WAIT_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .map_or(ONCE_WAIT + Duration::from_secs(5), Duration::from_secs)
+}
 /// Longest line `watch` prints. Monitor cuts an event's line at about 500
 /// characters, so a longer one would reach the session with its end missing.
 const WATCH_LINE_CHARS: usize = 400;
@@ -436,7 +515,9 @@ fn base_from_daemon(daemon: &str) -> String {
 /// `Connection: close`, so we read to EOF and return the body. `None` on any
 /// transport failure. `timeout` bounds the connect and each read/write.
 fn http_post(base: &str, path: &str, body: &str, timeout: Duration) -> Option<String> {
-    http_post_why(base, path, body, timeout).ok()
+    http_post_why(base, path, body, timeout)
+        .ok()
+        .map(|reply| reply.body)
 }
 
 /// [`http_post`], saying why it failed.
@@ -445,7 +526,7 @@ fn http_post_why(
     path: &str,
     body: &str,
     timeout: Duration,
-) -> Result<String, PostFailure> {
+) -> Result<Reply, PostFailure> {
     let unreachable = |_| PostFailure::Unreachable;
     let hostport = base
         .strip_prefix("http://")

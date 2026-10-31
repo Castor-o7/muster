@@ -220,7 +220,9 @@ const CONNECT_ATTEMPT: Duration = Duration::from_secs(5);
 /// POST `body` to `path` on the paired gate over pinned TLS and return the
 /// response body. `None` on any failure, a non-2xx status included.
 pub fn https_post(pairing: &Pairing, path: &str, body: &str, timeout: Duration) -> Option<String> {
-    https_post_why(pairing, path, body, timeout).ok()
+    https_post_why(pairing, path, body, timeout)
+        .ok()
+        .map(|reply| reply.body)
 }
 
 /// Why a POST to the daemon got no usable answer.
@@ -264,8 +266,16 @@ impl std::fmt::Display for PostFailure {
     }
 }
 
-/// The body of a complete HTTP response, or why there isn't a usable one.
-pub fn parse_response(buf: &[u8]) -> Result<String, PostFailure> {
+/// A successful response: its body, and the message ids the daemon wants acked
+/// once they've been handed on.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Reply {
+    pub body: String,
+    pub ack_ids: Vec<String>,
+}
+
+/// A complete HTTP response, or why there isn't a usable one.
+pub fn parse_response(buf: &[u8]) -> Result<Reply, PostFailure> {
     let text = String::from_utf8_lossy(buf);
     let idx = text.find("\r\n\r\n").ok_or(PostFailure::Unreachable)?;
     let status = text[..idx]
@@ -277,7 +287,21 @@ pub fn parse_response(buf: &[u8]) -> Result<String, PostFailure> {
     if !(200..300).contains(&status) {
         return Err(PostFailure::Status(status));
     }
-    Ok(text[idx + 4..].to_string())
+    let ack_ids = text[..idx]
+        .lines()
+        .filter_map(|line| line.split_once(':'))
+        .find(|(name, _)| name.eq_ignore_ascii_case("x-muster-ack"))
+        .map(|(_, ids)| {
+            ids.split(',')
+                .map(|id| id.trim().to_string())
+                .filter(|id| !id.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(Reply {
+        body: text[idx + 4..].to_string(),
+        ack_ids,
+    })
 }
 
 /// rustls reports a certificate it rejected as an I/O error wrapping its own.
@@ -299,7 +323,7 @@ pub fn https_post_why(
     path: &str,
     body: &str,
     timeout: Duration,
-) -> Result<String, PostFailure> {
+) -> Result<Reply, PostFailure> {
     let unreachable = |_| PostFailure::Unreachable;
     let tcp = connect_any(pairing.address.as_str(), timeout).ok_or(PostFailure::Unreachable)?;
     tcp.set_read_timeout(Some(timeout)).map_err(unreachable)?;
@@ -336,8 +360,11 @@ mod tests {
     #[test]
     fn a_response_says_why_it_failed() {
         assert_eq!(
-            parse_response(b"HTTP/1.1 200 OK\r\n\r\nbody"),
-            Ok("body".to_string())
+            parse_response(b"HTTP/1.1 200 OK\r\nX-Muster-Ack: a, b\r\n\r\nbody"),
+            Ok(Reply {
+                body: "body".to_string(),
+                ack_ids: vec!["a".to_string(), "b".to_string()],
+            })
         );
         for code in [401, 403] {
             let raw = format!("HTTP/1.1 {code} No\r\n\r\n");

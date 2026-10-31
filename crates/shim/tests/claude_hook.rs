@@ -215,6 +215,7 @@ fn spawn_waiter(base: &str, config: &std::path::Path) -> std::process::Child {
         .args(["claude-hook", "wait"])
         .env("MUSTER_BASE_URL", base)
         .env("XDG_CONFIG_HOME", config)
+        .env("MUSTER_WAITER_LOCK_WAIT_SECS", "0")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -249,25 +250,37 @@ fn waiter_prints_mail_to_stderr_and_exits_2() {
     );
 }
 
-#[test]
-fn waiter_stops_and_names_the_cause_when_refused() {
+/// Answers each of `count` connections with 403.
+fn refusing_listener(count: usize) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     std::thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        let mut buf = [0u8; 2048];
-        let _ = std::io::Read::read(&mut stream, &mut buf);
-        stream
-            .write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
-            .unwrap();
+        for _ in 0..count {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 2048];
+            let _ = std::io::Read::read(&mut stream, &mut buf);
+            stream
+                .write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
+                .unwrap();
+        }
     });
-    let config = temp_config("waiter-refused");
-    let out = spawn_waiter(&base, &config).wait_with_output().unwrap();
+    base
+}
 
-    // Exit 0: a wake here would repeat at every Stop.
-    assert_eq!(out.status.code(), Some(0));
-    let stderr = String::from_utf8(out.stderr).unwrap();
+#[test]
+fn a_refused_waiter_tells_the_session_once_per_cause() {
+    let base = refusing_listener(2);
+    let config = temp_config("waiter-refused");
+
+    let first = spawn_waiter(&base, &config).wait_with_output().unwrap();
+    assert_eq!(first.status.code(), Some(2));
+    let stderr = String::from_utf8(first.stderr).unwrap();
     assert!(stderr.contains("403"), "{stderr}");
+
+    // Stop runs the hook again: no second wake, or it would loop.
+    let second = spawn_waiter(&base, &config).wait_with_output().unwrap();
+    assert_eq!(second.status.code(), Some(0));
+    assert!(second.stderr.is_empty());
 }
 
 #[test]

@@ -6,6 +6,7 @@ set -u
 BIN=$(cd "$(dirname "$0")/.." && pwd)/target/debug
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/muster-gate-e2e.XXXX")
 export MUSTER_STATE_DIR=$WORK/state
+export MUSTER_ACK_LEASE_SECS=2
 export MUSTER_BIND=127.0.0.1:16255 MUSTER_HOOK_BIND=127.0.0.1:16256 MUSTER_INTERNAL_BIND=127.0.0.1:16257
 unset MUSTER_BASE_URL MUSTER_DAEMON_ADDRESS
 T() { perl -e 'alarm 10; exec @ARGV' "$@"; }
@@ -109,6 +110,23 @@ sleep 1
 OUT=$(T $BIN/muster-shim all last one 2>&1)
 check "a terminal doesn't message itself" '[[ $OUT != *"no team"* ]]'
 
+# A dropped path: mail handed out but never acked comes back, and an ack ends it.
+RAWWAIT() { curl -sk -m 5 -H "Authorization: Bearer $TOKEN" -X POST "https://127.0.0.1:16255/hook/wait?timeout=1&ack=client" -d "$HOOK"; }
+sleep 3; while [[ -n $(WAITSTATUS) ]]; do :; done
+T $BIN/muster-shim tell demo dropped path >/dev/null 2>&1
+MAIL=$(RAWWAIT)
+check "a client-acked wait hands out the mail" '[[ $MAIL == *"dropped path"* ]]'
+MAIL=$(RAWWAIT)
+check "another reader isn't offered it while that's in flight" '[[ $MAIL != *"dropped path"* ]]'
+sleep 3
+HEAD=$(curl -sk -m 5 -D - -H "Authorization: Bearer $TOKEN" -X POST "https://127.0.0.1:16255/hook/wait?timeout=1&ack=client" -d "$HOOK")
+check "with no ack the mail comes back" '[[ $HEAD == *"dropped path"* ]]'
+ID=$(print -r -- "$HEAD" | tr -d '\r' | awk -F': ' 'tolower($1)=="x-muster-ack"{print $2}' | cut -d, -f1)
+curl -sk -m 5 -o /dev/null -H "Authorization: Bearer $TOKEN" -X POST https://127.0.0.1:16255/hook/ack -d "{\"session_id\":\"a0000000-0000-4000-8000-000000000004\",\"message_ids\":[\"$ID\"]}"
+sleep 3
+MAIL=$(RAWWAIT)
+check "and an ack ends it" '[[ $MAIL != *"dropped path"* ]]'
+
 # A hook port that can't bind stops the daemon, rather than leaving hooks dead.
 env MUSTER_STATE_DIR=$WORK/state2 MUSTER_BIND=127.0.0.1:16355 MUSTER_INTERNAL_BIND=127.0.0.1:16357 RUST_LOG=error perl -e 'alarm 10; exec @ARGV' $BIN/muster-daemon >$WORK/bind.log 2>&1; RC=$?
 check "a failed hook bind stops the daemon and says why" '[[ $RC != 0 && $RC != 142 ]] && grep -q "hook listener on 127.0.0.1:16256" $WORK/bind.log'
@@ -119,7 +137,9 @@ T $BIN/muster-shim pair "$BAD" >/dev/null
 OUT=$(echo $HOOK | T $BIN/muster-shim claude-hook session-start)
 check "wrong certificate fingerprint: hook gets nothing" '[[ -z $OUT ]]'
 OUT=$(echo $HOOK | T $BIN/muster-shim claude-hook wait 2>&1); RC=$?
-check "wrong certificate fingerprint: waiter stops and says so" '[[ $RC == 0 && $OUT == *"certificate"* ]]'
+check "wrong certificate fingerprint: waiter tells the session" '[[ $RC == 2 && $OUT == *"certificate"* ]]'
+OUT=$(echo $HOOK | T $BIN/muster-shim claude-hook wait 2>&1); RC=$?
+check "and only once" '[[ $RC == 0 && -z $OUT ]]'
 
 # Unpaired, on the daemon's own host: the shim falls back to myko's loopback port.
 mkdir -p $WORK/unpaired

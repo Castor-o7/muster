@@ -214,10 +214,19 @@ async fn handle_wait(
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(WAIT_DEFAULT_SECS)
         .min(WAIT_MAX_SECS);
+    let client_acks = query.split('&').any(|kv| kv == "ack=client");
     let deadline = tokio::time::Instant::now() + Duration::from_secs(secs);
     let mut probe = [0u8; 64];
     loop {
         if let Some(outcome) = hooks::poll_wait(&cmd_ctx, &sid) {
+            // A client that says it will ack does so once it has handed the
+            // mail on, which the gate's loopback socket can't tell us.
+            if client_acks {
+                let ids = outcome.deferred_ack.map(|(_, ids)| ids).unwrap_or_default();
+                let ids: Vec<&str> = ids.iter().map(|id| id.0.as_ref()).collect();
+                let header = format!("X-Muster-Ack: {}\r\n", ids.join(","));
+                return write_response_with(&mut stream, 200, &header, &outcome.body).await;
+            }
             write_response(&mut stream, 200, &outcome.body).await?;
             if let Some((session, ids)) = outcome.deferred_ack {
                 hooks::ack_surfaced(ctx, &session, ids);
@@ -235,6 +244,15 @@ async fn handle_wait(
 }
 
 async fn write_response(stream: &mut TcpStream, status: u16, body: &str) -> std::io::Result<()> {
+    write_response_with(stream, status, "", body).await
+}
+
+async fn write_response_with(
+    stream: &mut TcpStream,
+    status: u16,
+    extra_headers: &str,
+    body: &str,
+) -> std::io::Result<()> {
     let reason = match status {
         200 => "OK",
         403 => "Forbidden",
@@ -247,7 +265,7 @@ async fn write_response(stream: &mut TcpStream, status: u16, body: &str) -> std:
         "HTTP/1.1 {status} {reason}\r\n\
          Content-Type: text/plain; charset=utf-8\r\n\
          Content-Length: {}\r\n\
-         Connection: close\r\n\r\n",
+         Connection: close\r\n{extra_headers}\r\n",
         body.len(),
     );
     stream.write_all(head.as_bytes()).await?;

@@ -23,7 +23,9 @@
 //! `asSession` field (self-identify), since this internal context has no
 //! WS `client_id`.
 
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, LazyLock, Mutex};
+use std::time::{Duration, Instant};
 
 use myko::prelude::EventPublishing as _;
 use myko::{
@@ -65,6 +67,54 @@ impl HookOutcome {
     }
 }
 
+/// How long surfaced mail stays out of other readers' way while its reader
+/// delivers it. If no ack arrives by then, the path was lost and it's offered
+/// again, so a slow reader can see a duplicate but mail isn't lost.
+const DEFAULT_LEASE: Duration = Duration::from_secs(60);
+
+/// Mail handed to a reader and not yet acked, as session and message to expiry.
+#[derive(Default)]
+struct Leases(HashMap<(SessionId, MessageId), Instant>);
+
+impl Leases {
+    /// Lease whichever of `ids` nobody holds, returning those.
+    fn take(
+        &mut self,
+        session: &SessionId,
+        ids: &[MessageId],
+        now: Instant,
+        lease: Duration,
+    ) -> HashSet<MessageId> {
+        self.0.retain(|_, expires| *expires > now);
+        ids.iter()
+            .filter(|id| {
+                let key = (session.clone(), (*id).clone());
+                if self.0.contains_key(&key) {
+                    return false;
+                }
+                self.0.insert(key, now + lease);
+                true
+            })
+            .cloned()
+            .collect()
+    }
+
+    fn release(&mut self, session: &SessionId, ids: &[MessageId]) {
+        for id in ids {
+            self.0.remove(&(session.clone(), id.clone()));
+        }
+    }
+}
+
+static LEASES: LazyLock<Mutex<Leases>> = LazyLock::new(Mutex::default);
+
+fn lease_duration() -> Duration {
+    std::env::var("MUSTER_ACK_LEASE_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .map_or(DEFAULT_LEASE, Duration::from_secs)
+}
+
 /// Dispatch a POST to a `/hook/*` path. Returns `Some(outcome)` for a known
 /// hook route — the listener writes `outcome.body` as the `text/plain` body,
 /// then runs `outcome.deferred_ack` — or `None` for an unknown path (→ 404).
@@ -79,6 +129,7 @@ pub fn dispatch(
         "/hook/session-start" => Some(handle_session_start(query, body, ctx)),
         "/hook/prompt-submit" => Some(handle_prompt_submit(query, body, ctx)),
         "/hook/session-end" => Some(handle_session_end(body, ctx)),
+        "/hook/ack" => Some(handle_ack(body, ctx)),
         _ => None,
     }
 }
@@ -92,17 +143,42 @@ pub fn ack_surfaced(ctx: &Arc<MykoServerContext>, session: &SessionId, ids: Vec<
         return;
     }
     let cmd_ctx = internal_cmd_ctx(ctx);
-    if let Err(e) = (AckMessages {
-        message_ids: ids,
+    let acked = (AckMessages {
+        message_ids: ids.clone(),
         as_session: Some(session.clone()),
     })
-    .execute(cmd_ctx)
-    {
+    .execute(cmd_ctx);
+    // Only now, so the row is read before anyone else can be offered it.
+    if let Ok(mut leases) = LEASES.lock() {
+        leases.release(session, &ids);
+    }
+    if let Err(e) = acked {
         log::warn!(
             "[hook] deferred inbox ack failed for {}: {e:?}",
             session.0.as_ref()
         );
     }
+}
+
+/// A client acknowledging mail it has actually handed on (`/hook/wait?ack=client`).
+fn handle_ack(body: &[u8], ctx: &Arc<MykoServerContext>) -> HookOutcome {
+    let parsed = parse_body(body);
+    let session = parsed
+        .as_ref()
+        .and_then(|b| b.get("session_id")?.as_str())
+        .map(|sid| SessionId(Arc::from(sid)));
+    let ids: Vec<MessageId> = parsed
+        .as_ref()
+        .and_then(|b| b.get("message_ids")?.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|id| id.as_str())
+        .map(|id| MessageId(Arc::from(id)))
+        .collect();
+    if let Some(session) = session {
+        ack_surfaced(ctx, &session, ids);
+    }
+    HookOutcome::text(String::new())
 }
 
 /// Register or refresh a hook-owned session without surfacing its inbox.
@@ -399,10 +475,22 @@ fn surface_unread(cmd_ctx: &CommandContext, sid: &str) -> (String, Vec<MessageId
         limit: Some(20),
         as_session: Some(sid_typed.clone()),
     };
-    let result = match read.execute(cmd_ctx.clone()) {
+    let mut result = match read.execute(cmd_ctx.clone()) {
         Ok(r) => r,
         Err(_) => return (String::new(), Vec::new()),
     };
+    // Mail another reader is delivering isn't offered twice.
+    let unread: Vec<MessageId> = result
+        .messages
+        .iter()
+        .map(|m| m.message_id.clone())
+        .collect();
+    let Ok(mut leases) = LEASES.lock() else {
+        return (String::new(), Vec::new());
+    };
+    let taken = leases.take(&sid_typed, &unread, Instant::now(), lease_duration());
+    drop(leases);
+    result.messages.retain(|m| taken.contains(&m.message_id));
     if result.messages.is_empty() {
         return (String::new(), Vec::new());
     }
@@ -537,6 +625,41 @@ fn url_decode(s: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod lease_tests {
+    use super::*;
+
+    fn id(s: &str) -> MessageId {
+        MessageId(Arc::from(s))
+    }
+
+    #[test]
+    fn a_second_reader_gets_nothing_until_the_lease_lapses() {
+        let session = SessionId(Arc::from("s"));
+        let ids = [id("m")];
+        let lease = Duration::from_secs(60);
+        let now = Instant::now();
+        let mut leases = Leases::default();
+        assert_eq!(leases.take(&session, &ids, now, lease).len(), 1);
+        assert!(leases.take(&session, &ids, now, lease).is_empty());
+        // No ack ever came: the path was lost, so offer it again.
+        assert_eq!(leases.take(&session, &ids, now + lease, lease).len(), 1);
+    }
+
+    #[test]
+    fn release_ends_a_lease_and_readers_of_other_sessions_are_unaffected() {
+        let (a, b) = (SessionId(Arc::from("a")), SessionId(Arc::from("b")));
+        let ids = [id("m")];
+        let lease = Duration::from_secs(60);
+        let now = Instant::now();
+        let mut leases = Leases::default();
+        leases.take(&a, &ids, now, lease);
+        assert_eq!(leases.take(&b, &ids, now, lease).len(), 1);
+        leases.release(&a, &ids);
+        assert_eq!(leases.take(&a, &ids, now, lease).len(), 1);
+    }
 }
 
 #[cfg(test)]
