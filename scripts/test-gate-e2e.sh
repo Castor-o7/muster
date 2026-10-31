@@ -127,6 +127,15 @@ sleep 3
 MAIL=$(RAWWAIT)
 check "and an ack ends it" '[[ $MAIL != *"dropped path"* ]]'
 
+# An ack marks mail read, so a forged one would lose it.
+T $BIN/muster-shim tell demo forged ack >/dev/null 2>&1
+HEAD=$(curl -sk -m 5 -D - -H "Authorization: Bearer $TOKEN" -X POST "https://127.0.0.1:16255/hook/wait?timeout=1&ack=client" -d "$HOOK")
+ID=$(print -r -- "$HEAD" | tr -d '\r' | awk -F': ' 'tolower($1)=="x-muster-ack"{print $2}' | cut -d, -f1)
+check "another machine's ack is refused" '[[ -n $ID && $(curl -sk -m 5 -o /dev/null -w %{http_code} -H "Authorization: Bearer $ATTACKER" -X POST https://127.0.0.1:16255/hook/ack -d "{\"session_id\":\"a0000000-0000-4000-8000-000000000004\",\"message_ids\":[\"$ID\"]}") == 403 ]]'
+sleep 3
+MAIL=$(RAWWAIT)
+check "and the mail still comes" '[[ $MAIL == *"forged ack"* ]]'
+
 # A hook port that can't bind stops the daemon, rather than leaving hooks dead.
 env MUSTER_STATE_DIR=$WORK/state2 MUSTER_BIND=127.0.0.1:16355 MUSTER_INTERNAL_BIND=127.0.0.1:16357 RUST_LOG=error perl -e 'alarm 10; exec @ARGV' $BIN/muster-daemon >$WORK/bind.log 2>&1; RC=$?
 check "a failed hook bind stops the daemon and says why" '[[ $RC != 0 && $RC != 142 ]] && grep -q "hook listener on 127.0.0.1:16256" $WORK/bind.log'

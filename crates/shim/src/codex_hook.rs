@@ -257,9 +257,7 @@ fn wait_for_mail(
         match post(&path, &body, timeout) {
             Ok(reply) => {
                 failing = None;
-                if once {
-                    clear_refusal(session_id);
-                }
+                clear_refusal(session_id);
                 let resp = reply.body.trim_end_matches(['\n', '\r', ' ']);
                 if !resp.is_empty() {
                     // The session closed during the poll: leave the mail unacked,
@@ -288,19 +286,23 @@ fn wait_for_mail(
                 }
             }
             Err(failure) => {
-                // A one-shot waiter's stderr is delivered to the model with its
-                // next message, by which time an outage would be long out of
-                // date. A refusal won't clear by itself, so stop polling and
-                // wake the session once per cause, so someone hears of it; every
-                // Stop starts another waiter, which mustn't wake it again.
-                if once && failure.is_refusal() {
-                    if !refusal_is_new(session_id, failure) {
-                        return false;
-                    }
+                // A refusal won't clear by itself, so tell the session once per
+                // cause, on the path it reads: Monitor ignores a watcher's stderr.
+                // A new waiter or re-armed watcher mustn't tell it again, or
+                // every Stop would wake it.
+                if failure.is_refusal() && refusal_is_new(session_id, failure) {
                     deliver(&format!(
                         "Muster can't deliver mail to this session: {failure}. Please tell your operator. This notice won't repeat."
                     ));
-                    return true;
+                    if once {
+                        return true;
+                    }
+                }
+                // A one-shot waiter stops polling on a refusal. Its stderr reaches
+                // the model with its next message, by which time an outage would
+                // be long out of date, so it stays quiet about those.
+                if once && failure.is_refusal() {
+                    return false;
                 }
                 if failing != Some(failure) && !once {
                     eprintln!("muster-shim watch: {failure}; retrying");
