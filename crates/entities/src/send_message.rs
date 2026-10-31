@@ -31,7 +31,8 @@ use uuid::Uuid;
 
 use crate::{
     message::{
-        CONTEXT_BODY_MAX_CHARS, GetAllMessages, Message, MessageId, body_too_large, context_preview,
+        CONTEXT_BODY_MAX_CHARS, GetMessagesByIds, Message, MessageId, body_too_large,
+        context_preview,
     },
     message_read::{MessageRead, MessageReadId},
     notify::NotifyChannel,
@@ -183,8 +184,10 @@ impl CommandHandler for SendMessage {
         };
         let id = MessageId(Arc::from(id.to_string()));
         if self.idempotency_key.is_some() {
-            let messages: Vec<Arc<Message>> = ctx.exec_query(GetAllMessages {})?;
-            if let Some(first) = messages.iter().find(|m| m.id == id) {
+            let found: Vec<Arc<Message>> = ctx.exec_query(GetMessagesByIds {
+                ids: vec![id.clone()],
+            })?;
+            if let Some(first) = found.first() {
                 if first.body != self.body || first.to_session_id.as_ref() != Some(&recipient.id) {
                     return Err(err(
                         &ctx,

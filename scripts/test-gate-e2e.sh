@@ -174,6 +174,82 @@ BIG=$(python3 -I -c 'print("x"*70000)')
 OUT=$(T $BIN/muster-shim tell demo "$BIG" 2>&1); RC=$?
 check "an oversized message is refused" '[[ $RC != 0 && $OUT == *"byte limit"* ]]'
 
+# A lost reply: the send reaches the daemon, its response is dropped, the shim times out,
+# and retrying with the key from the error doesn't deliver twice.
+LOST=$WORK/lost.py
+cat >$LOST <<'PY'
+import json, os, re, select, socket, subprocess, sys, threading, time, urllib.request
+shim, env_home = sys.argv[1], sys.argv[2]
+drop = threading.Event()
+def read_n(s, n):
+    b = b""
+    while len(b) < n:
+        c = s.recv(n - len(b))
+        if not c: raise EOFError
+        b += c
+    return b
+def relay_up(c, u):
+    try:
+        while True:
+            d = c.recv(65536)
+            if not d: break
+            u.sendall(d)
+    except OSError: pass
+def relay_down(u, c):
+    # Whole frames, so dropping some leaves the stream valid.
+    try:
+        head = b""
+        while b"\r\n\r\n" not in head: head += u.recv(1)
+        c.sendall(head)
+        while True:
+            h = read_n(u, 2); n = h[1] & 127; ext = b""
+            if n == 126: ext = read_n(u, 2); n = int.from_bytes(ext, "big")
+            elif n == 127: ext = read_n(u, 8); n = int.from_bytes(ext, "big")
+            body = read_n(u, n)
+            if not drop.is_set(): c.sendall(h + ext + body)
+    except (OSError, EOFError): pass
+lst = socket.socket(); lst.bind(("127.0.0.1", 0)); lst.listen(); port = lst.getsockname()[1]
+def serve():
+    while True:
+        c, _ = lst.accept()
+        u = socket.create_connection(("127.0.0.1", 16257))
+        threading.Thread(target=relay_up, args=(c, u), daemon=True).start()
+        threading.Thread(target=relay_down, args=(u, c), daemon=True).start()
+threading.Thread(target=serve, daemon=True).start()
+env = dict(os.environ, HOME=env_home, XDG_CONFIG_HOME=env_home, MUSTER_DAEMON_ADDRESS="ws://127.0.0.1:%d" % port,
+           CLAUDE_CODE_SESSION_ID="e2e-lost-sender")
+p = subprocess.Popen([shim], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env, text=True, bufsize=1)
+def rpc(i, method, params, wait):
+    p.stdin.write(json.dumps({"jsonrpc": "2.0", "id": i, "method": method, "params": params}) + "\n"); p.stdin.flush()
+    end = time.time() + wait
+    while time.time() < end:
+        if select.select([p.stdout], [], [], 1)[0]:
+            m = json.loads(p.stdout.readline())
+            if m.get("id") == i: return m
+    raise SystemExit("no reply to " + method)
+rpc(1, "initialize", {"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "e2e", "version": "0"}}, 20)
+time.sleep(3)
+send = {"to": "a0000000-0000-4000-8000-00000000000b", "body": "lost reply body"}
+drop.set()
+first = json.dumps(rpc(2, "tools/call", {"name": "send_message", "arguments": send}, 25))
+drop.clear()
+key = re.search(r"idempotency_key `([^`]+)`", first)
+print("TIMEOUT" if "timed out" in first and key else "NO-TIMEOUT: " + first[:300])
+if key:
+    second = json.dumps(rpc(3, "tools/call", {"name": "send_message", "arguments": dict(send, idempotency_key=key.group(1))}, 15))
+    print("RETRY-OK" if "message_id" in second else "RETRY-FAILED: " + second[:300])
+p.kill()
+PY
+curl -s -m 3 -o /dev/null -X POST http://127.0.0.1:16256/hook/session-start -d '{"session_id":"a0000000-0000-4000-8000-00000000000b","cwd":"/tmp/lost"}'
+mkdir -p $WORK/lost-home
+OUT=$(perl -e 'alarm 60; exec @ARGV' python3 -I $LOST $BIN/muster-shim $WORK/lost-home 2>&1)
+check "a dropped reply times out and gives a retry key" '[[ $OUT == *TIMEOUT* && $OUT != *NO-TIMEOUT* ]]'
+check "and the retry with that key succeeds" '[[ $OUT == *RETRY-OK* ]]'
+sleep 3
+MAIL=$(curl -s -m 5 -X POST "http://127.0.0.1:16256/hook/wait?timeout=1" -d '{"session_id":"a0000000-0000-4000-8000-00000000000b","cwd":"/tmp/lost"}')
+check "and the recipient gets it once" '[[ $(print -r -- "$MAIL" | grep -c "lost reply body") == 1 ]]'
+[[ $OUT == *RETRY-OK* ]] || print -r -- "$OUT"
+
 # A hook port that can't bind stops the daemon, rather than leaving hooks dead.
 env MUSTER_STATE_DIR=$WORK/state2 MUSTER_BIND=127.0.0.1:16355 MUSTER_INTERNAL_BIND=127.0.0.1:16357 RUST_LOG=error perl -e 'alarm 10; exec @ARGV' $BIN/muster-daemon >$WORK/bind.log 2>&1; RC=$?
 check "a failed hook bind stops the daemon and says why" '[[ $RC != 0 && $RC != 142 ]] && grep -q "hook listener on 127.0.0.1:16256" $WORK/bind.log'
