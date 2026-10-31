@@ -146,6 +146,125 @@ impl CommandHandler for DispatchAutoRooms {
             }
         }
 
+        // A session's operator can change, as it did when the daemon began
+        // attesting them, and the old room shouldn't keep reaching it.
+        for member in stale_operator_memberships(&session, &rooms, &memberships) {
+            ctx.emit_del(&*member)?;
+        }
+
         Ok(())
+    }
+}
+
+/// This session's memberships of operator rooms other than its current
+/// operator's. With no operator known, there's nothing to compare against.
+fn stale_operator_memberships(
+    session: &Session,
+    rooms: &[Arc<Room>],
+    memberships: &[Arc<RoomMember>],
+) -> Vec<Arc<RoomMember>> {
+    let Some(operator) = session.operator.as_deref().filter(|op| !op.is_empty()) else {
+        return Vec::new();
+    };
+    let is_stale_room = |room_id: &RoomId| {
+        rooms.iter().any(|room| {
+            room.id == *room_id
+                && matches!(
+                    &room.kind,
+                    RoomKind::Auto {
+                        source: AutoSource::Operator { name }
+                    } if name != operator
+                )
+        })
+    };
+    memberships
+        .iter()
+        .filter(|m| m.session_id == session.id && is_stale_room(&m.room_id))
+        .cloned()
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use muster_entities::SessionId;
+
+    fn session(id: &str, operator: Option<&str>) -> Session {
+        Session {
+            id: SessionId(Arc::from(id)),
+            client_id: None,
+            pid: 0,
+            cwd: String::new(),
+            git_branch: None,
+            current_task: None,
+            session_name: None,
+            activity: None,
+            kind: None,
+            connected_at: 0,
+            last_activity_at: None,
+            last_tool: None,
+            last_tool_at: None,
+            operator: operator.map(str::to_string),
+            host: None,
+            project: None,
+            channels_enabled: None,
+        }
+    }
+
+    fn room(id: &str, source: AutoSource) -> Arc<Room> {
+        Arc::new(Room {
+            id: RoomId(Arc::from(id)),
+            name: id.to_string(),
+            description: None,
+            kind: RoomKind::Auto { source },
+            created_at: 0,
+        })
+    }
+
+    fn member(room_id: &str, session_id: &str) -> Arc<RoomMember> {
+        Arc::new(RoomMember {
+            id: RoomMemberId(Arc::from(RoomMember::make_id(room_id, session_id).as_str())),
+            room_id: RoomId(Arc::from(room_id)),
+            session_id: SessionId(Arc::from(session_id)),
+            joined_at: 0,
+        })
+    }
+
+    #[test]
+    fn only_a_sessions_old_operator_rooms_are_stale() {
+        let operator = |name: &str| AutoSource::Operator {
+            name: name.to_string(),
+        };
+        let rooms = [
+            room("op:josh", operator("josh")),
+            room("op:josh@example.test", operator("josh@example.test")),
+            room("everyone", AutoSource::Everyone),
+        ];
+        let memberships = [
+            member("op:josh", "s"),
+            member("op:josh", "other"),
+            member("op:josh@example.test", "s"),
+            member("everyone", "s"),
+        ];
+        let stale = stale_operator_memberships(
+            &session("s", Some("josh@example.test")),
+            &rooms,
+            &memberships,
+        );
+        assert_eq!(stale.len(), 1);
+        assert_eq!(stale[0].room_id.0.as_ref(), "op:josh");
+        assert_eq!(stale[0].session_id.0.as_ref(), "s");
+    }
+
+    #[test]
+    fn nothing_is_stale_without_a_known_operator() {
+        let rooms = [room(
+            "op:josh",
+            AutoSource::Operator {
+                name: "josh".to_string(),
+            },
+        )];
+        let memberships = [member("op:josh", "s")];
+        assert!(stale_operator_memberships(&session("s", None), &rooms, &memberships).is_empty());
     }
 }
