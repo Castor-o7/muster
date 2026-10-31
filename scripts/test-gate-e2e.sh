@@ -194,6 +194,7 @@ mkdir -p $WORK/unpaired
 (sleep 4) | env HOME=$WORK/unpaired XDG_CONFIG_HOME=$WORK/unpaired MUSTER_DAEMON_ADDRESS=ws://127.0.0.1:16257 CLAUDE_CODE_SESSION_ID=e2e-local RUST_LOG=info perl -e "alarm 8; exec @ARGV" $BIN/muster-shim >/dev/null 2>$WORK/local.log
 check "unpaired shim on the daemon host connects to the internal port" 'grep -q "connected to ws://127.0.0.1:16257/myko" $WORK/local.log'
 
+check "deliberate failure for MUS-42, must never merge" 'false'
 echo "--- $pass passed, $fail failed"
 rm -rf "$WORK/client" "$WORK/state"
 echo "--- daemon log (gate lines):"; grep -E "gate|rejected" $WORK/daemon.log | sed -E 's/fingerprint [0-9a-f]+/fingerprint …/' | head -12
