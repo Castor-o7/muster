@@ -55,10 +55,11 @@ pub const STALE_AFTER: Duration = Duration::from_secs(60);
 pub const PULL_STALE_AFTER: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Messages older than this are pruned by `sweep_messages`, regardless of
-/// recipient. Direct messages already cascade away with a DEL'd recipient
-/// session; this bounds the ones that DON'T — broadcasts addressed to the
-/// never-DEL'd `everyone`/`op:`/`project:` rooms, which otherwise accumulate
-/// forever (review R6/D). DELing a Message cascades its `MessageRead` rows.
+/// recipient. Direct messages to a reaped session go at the next boot, as
+/// orphans, because `del_by_id` doesn't cascade (MUS-31); this bounds the ones
+/// that DON'T — broadcasts addressed to the never-DEL'd `everyone`/`op:`/
+/// `project:` rooms, which otherwise accumulate forever (review R6/D). Their
+/// `MessageRead` rows also wait for the next boot.
 pub const MESSAGE_TTL: Duration = Duration::from_secs(14 * 24 * 60 * 60);
 
 /// Run the message-retention sweep every N session-sweeper ticks. The scan is
@@ -150,8 +151,9 @@ fn sweep_wake_watchers(ctx: &MykoServerContext) {
 
 /// Prune messages older than `MESSAGE_TTL`. Bounds the never-cascaded
 /// broadcasts (to `everyone`/`op:`/`project:`, which are never DEL'd) that
-/// would otherwise grow the store without limit. DELing a Message cascades its
-/// `MessageRead` rows via `belongs_to(Message)`, so read-state is cleaned too.
+/// would otherwise grow the store without limit. Read-state goes at the next
+/// boot: `del_by_id` doesn't cascade, so `MessageRead` rows wait for orphan
+/// cleanup (MUS-31).
 fn sweep_messages(ctx: &MykoServerContext) {
     let Some(store) = ctx.registry.get(Message::ENTITY_NAME_STATIC) else {
         return;
@@ -185,8 +187,8 @@ fn sweep_messages(ctx: &MykoServerContext) {
 /// has dropped to zero members (its anchoring sessions were all reaped, e.g.
 /// the ~35 stale empties that accreted because room GC never existed).
 /// `everyone` is permanent; adhoc rooms are user-owned and left alone.
-/// DELing a Room cascades its RoomMember rows via `belongs_to(Room)`, so
-/// live memberships never orphan.
+/// `del_by_id` doesn't cascade, so a DEL'd Room's RoomMember rows wait for
+/// orphan cleanup at the next boot (MUS-31).
 fn sweep_rooms(ctx: &MykoServerContext) {
     let Some(room_store) = ctx.registry.get(Room::ENTITY_NAME_STATIC) else {
         return;
@@ -651,5 +653,40 @@ mod tests {
             "message older than the TTL must be pruned"
         );
         assert!(ids.contains("recent"), "recent message must survive");
+    }
+
+    #[test]
+    fn a_reaped_sessions_mail_stays_live_until_the_next_boot() {
+        muster_entities::link();
+        crate::link();
+        let blackhole: Arc<dyn Persister> = Arc::new(BlackholePersister);
+        let server: &'static MykoServer = Box::leak(Box::new(
+            MykoServer::builder()
+                .with_default_persister(blackhole)
+                .build(),
+        ));
+        let ctx = server.ctx();
+        set_client(&ctx, "ws-client");
+        let now = Utc::now().timestamp_millis();
+        let stale = now - PULL_STALE_AFTER.as_millis() as i64 - 60_000;
+        // `set_message` addresses its mail to "recipient".
+        set_hook_session(&ctx, "recipient", stale);
+        set_message(&ctx, "mail", now - 1_000);
+
+        sweep_once(&ctx, &mut SweepState::default());
+
+        assert!(!session_ids(&ctx).contains("recipient"));
+        assert!(
+            message_ids(&ctx).contains("mail"),
+            "reaping uses del_by_id, which doesn't cascade (MUS-31)"
+        );
+
+        // What the daemon runs at boot, after catch-up.
+        server.establish_relations();
+
+        assert!(
+            !message_ids(&ctx).contains("mail"),
+            "orphan cleanup at boot removes mail to a reaped session (MUS-31)"
+        );
     }
 }
