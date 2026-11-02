@@ -2,7 +2,9 @@
 
 How the mustered teams and the watchman work through their roadmaps. This is
 Version 0: a convention and a table, with no new software. It exists to show
-which fields and states a native board would need.
+which fields and states a native board would need. That native board is now
+[Rally](https://github.com/Castor-o7/rally), a separate project. This process stays in force
+until Rally replaces it.
 
 There's no deadline here. Take a story when you're ready and rest between
 stories. Careful work is the goal.

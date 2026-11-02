@@ -16,7 +16,7 @@ code but not yet exploited in a test:
 3. **Clients can write raw events.** myko's WebSocket handler passes a client's `Event`
    and `EventBatch` messages straight to `apply_event`
    (`myko-server-6.9.0/src/ws_handler.rs:1417`). A paired client can set or delete any
-   entity directly: sessions, messages, rooms, and later the ledger.
+   entity directly: sessions, messages and rooms.
 
 The third hole means that checking identity in commands alone is not enough. myko 6.9.0
 has no authorization hook, and the builder's per-entity persister overrides don't see

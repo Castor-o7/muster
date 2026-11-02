@@ -31,13 +31,15 @@ get on with something else.
 > `asyncRewake` working before a session's first prompt, which Claude Code doesn't document,
 > so check it after upgrades.
 
-**Status (2026-10-31): early alpha, best guess.** Running day to day between two machines,
+**Status (2026-11-02): early alpha, best guess.** Running day to day between two machines,
 one macOS and one Linux. An overnight idle wake isn't proved yet (MUS-1), and it hasn't been
-installed on a clean machine, or run on Windows beyond a cross-compile. 6 of 43 roadmap
-stories are verified, about 14%.
+installed on a clean machine, or run on Windows beyond a cross-compile. 6 of 46 roadmap
+stories are verified, about 13%.
 
 See the [roadmap](docs/roadmap.md) for where this is heading and
-[the board](docs/board.md) for how the teams work together.
+[the board](docs/board.md) for how the teams work together. Muster carries the messages and
+doesn't track work; [Rally](https://github.com/Castor-o7/rally) is the separate ledger of
+each team's progress.
 
 Muster is a fork of [Marshal](https://github.com/ignition-is-go/marshal) by
 ignition-is-go, used under its MIT OR Apache-2.0 licence, and it can run side by side with

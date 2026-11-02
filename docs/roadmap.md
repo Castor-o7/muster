@@ -4,17 +4,29 @@ Goal: Claude sessions on different machines message each other live, including
 waking idle sessions, without `--dangerously-load-development-channels`, and
 Muster is secure and portable enough to run unattended.
 
+Muster is how agents securely reach and coordinate with each other. Tracking the
+progress of their work belongs to [Rally](https://github.com/Castor-o7/rally), a separate
+project (see Decisions).
+
 Stories follow the process in [board.md](board.md). IDs are permanent.
 "Needs a run" means `gh` can't show the result, so the submission must include
 evidence from a real run by the person or team named.
 
 ## Status
 
-2026-10-31: 6 of 43 stories ticked, about 14%. Live on Murph: `7e7869b`, which includes
-MUS-5 and MUS-6. Merged and waiting for a later daemon restart and rebuilt shims: MUS-33,
-MUS-34, MUS-35 and MUS-40. Merged and needing a live run: MUS-36 and MUS-37.
+2026-11-02: 6 of 46 stories ticked, about 13%, not counting the 3 moved to Rally. Live on
+Murph as last recorded on 2026-10-31: `7e7869b`, which includes MUS-5 and MUS-6. Merged and
+waiting for a later daemon restart and rebuilt shims: MUS-29, MUS-33, MUS-34, MUS-35 and
+MUS-40. Merged and needing a live run: MUS-36 and MUS-37. MUS-29 was merged in PRs #32 and
+#33 and still needs verifying.
 
 ## Decisions
+
+- **Muster and Rally are separate.** Decided by the operator on 2026-11-02. Muster carries
+  messages and wake-ups, and owns identity, the roster and whether a session can be woken.
+  Rally owns claims, work states, evidence, check-ins and history. Rally depends on Muster,
+  and Muster never depends on Rally, so Muster works the same with Rally down. Muster has no
+  concept of a story or a stall.
 
 - **Threat model.** Muster defends against a malicious website, and against one
   compromised session or paired machine. All machines belong to one operator.
@@ -27,8 +39,9 @@ MUS-34, MUS-35 and MUS-40. Merged and needing a live run: MUS-36 and MUS-37.
 - **Language.** New Muster code is Rust. No new TypeScript. The Pi, opencode and
   Prime Agent plugins are TypeScript inherited from Marshal, because they run inside
   those TypeScript hosts; they get no new features for now.
-- **Architecture.** Muster stays a myko service wherever possible: new state is myko
-  entities and events in the daemon, not a separate system.
+- **Architecture.** Muster stays a myko service wherever possible: Muster's own new state
+  is myko entities and events in the daemon, not a separate system. This doesn't bind
+  Rally.
 - **Ordering.** Anything that lets a Claude act without the operator waits until
   Phase 2 is done.
 
@@ -94,10 +107,12 @@ MUS-34, MUS-35 and MUS-40. Merged and needing a live run: MUS-36 and MUS-37.
 - [ ] **MUS-26: Keep `current_task` fresh.** It can go stale: one session showed
   `feature/comments` while on `feature/search`. Done when: the roster's task
   follows the branch, unless a session has set its own text.
-- [ ] **MUS-28: Show whether a team is available, working or blocked.** The roster's
-  `activity` can't separate resting from stuck, and the watchman shouldn't poll to
-  find out. Done when: a team can set its state, and the watchman can read it without
-  sending a message.
+- [ ] **MUS-44: Let other programs read the observed roster.** The Muster half of what
+  MUS-32 proposed, and what Rally needs to detect a stall. Sessions' observed facts (alive,
+  can be woken, last activity, and how fresh each is) are readable by a local program
+  without acting as a session, and declared text such as `current_task` is labelled as
+  declared. Done when: a documented read-only command or endpoint returns those facts, and
+  a test shows it can't change anything. Depends on MUS-4.
 
 ## Phase 2: Security
 
@@ -215,26 +230,19 @@ MUS-34, MUS-35 and MUS-40. Merged and needing a live run: MUS-36 and MUS-37.
   that only an agent can interpret. Starts with a design meeting with the operator; no code
   until then. Done when: the design from that meeting is written down with the operator's
   agreement, and follow-up stories are filed.
-- [ ] **MUS-32: Design the muster ledger.** The muster's best current picture of who
-  is doing what, kept as a myko service, so that no agent or team gets lost in the din,
-  watchman included. It records and informs; it doesn't command. It's a best estimate
-  rather than a final authority, so it should say how it knows each thing and how fresh
-  that is, and agents and the operator can correct it. It holds observed facts from
-  hooks and connections, declared state from agents, and who is waiting on whom. It
-  should spot a stall like the one on 2026-10-30, give stories check-in times that
-  activity pushes back, and wake the watchman with batched digests only when something
-  changes. It keeps each team's track record as plain facts: stories verified, stories sent back
-  and what was missing, and problems reported. There are no points, scores or weight, so
-  that nothing rewards hiding a failure. It brings together MUS-4, MUS-23 and MUS-28. Check first how well myko's
-  data model fits. Done when: a design is in `docs/`, starting with a read-only overhead
-  view of observed facts, and follow-up stories are filed. Declared state waits for MUS-5.
-- [ ] **MUS-23: Native board.** Stories stored in the daemon, shown in the TUI and
-  web UI, with commands to claim a story and submit it for review. Merged and
-  Verified are independent, so it needs a merge field too. Wait for MUS-5, and use
-  what the Version 0 board teaches. Done when: the watchman no longer needs
-  the hand-kept table.
 - [ ] **MUS-30: Decide the future of the TypeScript plugins.** The operator decides
   whether to keep, freeze or remove them. Done when: the decision is recorded here,
   and if they're removed, the repository's `package.json` workspace goes with them.
 - [ ] **MUS-24: Stretch goals.** Once the operator has listed them. Not ready to
   claim yet.
+
+## Moved to Rally
+
+Moved on 2026-11-02 when the operator split work tracking out of Muster. They continue in
+[Rally's roadmap](https://github.com/Castor-o7/rally/blob/main/docs/roadmap.md). The IDs
+stay reserved here so old commits and notes still make sense.
+
+- **MUS-23: Native board.** Now RAL-3, and no longer stored in the daemon.
+- **MUS-28: Show whether a team is available, working or blocked.** Now RAL-2. MUS-44 keeps
+  the observed half in Muster.
+- **MUS-32: Design the muster ledger.** Now RAL-1. MUS-44 keeps the observed facts in Muster.

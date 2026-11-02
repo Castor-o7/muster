@@ -110,7 +110,7 @@ log, and `briny-tortoise`'s messages were recovered from it on 2026-10-30.
    whichever way the design goes.
 
 Saving as it goes (unsent work) stays a convention for now: send field notes to a
-room or commit them. MUS-32 (the ledger) may be the better home.
+room or commit them. RAL-1 (the ledger, now in Rally) may be the better home.
 
 ## Follow-up stories
 
