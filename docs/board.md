@@ -25,9 +25,11 @@ make honesty cost anyone.
   otherwise.
 - **Watchman:** keeps the board, verifies finished stories, recognizes good
   work, helps with blockers, and relays decisions to the operator. The watchman
-  doesn't write or merge the code it verifies.
-- **Teams:** Muster (`MUS`), catapp (`CAT`) and ParadoxDetector (`PDX`). Each
-  team owns its roadmap and picks its own stories.
+  doesn't write the code it verifies. It may merge on the operator's direct
+  instruction, as long as someone other than the author has read the PR, and the
+  watchman may be that reader.
+- **Teams:** Muster (`MUS`), catapp (`CAT`), ParadoxDetector (`PDX`), CarChomp
+  (`CHOMP`) and Rally (`RAL`). Each team owns its roadmap and picks its own stories.
 
 ## Stories
 
