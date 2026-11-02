@@ -218,6 +218,7 @@ async fn handle_wait(
     let deadline = tokio::time::Instant::now() + Duration::from_secs(secs);
     let mut probe = [0u8; 64];
     loop {
+        hooks::mark_waiting_now(&cmd_ctx, &sid);
         if let Some(outcome) = hooks::poll_wait(&cmd_ctx, &sid) {
             // A client that says it will ack does so once it has handed the
             // mail on, which the gate's loopback socket can't tell us.

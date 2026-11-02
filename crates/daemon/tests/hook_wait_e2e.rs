@@ -219,6 +219,26 @@ fn a_held_wait_is_reported_until_its_connection_drops() {
 }
 
 #[test]
+fn an_old_waiter_dropping_does_not_hide_the_new_one() {
+    let (ctx, addr) = start();
+    let hold = || {
+        let mut stream = TcpStream::connect(addr).unwrap();
+        stream
+            .write_all(request("/hook/wait?timeout=30", RECIPIENT).as_bytes())
+            .unwrap();
+        stream
+    };
+    let old = hold();
+    assert!(eventually(|| watching(&ctx)));
+    let _new = hold();
+    thread::sleep(Duration::from_millis(100));
+    drop(old);
+    // Past the old waiter's removal and one of the new waiter's inbox checks.
+    thread::sleep(Duration::from_millis(1200));
+    assert!(watching(&ctx), "the new waiter is still reported");
+}
+
+#[test]
 fn idle_wait_ends_empty_at_its_timeout() {
     let (_ctx, addr) = start();
 

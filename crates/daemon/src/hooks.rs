@@ -423,11 +423,7 @@ pub fn begin_wait(
     body: &[u8],
     ctx: &Arc<MykoServerContext>,
 ) -> Option<(String, CommandContext)> {
-    let begun = register_hook_session(query, body, ctx);
-    if let Some((sid, cmd_ctx)) = &begun {
-        mark_waiting(cmd_ctx, sid, chrono::Utc::now().timestamp_millis());
-    }
-    begun
+    register_hook_session(query, body, ctx)
 }
 
 /// How long a `WakeWatcher` counts without being refreshed. Longer than the
@@ -440,6 +436,13 @@ const WAKE_WATCHER_REFRESH_MS: i64 = 2 * 60 * 1000;
 /// Whether a watcher lasting until `until` is due a refresh at `now`.
 fn wake_watcher_due(until: Option<i64>, now: i64) -> bool {
     until.is_none_or(|until| until - now <= WAKE_WATCHER_TTL_MS - WAKE_WATCHER_REFRESH_MS)
+}
+
+/// Record that this session is holding a wait. Called on every inbox check, so a
+/// record removed when a resumed session's old waiter drops comes back within one
+/// check, and a refresh is written only when due.
+pub fn mark_waiting_now(cmd_ctx: &CommandContext, sid: &str) {
+    mark_waiting(cmd_ctx, sid, chrono::Utc::now().timestamp_millis());
 }
 
 fn mark_waiting(cmd_ctx: &CommandContext, sid: &str, now: i64) {
@@ -462,8 +465,8 @@ fn mark_waiting(cmd_ctx: &CommandContext, sid: &str, now: i64) {
     }
 }
 
-/// A waiter's connection dropped, so stop reporting it. A live waiter's next poll
-/// puts the record back, which covers a resumed session's old waiter leaving.
+/// A waiter's connection dropped, so stop reporting it. Any other waiter for the
+/// session puts the record back at its next inbox check.
 pub fn end_wait(cmd_ctx: &CommandContext, sid: &str) {
     let watcher = WakeWatcher {
         id: WakeWatcherId(Arc::from(sid)),

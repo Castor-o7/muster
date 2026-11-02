@@ -261,7 +261,8 @@ fn read_roster(host: &ToolHost, uri: &str) -> ResourceContent {
                 "last_tool": s.last_tool,
                 "last_tool_at": s.last_tool_at,
                 "last_seen_ms_ago": now_ms - s.last_activity_at.unwrap_or(s.connected_at),
-                // Would a message wake it? Only `waiting` is observed by the daemon.
+                // Would a message wake it? `waiting` is observed by the daemon; `channel`
+                // and `busy` are declared by the session, which can claim anything.
                 "wake": muster_entities::wake_state(s, &watchers, now_ms).as_str(),
                 "rooms": rooms,
             })
