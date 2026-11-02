@@ -15,8 +15,8 @@ use crate::Session;
 #[myko_item]
 pub struct WakeWatcher {
     /// When this record stops counting, in ms since the epoch. A waiter that
-    /// vanishes without the daemon noticing stops counting by itself, and so do
-    /// records replayed after a daemon restart.
+    /// vanishes without the daemon noticing stops counting by itself. Records
+    /// aren't persisted, because a wait doesn't outlive the daemon.
     pub until: i64,
 }
 
