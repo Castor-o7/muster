@@ -219,6 +219,18 @@ fn a_held_wait_is_reported_until_its_connection_drops() {
 }
 
 #[test]
+fn a_wait_that_delivered_mail_is_no_longer_reported() {
+    let (ctx, addr) = start();
+    send(&ctx, "wake up");
+    let response = http_post(addr, "/hook/wait?timeout=5", RECIPIENT);
+    assert!(response.contains("wake up"));
+    assert!(
+        !watching(&ctx),
+        "nothing is held once the mail is handed out"
+    );
+}
+
+#[test]
 fn an_old_waiter_dropping_does_not_hide_the_new_one() {
     let (ctx, addr) = start();
     let hold = || {

@@ -426,12 +426,11 @@ pub fn begin_wait(
     register_hook_session(query, body, ctx)
 }
 
-/// How long a `WakeWatcher` counts without being refreshed. Longer than the
-/// longest wait a Claude Code waiter asks for, and short enough that a waiter
-/// that vanished unnoticed isn't reported as waiting for long.
-const WAKE_WATCHER_TTL_MS: i64 = 5 * 60 * 1000;
-/// Refresh only once this old, so a waiter's polls don't write an event each time.
-const WAKE_WATCHER_REFRESH_MS: i64 = 2 * 60 * 1000;
+/// How long a `WakeWatcher` counts without being refreshed, which is how long a
+/// wait that timed out and wasn't followed by another still shows as waiting.
+const WAKE_WATCHER_TTL_MS: i64 = 2 * 60 * 1000;
+/// Refresh a held wait once this old, so its inbox checks don't each write an event.
+const WAKE_WATCHER_REFRESH_MS: i64 = 60 * 1000;
 
 /// Whether a watcher lasting until `until` is due a refresh at `now`.
 fn wake_watcher_due(until: Option<i64>, now: i64) -> bool {
@@ -465,8 +464,10 @@ fn mark_waiting(cmd_ctx: &CommandContext, sid: &str, now: i64) {
     }
 }
 
-/// A waiter's connection dropped, so stop reporting it. Any other waiter for the
-/// session puts the record back at its next inbox check.
+/// A wait ended with its connection dropped or its mail handed out, so stop
+/// reporting it. Any other waiter for the session puts the record back at its next
+/// inbox check. A wait that merely timed out keeps its record, because the waiter
+/// normally asks again at once.
 pub fn end_wait(cmd_ctx: &CommandContext, sid: &str) {
     let watcher = WakeWatcher {
         id: WakeWatcherId(Arc::from(sid)),
