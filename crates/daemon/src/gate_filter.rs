@@ -20,6 +20,7 @@ const QUERIES: &[&str] = &[
     "GetAllRooms",
     "GetAllRoomMembers",
     "GetAllSessionNicknames",
+    "GetAllWakeWatchers",
 ];
 
 /// Commands that act as the connection's session, or as `asSession` if named.
@@ -244,6 +245,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         assert!(credentials::claim_session(dir.path(), "a1", MINE).unwrap());
         dir
+    }
+
+    #[test]
+    fn a_machine_can_read_wake_watchers_but_not_write_them() {
+        // `a1` owns the id, so the refusal can only be about the entity.
+        let dir = dir();
+        let p = dir.path();
+        assert!(check(p, "a1", query("GetAllWakeWatchers")).is_ok());
+        assert!(check(p, "a1", event("WakeWatcher", MINE)).is_err());
     }
 
     #[test]

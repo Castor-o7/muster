@@ -249,6 +249,9 @@ Merged and needing a live run: MUS-36 and MUS-37.
   the operator set a role. It can't be a `Session` field, because the gate lets a machine write
   its own row whole. MUS-3 lets peers reach a watchman by role, but until it lands a restarted
   watchman loses the role and needs assigning again. MUS-3's role wording should use this one.
+- [ ] **MUS-52: Show `wake` in the TUI and web UI.** Follow-up to MUS-4, which added it to
+  `muster://roster`. Done when: both show each session's wake state, and tell observed
+  `waiting` from declared `channel` and `busy`.
 - [ ] **MUS-30: Decide the future of the TypeScript plugins.** The operator decides
   whether to keep, freeze or remove them. Done when: the decision is recorded here,
   and if they're removed, the repository's `package.json` workspace goes with them.

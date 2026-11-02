@@ -30,6 +30,7 @@ mod room_tools;
 mod send_message;
 mod session;
 mod session_nickname;
+mod wake_watcher;
 
 pub use ack_messages::*;
 pub use broadcast_message::*;
@@ -44,6 +45,7 @@ pub use room_tools::*;
 pub use send_message::*;
 pub use session::*;
 pub use session_nickname::*;
+pub use wake_watcher::*;
 
 /// Force-link this crate so the `inventory`-based item registration in the
 /// generated `myko_item` code is pulled into a binary that doesn't otherwise
