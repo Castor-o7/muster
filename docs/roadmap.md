@@ -254,6 +254,10 @@ Merged and needing a live run: MUS-36 and MUS-37.
 - [ ] **MUS-52: Show `wake` in the TUI and web UI.** Follow-up to MUS-4, which added it to
   `muster://roster`. Done when: both show each session's wake state, and tell observed
   `waiting` from declared `channel` and `busy`.
+- [ ] **MUS-53: Make the truncation notice name a working address.** Found by `copper-gulch`
+  on 2026-11-02: a reader following the notice to `muster://messages/<id>` gets a client error
+  saying the server doesn't implement resource reads. Done when: the notice names a URI that
+  returns the full message, shown on a real truncated message.
 - [ ] **MUS-30: Decide the future of the TypeScript plugins.** The operator decides
   whether to keep, freeze or remove them. Done when: the decision is recorded here,
   and if they're removed, the repository's `package.json` workspace goes with them.

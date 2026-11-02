@@ -464,6 +464,14 @@ fn mark_waiting(cmd_ctx: &CommandContext, sid: &str, now: i64) {
     }
 }
 
+/// Tells the reader how to fetch the rest. The URI has to be one the resource
+/// actually serves: a message id isn't a path under `muster://messages`.
+fn truncation_notice(message_id: &str, sent_at: i64) -> String {
+    format!(
+        "  [truncated; read message {message_id} in full at muster://messages?inbox=true&since={sent_at}]\n"
+    )
+}
+
 /// A wait ended with its connection dropped or its mail handed out, so stop
 /// reporting it. Any other waiter for the session puts the record back at its next
 /// inbox check. A wait that merely timed out keeps its record, because the waiter
@@ -576,10 +584,7 @@ fn surface_unread(cmd_ctx: &CommandContext, sid: &str) -> (String, Vec<MessageId
         let (preview, truncated) = context_preview(&m.body, per_message_chars);
         let mut line = format!("- from {sender}: {}\n", quote_body(&preview));
         if truncated {
-            line.push_str(&format!(
-                "  [truncated; full message {} remains in muster://messages]\n",
-                m.message_id.0
-            ));
+            line.push_str(&truncation_notice(m.message_id.0.as_ref(), m.sent_at));
         }
         line
     };
@@ -734,6 +739,13 @@ mod lease_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_truncation_notice_names_a_uri_the_resource_serves() {
+        let notice = truncation_notice("abc", 123);
+        assert!(notice.contains("message abc"));
+        assert!(notice.contains("muster://messages?inbox=true&since=123"));
+    }
 
     #[test]
     fn a_wake_watcher_is_refreshed_only_when_due() {
