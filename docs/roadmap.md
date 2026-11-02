@@ -237,6 +237,18 @@ Merged and needing a live run: MUS-36 and MUS-37.
   that only an agent can interpret. Starts with a design meeting with the operator; no code
   until then. Done when: the design from that meeting is written down with the operator's
   agreement, and follow-up stories are filed.
+- [ ] **MUS-51: Show the operator-assigned watchman on the roster.** Requested by the operator
+  on 2026-11-02. A new team can read who the watchman is without asking anyone. Only the
+  operator can set the role, which shows who assigned it and when, and it clears when the
+  session ends or the operator hands it on. It says who keeps the board and takes submissions,
+  and gives no authority: restarts, merges and device changes still need the operator's direct
+  word. Done when: a test shows a session can't assign itself the role, including by writing
+  its own `Session` row, and that the role clears when its session is reaped; and a new session
+  can read it from the roster. Rally reads the role from Muster and doesn't store it.
+  Depends on MUS-39, but MUS-39 only covers terminal messages, so it needs extending to prove
+  the operator set a role. It can't be a `Session` field, because the gate lets a machine write
+  its own row whole. MUS-3 lets peers reach a watchman by role, but until it lands a restarted
+  watchman loses the role and needs assigning again. MUS-3's role wording should use this one.
 - [ ] **MUS-30: Decide the future of the TypeScript plugins.** The operator decides
   whether to keep, freeze or remove them. Done when: the decision is recorded here,
   and if they're removed, the repository's `package.json` workspace goes with them.
