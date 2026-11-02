@@ -120,6 +120,8 @@ Merged and needing a live run: MUS-36 and MUS-37.
   without acting as a session, and declared text such as `current_task` is labelled as
   declared. Done when: a documented read-only command or endpoint returns those facts, and
   a test shows it can't change anything. Depends on MUS-4.
+  `muster-shim roster` does this. `last_activity_at` turned out to be declared, since a shim
+  can set it, and `bound_to_connection` can outlast a dropped connection until the row is reaped.
 
 ## Phase 2: Security
 

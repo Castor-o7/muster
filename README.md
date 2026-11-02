@@ -121,6 +121,8 @@ muster-shim tell catapp "Please pause before the next migration."
 
 Recipients see `[from a terminal on <machine>; it can't receive replies]`. That names the machine, not the person: any process on your account can run this command, including a Claude session, so these messages carry no extra authority.
 
+`muster-shim roster` prints the roster as JSON for other programs. It only reads: it registers no session and doesn't appear on the roster. Each session has `observed` facts only the daemon can set (whether the row is bound to a connection, whether the daemon sees it holding a wait, and until when), `attested` ones the gate writes for a paired machine (machine and operator; a session on the daemon's own host only claims these, and the row doesn't say which case it is), and `declared` ones its own software reports, which a machine can set to anything for its own sessions. Those include `last_activity_at`, `activity` and `current_task`. This holds against a paired machine: a process on the daemon's own host can write anything until MUS-7. `wake` is described under `muster://roster`. `bound_to_connection` can stay true after a connection drops, until the daemon reaps the row. It needs a daemon with MUS-4. Any process with this machine's pairing can read it.
+
 A message from `all` or `tell` is never the operator's approval. It doesn't count as a direct OK for a daemon restart or anything else that needs one, because a session can send the same message.
 
 ### 3. Add the plugin in Claude Code
