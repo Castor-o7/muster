@@ -9,8 +9,8 @@ reading the code, and nothing here has been built yet.
 - Code: `crates/daemon/src/cleanup.rs` and myko 6.9.0.
 - A prediction made before the 2026-10-31 restart, checked after it.
 
-No test reproduces the cascade behaviour in isolation yet, so the cause is from
-reading the code, supported by the data. MUS-45 settles it.
+`a_reaped_sessions_mail_stays_live_until_the_next_boot` in `cleanup.rs` shows the
+cause directly (MUS-45).
 
 ## What disappears, and when
 
