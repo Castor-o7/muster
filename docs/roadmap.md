@@ -71,11 +71,26 @@ MUS-34, MUS-35 and MUS-40. Merged and needing a live run: MUS-36 and MUS-37.
 - [ ] **MUS-31: Don't lose an agent's work when it disappears.** Research story. A
   session can end or be reaped with its work unsaved. Direct messages to a reaped
   session are deleted with it (`cleanup.rs`), and six went at the 2026-10-30 daemon
-  restart, including `briny-tortoise`'s field notes. Why at restart rather than at
-  reap time is still unexplained. Questions: what disappears and when, how to keep
-  it recoverable, how to hand work to a successor, and how a session can save as it
-  goes. Done when: `docs/` records the ways work gets lost and a recommended design,
-  with follow-up stories filed here.
+  restart, including `briny-tortoise`'s field notes. Questions: what disappears and
+  when, how to keep it recoverable, how to hand work to a successor, and how a
+  session can save as it goes. Findings and design: [agent-disappearance.md](agent-disappearance.md).
+  Done when: `docs/` records the ways work gets lost and a recommended design, with
+  follow-up stories filed here.
+- [ ] **MUS-45: Pin what `del_by_id` cascades.** From MUS-31, and do this first: the
+  cause there is from reading the code. Done when: a test shows whether reaping a
+  session leaves its mail live until the next boot, and fails if myko changes that.
+- [ ] **MUS-46: Keep mail to a reaped session.** From MUS-31. Don't just switch to a
+  cascading delete, which loses mail sooner. Done when: tests show a restart after a
+  reap removes no message under 14 days old, and a session returning under its old
+  id doesn't get read mail again (`MessageRead` also belongs to `Session`).
+- [ ] **MUS-47: Hand unread mail to a successor.** From MUS-31. Retained mail reaches
+  nobody without this. Depends on MUS-3. Done when: a session taking over an identity
+  receives its predecessor's unread mail, shown by a test.
+- [ ] **MUS-48: Tell a sender about mail unread at reap.** From MUS-31. Done when: a
+  sender can see that a message went unread when its recipient was reaped.
+- [ ] **MUS-49: Report what a restart will remove.** From MUS-31: one restart is now
+  due to remove 422 messages. Done when: the operator can see the count before
+  approving a restart.
 - [ ] **MUS-26: Keep `current_task` fresh.** It can go stale: one session showed
   `feature/comments` while on `feature/search`. Done when: the roster's task
   follows the branch, unless a session has set its own text.
