@@ -3,10 +3,19 @@
 //! It only subscribes to queries. It registers no session, so reading the roster
 //! doesn't change it and the reader doesn't appear on it.
 //!
-//! Each session's facts are split by how far they can be trusted. `observed`
-//! holds what the daemon or gate established. `declared` holds what the session's
-//! own software reports, which a machine can set to anything for its own sessions.
-//! That includes `last_activity_at`, because the shim can set it.
+//! Each session's facts are split by how far they can be trusted, against a paired
+//! machine. A process on the daemon's own host can write anything until MUS-7.
+//!
+//! - `observed`: only the daemon can set these. myko overwrites `client_id` from
+//!   the connection, and the gate refuses a client's `WakeWatcher` events.
+//!   They show a connection or a wait exists, not that the session behind it is
+//!   working: a machine can hold either open for its own session.
+//! - `attested`: the gate writes these for a paired machine. A session on the
+//!   daemon's own host doesn't pass the gate, so there they're only its own claim,
+//!   and the row doesn't say which case it is.
+//! - `declared`: what the session's own software reports, which a machine can set
+//!   to anything for its own sessions. That includes `last_activity_at`, because
+//!   the shim can set it.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -50,9 +59,11 @@ fn view(
                 "session_id": id,
                 "nickname": nickname,
                 "wake": wake_state(s, watchers, now_ms).as_str(),
-                "observed": {
+                "attested": {
                     "machine": s.host.as_ref().map(|h| h.name.as_str()),
                     "operator": s.operator,
+                },
+                "observed": {
                     // The row is bound to a connection. It can outlast that
                     // connection until the daemon's sweep reaps it.
                     "bound_to_connection": s.client_id.is_some(),
@@ -150,7 +161,9 @@ mod tests {
         let v = view(&[session()], &[], &[], 100);
         let row = &v["sessions"][0];
         assert_eq!(v["read_at"], 100);
-        assert_eq!(row["observed"]["machine"], "a1");
+        assert_eq!(row["attested"]["machine"], "a1");
+        assert!(row["observed"].get("machine").is_none());
+        assert!(row["observed"].get("operator").is_none());
         assert_eq!(row["declared"]["current_task"], "anything at all");
         assert_eq!(row["declared"]["last_activity_at"], 2);
         assert!(row["observed"].get("current_task").is_none());
