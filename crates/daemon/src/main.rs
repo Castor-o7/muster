@@ -152,6 +152,9 @@ async fn run_daemon() -> Result<()> {
         .with_bind_addr(bind_addr)
         .with_persister_override("Client", blackhole.clone())
         .with_persister_override("Server", blackhole.clone())
+        // A wait dies with the daemon, so there's nothing to replay, and a held
+        // wait's refreshes shouldn't grow the event table (lv-6731).
+        .with_persister_override("WakeWatcher", blackhole.clone())
         .with_persister_override("Session", session_filter.clone())
         .with_server_info(muster_server_info());
 
