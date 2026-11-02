@@ -27,10 +27,12 @@ make honesty cost anyone.
   work, helps with blockers, and relays decisions to the operator. The watchman
   doesn't write the code it verifies. It may merge on the operator's direct
   instruction, as long as someone other than the author has read the PR, and the
-  watchman may be that reader. If a second read has been requested, the merge waits
-  for it, and that read must cover the head being merged.
+  watchman may be that reader.
 - **Teams:** Muster (`MUS`), catapp (`CAT`), ParadoxDetector (`PDX`), CarChomp
   (`CHOMP`) and Rally (`RAL`). Each team owns its roadmap and picks its own stories.
+
+Whoever merges: if a second read has been requested, the merge waits for it, and that
+read must cover the head being merged.
 
 ## Stories
 
