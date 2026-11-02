@@ -16,6 +16,7 @@ mod codex_hook;
 mod codex_setup;
 mod link;
 mod mcp;
+mod roster_read;
 mod session_discovery;
 mod statusline;
 mod terminal_send;
@@ -146,6 +147,14 @@ fn main() -> Result<()> {
                 .context("usage: muster-shim tell <team, nickname or session id> <message>")?;
             let body = argv.collect::<Vec<_>>().join(" ");
             return run_terminal_send(terminal_send::Target::Named(target), body);
+        }
+        // Print the roster as JSON for other programs. See `roster_read`.
+        Some("roster") if argv.next().is_none() => {
+            return tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .context("building tokio runtime")?
+                .block_on(roster_read::run());
         }
         // Store the code `muster-daemon pair` printed, so this machine reaches
         // the daemon through its TLS gate. See `link`.

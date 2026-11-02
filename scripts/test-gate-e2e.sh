@@ -115,6 +115,25 @@ sleep 1
 OUT=$(T $BIN/muster-shim all last one 2>&1)
 check "a terminal doesn't message itself" '[[ $OUT != *"no team"* ]]'
 
+# Reading the roster from a program: read-only, and claims are kept apart.
+ROSTER() { T $BIN/muster-shim roster 2>/dev/null; }
+FIELD() { print -r -- "$1" | python3 -I -c 'import json,sys; r=[s for s in json.load(sys.stdin)["sessions"] if s["session_id"]==sys.argv[1]][0]; print(eval(sys.argv[2],{"r":r}))' a0000000-0000-4000-8000-000000000004 "$2"; }
+SNAP() { print -r -- "$1" | python3 -I -c 'import json,sys; d=json.load(sys.stdin); print(json.dumps(sorted(d["sessions"],key=lambda s:s["session_id"]),sort_keys=True))'; }
+# A session that has never waited: demo's earlier waits still count until they expire.
+NEVER=a0000000-0000-4000-8000-0000000000ee
+curl -sk -m 3 -o /dev/null -H "Authorization: Bearer $TOKEN" -X POST https://127.0.0.1:16255/hook/session-start -d "{\"session_id\":\"$NEVER\",\"cwd\":\"/tmp/demo\"}"
+OUT=$(ROSTER)
+check "roster reports a session with no waiter as none" '[[ $(print -r -- "$OUT" | python3 -I -c "import json,sys; print([s for s in json.load(sys.stdin)[\"sessions\"] if s[\"session_id\"]==\"$NEVER\"][0][\"wake\"])") == none ]]'
+check "and keeps what it declares apart" '[[ $(FIELD "$OUT" "\"current_task\" in r[\"declared\"] and \"current_task\" not in r[\"observed\"]") == True ]]'
+AGAIN=$(ROSTER)
+check "reading the roster changes nothing, and adds no session" '[[ -n $OUT && $(SNAP "$OUT") == $(SNAP "$AGAIN") ]]'
+curl -sk -m 8 -o /dev/null -H "Authorization: Bearer $TOKEN" -X POST "https://127.0.0.1:16255/hook/wait?timeout=6" -d "$HOOK" &
+HELD=$!
+sleep 1
+OUT=$(ROSTER)
+check "roster reports a held wait as observed" '[[ $(FIELD "$OUT" "r[\"wake\"]") == waiting && $(FIELD "$OUT" "r[\"observed\"][\"waiting\"]") == True ]]'
+kill $HELD 2>/dev/null; wait $HELD 2>/dev/null
+
 # A dropped path: mail handed out but never acked comes back, and an ack ends it.
 RAWWAIT() { curl -sk -m 5 -H "Authorization: Bearer $TOKEN" -X POST "https://127.0.0.1:16255/hook/wait?timeout=1&ack=client" -d "$HOOK"; }
 sleep 3; while [[ -n $(WAITSTATUS) ]]; do :; done
