@@ -14,7 +14,7 @@ evidence from a real run by the person or team named.
 
 ## Status
 
-2026-11-02: 6 of 41 stories ticked, about 15%, not counting the 3 moved to Rally. Live on
+2026-11-02: 6 of 46 stories ticked, about 13%, not counting the 3 moved to Rally. Live on
 Murph as last recorded on 2026-10-31: `7e7869b`, which includes MUS-5 and MUS-6. Merged and
 waiting for a later daemon restart and rebuilt shims: MUS-29, MUS-33, MUS-34, MUS-35 and
 MUS-40. Merged and needing a live run: MUS-36 and MUS-37. MUS-29 was merged in PRs #32 and
