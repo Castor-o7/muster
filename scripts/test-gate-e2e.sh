@@ -117,17 +117,18 @@ check "a terminal doesn't message itself" '[[ $OUT != *"no team"* ]]'
 
 # Reading the roster from a program: read-only, and claims are kept apart.
 ROSTER() { T $BIN/muster-shim roster 2>/dev/null; }
-FIELD() { print -r -- "$1" | python3 -I -c 'import json,sys; r=[s for s in json.load(sys.stdin)["sessions"] if s["session_id"]==sys.argv[1]][0]; print(eval(sys.argv[2],{"r":r}))' a0000000-0000-4000-8000-000000000004 "$2"; }
+FIELD() { print -r -- "$1" | python3 -I -c 'import json,sys; r=[s for s in json.load(sys.stdin)["sessions"] if s["session_id"]==sys.argv[1]][0]; print(eval(sys.argv[2],{"r":r}))' $NEVER "$2"; }
 SNAP() { print -r -- "$1" | python3 -I -c 'import json,sys; d=json.load(sys.stdin); print(json.dumps(sorted(d["sessions"],key=lambda s:s["session_id"]),sort_keys=True))'; }
-# A session that has never waited: demo's earlier waits still count until they expire.
+# A session with no mail that has never waited, because a wait with unread mail
+# returns at once, and a wait that timed out still counts until it expires.
 NEVER=a0000000-0000-4000-8000-0000000000ee
 curl -sk -m 3 -o /dev/null -H "Authorization: Bearer $TOKEN" -X POST https://127.0.0.1:16255/hook/session-start -d "{\"session_id\":\"$NEVER\",\"cwd\":\"/tmp/demo\"}"
 OUT=$(ROSTER)
-check "roster reports a session with no waiter as none" '[[ $(print -r -- "$OUT" | python3 -I -c "import json,sys; print([s for s in json.load(sys.stdin)[\"sessions\"] if s[\"session_id\"]==\"$NEVER\"][0][\"wake\"])") == none ]]'
+check "roster reports a session with no waiter as none" '[[ $(FIELD "$OUT" "r[\"wake\"]") == none ]]'
 check "and keeps what it declares apart" '[[ $(FIELD "$OUT" "\"current_task\" in r[\"declared\"] and \"current_task\" not in r[\"observed\"]") == True ]]'
 AGAIN=$(ROSTER)
 check "reading the roster changes nothing, and adds no session" '[[ -n $OUT && $(SNAP "$OUT") == $(SNAP "$AGAIN") ]]'
-curl -sk -m 8 -o /dev/null -H "Authorization: Bearer $TOKEN" -X POST "https://127.0.0.1:16255/hook/wait?timeout=6" -d "$HOOK" &
+curl -sk -m 8 -o /dev/null -H "Authorization: Bearer $TOKEN" -X POST "https://127.0.0.1:16255/hook/wait?timeout=6" -d "{\"session_id\":\"$NEVER\",\"cwd\":\"/tmp/demo\"}" &
 HELD=$!
 sleep 1
 OUT=$(ROSTER)
