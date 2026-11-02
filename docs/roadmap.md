@@ -136,15 +136,14 @@ Merged and needing a live run: MUS-36 and MUS-37.
   so it can join any `project:` room; `unpair` can race the daemon's bindings file; a
   `/hook/wait` opened before `unpair` keeps running for up to 10 minutes; and oversized
   message bodies can break a peer's `ReadMessages`. Done when: each is fixed or recorded
-  as accepted, with a test for each fix. Busiest-session routing and unattested
-  `project`: accepted for now by the operator 2026-11-02, revisit before unattended running.
+  as accepted, with a test for each fix.
   Fixed: a future `lastActivityAt` no longer wins operator mail, `unpair` and the daemon
   lock the bindings across processes, `unpair` closes open connections within seconds, and
-  bodies over 64 KiB are refused. Accepted for now: a compromised machine can still win
+  bodies over 64 KiB are refused. Accepted for now by the operator 2026-11-02: a compromised machine can still win
   operator mail by being genuinely most active, because routing to the busiest session is
   the feature; and `project` stays client-claimed, so a machine can join any `project:` room
   and read its broadcasts, which the threat model's one operator makes low value. Revisit
-  both when other people's machines come into scope.
+  both before unattended running, and when other people's machines come into scope.
 - [x] **MUS-6: Verify `operator` and `host` on the daemon.** The client supplies
   both. Done when: the roster shows values the daemon established, and a test
   shows a client can't fake them.
