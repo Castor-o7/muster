@@ -798,7 +798,7 @@ async fn serve() -> Result<()> {
                 };
                 let sessions = host_for_publish.sessions_cell.get();
                 let empty = sessions.is_empty();
-                let present = sessions.iter().any(|s| s.id == me);
+                let present = registered_on_roster(&sessions, &me);
                 // Health word for the statusline. "ok" when we're on the roster (or it
                 // hasn't synced yet — the statusline's own daemon probe covers a real
                 // outage); "unregistered" when the roster is populated but we're absent
@@ -998,6 +998,16 @@ fn roster_miss_step(misses: u32, roster_empty: bool, present: bool) -> (u32, boo
     } else {
         (n, false)
     }
+}
+
+/// Whether the roster has our row and it's bound to a connection. A row with no
+/// `client_id` doesn't count: the daemon finds a caller by that binding, so every
+/// write would fail "no session on the roster" while the row looks fine. A hook
+/// that read the roster just before our SET landed can leave such a row.
+fn registered_on_roster(sessions: &[Arc<Session>], me: &SessionId) -> bool {
+    sessions
+        .iter()
+        .any(|s| &s.id == me && s.client_id.is_some())
 }
 
 fn emit_session_set(client: &MykoClient, session: &Session) -> Result<()> {
@@ -1381,10 +1391,12 @@ fn detect_host() -> HostInfo {
 #[cfg(test)]
 mod tests {
     use super::{
-        ROSTER_MISS_TICKS, default_current_task, detect_git_branch, resolve_git_head_dir,
-        roster_miss_step,
+        ROSTER_MISS_TICKS, default_current_task, detect_git_branch, registered_on_roster,
+        resolve_git_head_dir, roster_miss_step,
     };
+    use muster_entities::{Session, SessionId};
     use std::process::Command;
+    use std::sync::Arc;
 
     #[test]
     fn default_current_task_prefers_the_pulse_workspace_name() {
@@ -1448,6 +1460,37 @@ mod tests {
         // The tick that completes the window fires and resets, so a persistently
         // failing SET retries once per window rather than every tick.
         assert_eq!(roster_miss_step(misses, false, false), (0, true));
+    }
+
+    #[test]
+    fn a_row_without_a_client_binding_is_not_registered() {
+        let me = SessionId(Arc::from("me"));
+        let row = |id: &str, client: Option<&str>| {
+            Arc::new(Session {
+                id: SessionId(Arc::from(id)),
+                client_id: client.map(|c| myko::entities::client::ClientId(Arc::from(c))),
+                pid: 0,
+                cwd: String::new(),
+                git_branch: None,
+                current_task: None,
+                session_name: None,
+                activity: None,
+                kind: None,
+                connected_at: 0,
+                last_activity_at: None,
+                last_tool: None,
+                last_tool_at: None,
+                operator: None,
+                host: None,
+                project: None,
+                channels_enabled: None,
+            })
+        };
+        assert!(registered_on_roster(&[row("me", Some("c"))], &me));
+        // The row a hook leaves behind: on the roster, but writes can't find it.
+        assert!(!registered_on_roster(&[row("me", None)], &me));
+        // Someone else's bound row doesn't stand in for ours.
+        assert!(!registered_on_roster(&[row("other", Some("c"))], &me));
     }
 
     #[test]
