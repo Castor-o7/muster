@@ -36,8 +36,9 @@ use myko::{
 use serde_json::Value;
 
 use muster_entities::{
-    AckMessages, CONTEXT_BODY_MAX_CHARS, GetAllSessions, HostInfo, MessageId, MessageView,
-    ReadMessages, Session, SessionId, context_preview, nickname_for,
+    AckMessages, CONTEXT_BODY_MAX_CHARS, GetAllSessions, GetAllWakeWatchers, HostInfo, MessageId,
+    MessageView, ReadMessages, Session, SessionId, WakeWatcher, WakeWatcherId, context_preview,
+    nickname_for,
 };
 
 const AUTO_INBOX_BODY_BUDGET_CHARS: usize = 8_000;
@@ -422,7 +423,55 @@ pub fn begin_wait(
     body: &[u8],
     ctx: &Arc<MykoServerContext>,
 ) -> Option<(String, CommandContext)> {
-    register_hook_session(query, body, ctx)
+    let begun = register_hook_session(query, body, ctx);
+    if let Some((sid, cmd_ctx)) = &begun {
+        mark_waiting(cmd_ctx, sid, chrono::Utc::now().timestamp_millis());
+    }
+    begun
+}
+
+/// How long a `WakeWatcher` counts without being refreshed. Longer than the
+/// longest wait a Claude Code waiter asks for, and short enough that a waiter
+/// that vanished unnoticed isn't reported as waiting for long.
+const WAKE_WATCHER_TTL_MS: i64 = 5 * 60 * 1000;
+/// Refresh only once this old, so a waiter's polls don't write an event each time.
+const WAKE_WATCHER_REFRESH_MS: i64 = 2 * 60 * 1000;
+
+/// Whether a watcher lasting until `until` is due a refresh at `now`.
+fn wake_watcher_due(until: Option<i64>, now: i64) -> bool {
+    until.is_none_or(|until| until - now <= WAKE_WATCHER_TTL_MS - WAKE_WATCHER_REFRESH_MS)
+}
+
+fn mark_waiting(cmd_ctx: &CommandContext, sid: &str, now: i64) {
+    let watchers: Vec<Arc<WakeWatcher>> = cmd_ctx
+        .exec_query(GetAllWakeWatchers {})
+        .unwrap_or_default();
+    let until = watchers
+        .iter()
+        .find(|w| w.id.0.as_ref() == sid)
+        .map(|w| w.until);
+    if !wake_watcher_due(until, now) {
+        return;
+    }
+    let watcher = WakeWatcher {
+        id: WakeWatcherId(Arc::from(sid)),
+        until: now + WAKE_WATCHER_TTL_MS,
+    };
+    if let Err(e) = cmd_ctx.emit_set(&watcher) {
+        log::warn!("[hook] wake watcher SET failed for {sid}: {e:?}");
+    }
+}
+
+/// A waiter's connection dropped, so stop reporting it. A live waiter's next poll
+/// puts the record back, which covers a resumed session's old waiter leaving.
+pub fn end_wait(cmd_ctx: &CommandContext, sid: &str) {
+    let watcher = WakeWatcher {
+        id: WakeWatcherId(Arc::from(sid)),
+        until: 0,
+    };
+    if let Err(e) = cmd_ctx.emit_del(&watcher) {
+        log::warn!("[hook] wake watcher DEL failed for {sid}: {e:?}");
+    }
 }
 
 /// One inbox check for a `/hook/wait` long-poll. `None` while nothing is
@@ -466,6 +515,7 @@ fn handle_session_end(body: &[u8], ctx: &Arc<MykoServerContext>) -> HookOutcome 
     if let Err(e) = cmd_ctx.emit_del(&stub) {
         log::warn!("[hook] session-end DEL failed for {sid}: {e:?}");
     }
+    end_wait(&cmd_ctx, sid);
     HookOutcome::text(String::new())
 }
 
@@ -680,6 +730,21 @@ mod lease_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_wake_watcher_is_refreshed_only_when_due() {
+        assert!(wake_watcher_due(None, 1000));
+        let fresh = 1000 + WAKE_WATCHER_TTL_MS;
+        assert!(!wake_watcher_due(Some(fresh), 1000));
+        assert!(!wake_watcher_due(
+            Some(fresh),
+            1000 + WAKE_WATCHER_REFRESH_MS - 1
+        ));
+        assert!(wake_watcher_due(
+            Some(fresh),
+            1000 + WAKE_WATCHER_REFRESH_MS
+        ));
+    }
 
     fn claimed_host() -> Option<HostInfo> {
         Some(HostInfo {

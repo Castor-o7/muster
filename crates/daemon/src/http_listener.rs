@@ -238,7 +238,10 @@ async fn handle_wait(
         }
         tokio::select! {
             _ = tokio::time::sleep(WAIT_POLL) => {}
-            _ = stream.read(&mut probe) => return Ok(()),
+            _ = stream.read(&mut probe) => {
+                hooks::end_wait(&cmd_ctx, &sid);
+                return Ok(());
+            }
         }
     }
 }

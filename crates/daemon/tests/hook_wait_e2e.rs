@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use muster_entities::{SendMessage, Session, SessionId};
+use muster_entities::{GetAllWakeWatchers, SendMessage, Session, SessionId, WakeWatcher};
 use myko::{
     command::{CommandContext, CommandHandler},
     entities::client::ClientId,
@@ -183,6 +183,39 @@ fn abandoned_wait_does_not_ack_a_later_message() {
         body.contains("WAIT-E2E-orphan-marker"),
         "a wait whose caller left must not consume the message; got: {body:?}"
     );
+}
+
+fn watching(ctx: &MykoServerContext) -> bool {
+    let watchers: Vec<Arc<WakeWatcher>> = cmd_ctx(ctx)
+        .exec_query(GetAllWakeWatchers {})
+        .unwrap_or_default();
+    watchers
+        .iter()
+        .any(|w| w.id.0.as_ref() == "recipient" && w.until > chrono::Utc::now().timestamp_millis())
+}
+
+fn eventually(mut condition: impl FnMut() -> bool) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if condition() {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    false
+}
+
+#[test]
+fn a_held_wait_is_reported_until_its_connection_drops() {
+    let (ctx, addr) = start();
+    assert!(!watching(&ctx));
+    let mut stream = TcpStream::connect(addr).unwrap();
+    stream
+        .write_all(request("/hook/wait?timeout=30", RECIPIENT).as_bytes())
+        .unwrap();
+    assert!(eventually(|| watching(&ctx)), "a held wait is reported");
+    drop(stream);
+    assert!(eventually(|| !watching(&ctx)), "a dropped wait is not");
 }
 
 #[test]

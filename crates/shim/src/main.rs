@@ -413,6 +413,8 @@ async fn serve() -> Result<()> {
     let nicknames_cell = client.watch_query::<muster_entities::GetAllSessionNicknames>(
         muster_entities::GetAllSessionNicknames {},
     );
+    let wake_watchers_cell = client
+        .watch_query::<muster_entities::GetAllWakeWatchers>(muster_entities::GetAllWakeWatchers {});
 
     // Mirror this session's daemon-ASSIGNED nickname to a per-session config
     // file so the runtime-free statusline (a daemon-less subcommand) shows the
@@ -537,6 +539,7 @@ async fn serve() -> Result<()> {
         rooms_cell,
         members_cell,
         nicknames_cell,
+        wake_watchers_cell,
     });
 
     // Clone: the liveness publisher below also needs the host (for the roster
