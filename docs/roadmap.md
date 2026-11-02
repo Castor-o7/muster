@@ -78,6 +78,13 @@ Merged and needing a live run: MUS-36 and MUS-37.
   print the same "can't reach" line, and a daemon whose hook port failed to bind keeps
   running with hooks dead. Done when: the message names the cause, and a failed hook bind
   stops the daemon or is plainly reported.
+- [ ] **MUS-50: Repair a roster row that has lost its client binding.** Found 2026-11-02: a
+  session listed on the roster with `pid` 0 and no `client_id` got "no session on the roster"
+  on every send, while its status looked fine. The event log shows a hook write landing just
+  after the shim's registration, so `register_hook_session`'s read-then-write probably cleared
+  the binding; that race is inferred, not reproduced. Done when: the shim treats a row with no
+  binding as unregistered and re-registers, shown by a test, and a live session's send recovers
+  without a reconnect. Closing the race in the daemon is left open.
 - [x] **MUS-29: Make send timeouts trustworthy.** `send_message` reported "command
   timed out" for a message that did arrive, so a retry could send a duplicate. Done
   when: a test shows a timed-out send can be retried without delivering twice.
