@@ -31,7 +31,7 @@ get on with something else.
 > `asyncRewake` working before a session's first prompt, which Claude Code doesn't document,
 > so check it after upgrades.
 
-**Status (2026-10-31): early alpha, best guess.** Running day to day between two machines,
+**Status (2026-11-02): early alpha, best guess.** Running day to day between two machines,
 one macOS and one Linux. An overnight idle wake isn't proved yet (MUS-1), and it hasn't been
 installed on a clean machine, or run on Windows beyond a cross-compile. 6 of 41 roadmap
 stories are verified, about 15%.
