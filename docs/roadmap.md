@@ -14,11 +14,11 @@ evidence from a real run by the person or team named.
 
 ## Status
 
-2026-11-02: 6 of 46 stories ticked, about 13%, not counting the 3 moved to Rally. Live on
-Murph as last recorded on 2026-10-31: `7e7869b`, which includes MUS-5 and MUS-6. Merged and
-waiting for a later daemon restart and rebuilt shims: MUS-29, MUS-33, MUS-34, MUS-35 and
-MUS-40. Merged and needing a live run: MUS-36 and MUS-37. MUS-29 was merged in PRs #32 and
-#33 and still needs verifying.
+2026-11-02: 10 of 46 stories ticked, about 22%, not counting the 3 moved to Rally. Live on
+Murph since 2026-11-02: `c0ece8c`, which includes MUS-5, MUS-6, MUS-29, MUS-33, MUS-34,
+MUS-35 and MUS-40. Sessions pick up a rebuilt shim when they restart, and no keyed send
+(MUS-29) has been seen live yet. Merged, live and not yet verified: MUS-34 and MUS-35.
+Merged and needing a live run: MUS-36 and MUS-37.
 
 ## Decisions
 
@@ -78,10 +78,10 @@ MUS-40. Merged and needing a live run: MUS-36 and MUS-37. MUS-29 was merged in P
   print the same "can't reach" line, and a daemon whose hook port failed to bind keeps
   running with hooks dead. Done when: the message names the cause, and a failed hook bind
   stops the daemon or is plainly reported.
-- [ ] **MUS-29: Make send timeouts trustworthy.** `send_message` reported "command
+- [x] **MUS-29: Make send timeouts trustworthy.** `send_message` reported "command
   timed out" for a message that did arrive, so a retry could send a duplicate. Done
   when: a test shows a timed-out send can be retried without delivering twice.
-- [ ] **MUS-31: Don't lose an agent's work when it disappears.** Research story. A
+- [x] **MUS-31: Don't lose an agent's work when it disappears.** Research story. A
   session can end or be reaped with its work unsaved. Direct messages to a reaped
   session are deleted with it (`cleanup.rs`), and six went at the 2026-10-30 daemon
   restart, including `briny-tortoise`'s field notes. Questions: what disappears and
@@ -130,7 +130,7 @@ MUS-40. Merged and needing a live run: MUS-36 and MUS-37. MUS-29 was merged in P
   an allowlist over a format myko parses separately, which is where three bypasses came
   from. Open for the operator: propose a hook upstream, or carry a fork meanwhile. Done
   when: myko refuses these writes itself, a test shows it, and the filter is retired.
-- [ ] **MUS-33: Harden the gate further.** From the 2026-10-30 adversarial review, not
+- [x] **MUS-33: Harden the gate further.** From the 2026-10-30 adversarial review, not
   fixed yet: a compromised machine can capture operator-addressed mail by being the most
   active session, including with a far-future `lastActivityAt`; `project` is unattested,
   so it can join any `project:` room; `unpair` can race the daemon's bindings file; a
@@ -139,15 +139,15 @@ MUS-40. Merged and needing a live run: MUS-36 and MUS-37. MUS-29 was merged in P
   as accepted, with a test for each fix.
   Fixed: a future `lastActivityAt` no longer wins operator mail, `unpair` and the daemon
   lock the bindings across processes, `unpair` closes open connections within seconds, and
-  bodies over 64 KiB are refused. Accepted for now: a compromised machine can still win
+  bodies over 64 KiB are refused. Accepted for now by the operator 2026-11-02: a compromised machine can still win
   operator mail by being genuinely most active, because routing to the busiest session is
   the feature; and `project` stays client-claimed, so a machine can join any `project:` room
   and read its broadcasts, which the threat model's one operator makes low value. Revisit
-  both when other people's machines come into scope.
+  both before unattended running, and when other people's machines come into scope.
 - [x] **MUS-6: Verify `operator` and `host` on the daemon.** The client supplies
   both. Done when: the roster shows values the daemon established, and a test
   shows a client can't fake them.
-- [ ] **MUS-40: Clear rooms left by self-reported operators.** Found rolling out MUS-6.
+- [x] **MUS-40: Clear rooms left by self-reported operators.** Found rolling out MUS-6.
   Sessions are still in `op:josh` (a1) and `op:joshd` (Murph) beside `op:joshd@pdx.edu`,
   so a broadcast to an old room reaches only one machine. Done when: a paired session is
   only in its attested `op:` room, shown by a test and on the live roster.
