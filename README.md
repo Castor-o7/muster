@@ -66,6 +66,10 @@ muster-daemon &
 # or under your favorite supervisor (systemd user unit, launchd, tmux pane, ...)
 ```
 
+Before restarting a daemon that uses Postgres, run `scripts/restart-preview.sh` (it reads
+`MYKO_POSTGRES_URL`). A restart removes mail to sessions reaped since the last one, and the
+script lists it by recipient, read and unread, without changing anything.
+
 The daemon has three listeners. Only the gate is meant to be reachable from other machines:
 
 | Port | Variable | Default | Serves |
