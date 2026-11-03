@@ -334,16 +334,16 @@ fn operator_token_routes_to_the_humans_most_recently_active_agent() {
     set_session(&ctx, &session("sender", Some("c-sender")));
 
     let mut idle = session("max-idle", Some("c-idle"));
-    idle.operator = Some("max@lucid.rocks".into());
+    idle.operator = Some("operator@example.com".into());
     idle.last_activity_at = Some(1_000);
     let mut active = session("max-active", Some("c-active"));
-    active.operator = Some("max@lucid.rocks".into());
+    active.operator = Some("operator@example.com".into());
     active.last_activity_at = Some(9_000);
     set_session(&ctx, &idle);
     set_session(&ctx, &active);
 
     let cmd = SendMessage {
-        to_session_id: SessionId(Arc::from("max@lucid.rocks")),
+        to_session_id: SessionId(Arc::from("operator@example.com")),
         body: "your call on the redeploy".into(),
         as_session: None,
         idempotency_key: None,
@@ -363,7 +363,7 @@ fn operator_token_routes_to_the_humans_most_recently_active_agent() {
     // its operator rather than treating it as ordinary peer chatter.
     assert_eq!(
         msg.to_operator.as_deref(),
-        Some("max@lucid.rocks"),
+        Some("operator@example.com"),
         "operator-tier routing must stamp `to_operator` (human-addressed)",
     );
 }
@@ -377,16 +377,16 @@ fn operator_routing_prefers_a_live_agent_and_accepts_the_op_prefix() {
     set_session(&ctx, &session("sender", Some("c-sender")));
 
     let mut disconnected = session("max-disc", None); // client_id None ⇒ not live
-    disconnected.operator = Some("max@lucid.rocks".into());
+    disconnected.operator = Some("operator@example.com".into());
     disconnected.last_activity_at = Some(9_000);
     let mut live = session("max-live", Some("c-live"));
-    live.operator = Some("max@lucid.rocks".into());
+    live.operator = Some("operator@example.com".into());
     live.last_activity_at = Some(5_000);
     set_session(&ctx, &disconnected);
     set_session(&ctx, &live);
 
     let cmd = SendMessage {
-        to_session_id: SessionId(Arc::from("op:max@lucid.rocks")),
+        to_session_id: SessionId(Arc::from("op:operator@example.com")),
         body: "ping".into(),
         as_session: None,
         idempotency_key: None,

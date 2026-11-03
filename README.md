@@ -95,7 +95,7 @@ The daemon keeps its TLS certificate and the paired machines' token hashes in `M
 Every machine other than the daemon's own host needs a pairing. (On the daemon's host, an unpaired shim connects to the internal loopback listener on 6257, so it works without one. Pair it too if other people can log in to that machine.) On the daemon's host:
 
 ```bash
-muster-daemon pair --name a1 --address 192.168.1.241:6255
+muster-daemon pair --name a1 --address 192.0.2.10:6255
 ```
 
 It prints a `muster-shim pair muster-pair:v1:…` command. Run that on the machine you're pairing. The code holds the gate's address, the certificate fingerprint to pin, and that machine's access token, so treat it like a password. Then restart that machine's Claude Code sessions.

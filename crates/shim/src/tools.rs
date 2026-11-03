@@ -928,7 +928,7 @@ mod tests {
             Some(SessionId(Arc::from("visible-target")))
         );
         assert_eq!(
-            resolve_visible_nickname(&sessions, &nicknames, "max@lucid.rocks").unwrap(),
+            resolve_visible_nickname(&sessions, &nicknames, "operator@example.com").unwrap(),
             None,
             "operator tokens must remain server-resolved"
         );

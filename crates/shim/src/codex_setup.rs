@@ -479,7 +479,7 @@ the `muster` MCP server as `muster__send_message`, `muster__broadcast`,\n\
   related information; use direct messages for action, a blocker, or a needed\n\
   reply. Put FYI/progress in a room broadcast without an `@mention`.\n\
 - To reach a HUMAN, address their operator identity (the email on their roster\n\
-  row, e.g. `max@lucid.rocks`).\n";
+  row, e.g. `operator@example.com`).\n";
 
 #[cfg(test)]
 mod tests {

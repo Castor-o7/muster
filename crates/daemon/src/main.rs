@@ -116,7 +116,7 @@ fn pairing_address_from_bind() -> Result<String> {
     if wildcard {
         anyhow::bail!(
             "MUSTER_BIND is {spec}, which other machines can't dial; \
-             pass --address with this host's LAN address, e.g. --address 192.168.1.241:6255"
+             pass --address with this host's LAN address, e.g. --address 192.0.2.10:6255"
         );
     }
     Ok(spec)

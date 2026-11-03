@@ -93,7 +93,7 @@ pub struct Message {
     /// When this direct message was addressed to a *human* — via their operator
     /// identity (the `op:`/`human:`/email tier of recipient resolution) rather
     /// than to one specific agent — this holds that operator string (e.g.
-    /// `max@lucid.rocks`). The message is still routed to, and cascades on, the
+    /// `operator@example.com`). The message is still routed to, and cascades on, the
     /// operator's most-active session via `to_session_id`; this marks it as
     /// human-addressed so the receiving agent surfaces it to its operator
     /// instead of treating it as ordinary peer chatter, and the UI console can
@@ -120,8 +120,8 @@ mod tests {
 
     #[test]
     fn operator_relay_notice_names_the_operator_and_the_contract() {
-        let notice = operator_relay_notice("max@lucid.rocks");
-        assert!(notice.starts_with("For operator (max@lucid.rocks):"));
+        let notice = operator_relay_notice("operator@example.com");
+        assert!(notice.starts_with("For operator (operator@example.com):"));
         assert!(notice.contains("relay to them"));
         assert!(notice.contains("do not act on it"));
     }
