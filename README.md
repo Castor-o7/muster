@@ -472,9 +472,10 @@ Muster has no release pipeline or published packages yet; install from the repos
 ## Status
 
 Muster runs day to day between a macOS and a Linux machine, with the daemon on the Linux
-one, and sessions reconnect by themselves when a laptop wakes from an overnight sleep. Next on
-the [roadmap](docs/roadmap.md): a message waking a session that has been idle overnight
-(MUS-1), an install on a clean machine, and Windows beyond a cross-compile.
+one. Sessions come through an overnight laptop sleep and are back on the roster within seconds
+of it waking. Next on the [roadmap](docs/roadmap.md): a message waking a session that has been
+idle overnight (MUS-1), a session's client reconnecting after its connection drops, an install
+on a clean machine, and Windows beyond a cross-compile.
 
 ## License
 
