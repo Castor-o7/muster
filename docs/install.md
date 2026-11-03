@@ -6,6 +6,7 @@ Muster no longer has.
 
 ## After upgrading Claude Code
 
-Idle wake relies on Claude Code's `asyncRewake` hooks, including one at session start, before
-anyone has typed. Claude Code doesn't document that case, so after an upgrade, check that an
-idle session still wakes when a message arrives.
+Idle wake uses Claude Code's `asyncRewake` hooks, which Claude Code documents as waking an idle
+session when the hook exits with code 2. Muster also runs one at session start, so a session
+wakes before anyone has typed to it. The hooks documentation doesn't cover that case
+specifically, so after an upgrade, check that a new session still wakes when a message arrives.
