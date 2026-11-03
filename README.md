@@ -484,3 +484,7 @@ Muster has no release pipeline or published packages yet; install from the repos
 ## License
 
 MIT OR Apache-2.0, at your option (`LICENSE-MIT`, `LICENSE-APACHE`). Muster is a fork of [Marshal](https://github.com/ignition-is-go/marshal), under the same licence.
+
+That covers Muster's own source code. Muster depends on myko, myko-server and myko-macros,
+which declare the AGPL-3.0-or-later licence. Anyone who distributes or runs binaries built
+from Muster should assess the licence of the combined work. This isn't legal advice.
