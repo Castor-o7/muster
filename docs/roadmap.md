@@ -258,7 +258,7 @@ Merged and needing a live run: MUS-36 and MUS-37.
   on 2026-11-02: a reader following the notice to `muster://messages/<id>` gets a client error
   saying the server doesn't implement resource reads. Done when: the notice names a URI that
   returns the full message, shown on a real truncated message.
-- [ ] **MUS-54: Keep a working session reachable when its connection drops.** Board finding 57,
+- [ ] **MUS-54: Keep a working session reachable when its connection drops.** Board finding 59,
   2026-11-03: desert-hawk's MCP WebSocket dropped at about 11:36:19 EST while its hooks kept
   reporting, and the daemon deleted its row at 11:37:25 under the 60 s grace. At 12:09 a message
   to it failed with "no session matches". A deletion therefore doesn't mean the session ended.
