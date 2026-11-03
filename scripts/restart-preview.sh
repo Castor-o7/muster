@@ -26,8 +26,9 @@ gone_messages as (
            (select 1 from live s where s.item_type = 'Session' and s.item_id = m.item->>'toSessionId'))
       or (m.item->>'toRoomId' is not null and not exists
            (select 1 from live r where r.item_type = 'Room' and r.item_id = m.item->>'toRoomId')))
-), read_ids as (
-  select distinct item->>'messageId' as message_id from live where item_type = 'MessageRead'
+), reads as (
+  select item->>'messageId' as message_id, item->>'sessionId' as session_id
+  from live where item_type = 'MessageRead'
 )"
 
 PGOPTIONS='-c default_transaction_read_only=on' exec psql "$URL" -X -q -v ON_ERROR_STOP=1 <<SQL
@@ -54,13 +55,14 @@ select left(g.to_session, 8) as recipient,
        (select to_char(created_at, 'YYYY-MM-DD HH24:MI TZ') from latest s
          where s.item_type = 'Session' and s.item_id = g.to_session) as removed_at,
        count(*) as messages,
-       count(*) filter (where g.item_id not in
-         (select message_id from read_ids where message_id is not null)) as unread
+       count(*) filter (where not exists (select 1 from reads r
+         where r.message_id = g.item_id and r.session_id = g.to_session)) as unread
 from gone_messages g
 where g.to_session is not null
 group by g.to_session
 order by messages desc;
 
-\echo 'Not counted: empty auto-rooms, which the sweeper removes a few seconds after start.'
+\echo 'Not counted: empty auto-rooms, which the sweeper removes a few seconds after start, and'
+\echo 'messages over 14 days old, which it prunes then too, as it does every few minutes.'
 \echo 'Removed rows stay in the event log; nothing here is erased.'
 SQL
