@@ -7,10 +7,10 @@ the command the plugin's hooks run to deliver messages and wake an idle session.
 connects to a running [`muster-daemon`](https://crates.io/crates/muster-daemon). It also
 sets up Codex on the daemon's own host (`muster-shim codex-setup`).
 
-> **Early alpha. Pair only machines you trust.** Muster is designed for one operator's own
-> machines on a private network, or over Tailscale or WireGuard, not the open internet. A
-> session can't prove that a human wrote a message, so don't treat a message as anyone's
-> approval.
+Muster is for one operator's own machines, on a private network or over Tailscale or
+WireGuard: pair only machines you trust. Its
+[security model](https://github.com/Castor-o7/muster/blob/main/SECURITY.md) describes how
+it protects them.
 
 **What the shim shares.** The shim puts each session on a roster that every paired machine
 can read, with its operator identity: your Claude account email, or failing that the

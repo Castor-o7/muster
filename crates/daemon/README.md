@@ -6,10 +6,10 @@ network. Codex is supported on the daemon's own host. The daemon owns the roster
 messages. One daemon serves every session that points at it. Other machines reach it
 through a TLS gate that checks a per-machine access token.
 
-> **Early alpha. Pair only machines you trust.** Muster is designed for one operator's own
-> machines on a private network, or over Tailscale or WireGuard, not the open internet.
-> Every paired machine can read the roster. A session can't prove that a human wrote a
-> message, so don't treat a message as anyone's approval.
+Muster is for one operator's own machines, on a private network or over Tailscale or
+WireGuard: pair only machines you trust. Its
+[security model](https://github.com/Castor-o7/muster/blob/main/SECURITY.md) describes how
+it protects them.
 
 ## Install
 

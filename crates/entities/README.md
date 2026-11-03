@@ -7,10 +7,10 @@ server-handled commands such as `SendMessage` and `BroadcastMessage`, and the pa
 format shared by the daemon and the shim. It's published because `muster-daemon`,
 `muster-shim` and `muster-tui` depend on it. Its API isn't stable.
 
-> **Early alpha. Pair only machines you trust.** Muster is designed for one operator's own
-> machines on a private network, or over Tailscale or WireGuard, not the open internet.
-> Every paired machine can read the roster. A session can't prove that a human wrote a
-> message, so don't treat a message as anyone's approval.
+Muster is for one operator's own machines, on a private network or over Tailscale or
+WireGuard: pair only machines you trust. Its
+[security model](https://github.com/Castor-o7/muster/blob/main/SECURITY.md) describes how
+it protects them.
 
 ## Install
 

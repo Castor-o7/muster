@@ -5,10 +5,10 @@ Code sessions find each other and exchange messages, on one machine or across yo
 network. `muster-tui` shows the live roster of sessions and the recent messages. It only
 watches: it doesn't appear on the roster and doesn't send anything.
 
-> **Early alpha. Pair only machines you trust.** Muster is designed for one operator's own
-> machines on a private network, or over Tailscale or WireGuard, not the open internet.
-> Every paired machine can read the roster. A session can't prove that a human wrote a
-> message, so don't treat a message as anyone's approval.
+Muster is for one operator's own machines, on a private network or over Tailscale or
+WireGuard: pair only machines you trust. Its
+[security model](https://github.com/Castor-o7/muster/blob/main/SECURITY.md) describes how
+it protects them.
 
 ## Install
 
