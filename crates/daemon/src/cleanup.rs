@@ -5,8 +5,10 @@
 //! - **WS shim sessions** (`client_id: Some`): live while that client id
 //!   is in the live `Client` store. When the client drops, a `STALE_AFTER`
 //!   grace covers reconnect blips. Then, if the session is still waiting on
-//!   `/hook/wait` or a hook has fired since the drop, its row becomes a pull
-//!   row so it stays reachable (MUS-54); otherwise it's DEL'd. Tracking is
+//!   `/hook/wait` or has reported activity since the drop, its row becomes a
+//!   pull row so it stays reachable (MUS-54); otherwise it's DEL'd. Activity
+//!   includes the shim's own heartbeat, so a crash right after one can be kept
+//!   too, until `KEPT_STALE_AFTER` reaps it. Tracking is
 //!   in-memory (`disconnected_since`); daemon restart resets it, giving
 //!   every reloaded session a fresh grace window.
 //!
@@ -377,7 +379,7 @@ fn sweep_once(ctx: &MykoServerContext, state: &mut SweepState) {
                         let why = if waiting.contains(&id) {
                             "it's still waiting on /hook/wait"
                         } else {
-                            "a hook fired after the drop"
+                            "it reported activity after the drop"
                         };
                         let mut pull = session.clone();
                         pull.client_id = None;
@@ -740,7 +742,8 @@ mod tests {
             until,
         };
         let ev = MEvent::from_item(&watcher, MEventType::SET, &Uuid::new_v4().to_string());
-        ctx.apply_event_batch(vec![ev]).expect("apply WakeWatcher SET");
+        ctx.apply_event_batch(vec![ev])
+            .expect("apply WakeWatcher SET");
     }
 
     fn session(ctx: &MykoServerContext, id: &str) -> Option<Session> {
@@ -779,7 +782,7 @@ mod tests {
     }
 
     #[test]
-    fn a_session_whose_hook_fired_after_the_drop_is_kept() {
+    fn a_session_active_after_the_drop_is_kept() {
         let ctx = setup();
         set_client(&ctx, "ws-client");
         set_ws_session(&ctx, "hooked", "gone-client");
@@ -822,8 +825,14 @@ mod tests {
         sweep_once(&ctx, &mut state);
 
         let ids = session_ids(&ctx);
-        assert!(!ids.contains("kept"), "a kept row that has gone quiet is reaped");
-        assert!(ids.contains("codex"), "other pull rows keep the day-long backstop");
+        assert!(
+            !ids.contains("kept"),
+            "a kept row that has gone quiet is reaped"
+        );
+        assert!(
+            ids.contains("codex"),
+            "other pull rows keep the day-long backstop"
+        );
         assert!(!state.kept.contains("kept"));
     }
 

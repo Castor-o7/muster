@@ -150,7 +150,8 @@ fn a_pull_recipient_with_a_waiter_expects_a_wake() {
         until: chrono::Utc::now().timestamp_millis() + 60_000,
     };
     let ev = MEvent::from_item(&watcher, MEventType::SET, &Uuid::new_v4().to_string());
-    ctx.apply_event_batch(vec![ev]).expect("apply WakeWatcher SET");
+    ctx.apply_event_batch(vec![ev])
+        .expect("apply WakeWatcher SET");
 
     let cmd = SendMessage {
         to_session_id: SessionId(Arc::from("recipient")),
