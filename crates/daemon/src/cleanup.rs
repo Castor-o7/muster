@@ -4,7 +4,9 @@
 //!
 //! - **WS shim sessions** (`client_id: Some`): live while that client id
 //!   is in the live `Client` store. When the client drops, a `STALE_AFTER`
-//!   grace covers reconnect blips, then the session is DEL'd. Tracking is
+//!   grace covers reconnect blips. Then, if the session is still waiting on
+//!   `/hook/wait` or a hook has fired since the drop, its row becomes a pull
+//!   row so it stays reachable (MUS-54); otherwise it's DEL'd. Tracking is
 //!   in-memory (`disconnected_since`); daemon restart resets it, giving
 //!   every reloaded session a fresh grace window.
 //!
@@ -54,6 +56,14 @@ pub const STALE_AFTER: Duration = Duration::from_secs(60);
 /// gap of a live session.
 pub const PULL_STALE_AFTER: Duration = Duration::from_secs(24 * 60 * 60);
 
+/// How long a session kept after its connection dropped (MUS-54) may go with no
+/// hook signal and no waiter before it's reaped. Much shorter than
+/// `PULL_STALE_AFTER`: a waiting session refreshes its watcher every minute, so
+/// silence this long means the session has really gone, and a ghost row would
+/// collect mail. Tracked in memory, so after a daemon restart a kept row falls
+/// back to `PULL_STALE_AFTER`.
+pub const KEPT_STALE_AFTER: Duration = Duration::from_secs(10 * 60);
+
 /// Messages older than this are pruned by `sweep_messages`, regardless of
 /// recipient. Direct messages to a reaped session go at the next boot, as
 /// orphans, because `del_by_id` doesn't cascade (MUS-31); this bounds the ones
@@ -81,6 +91,9 @@ const CLIENT_MEMORY: Duration = Duration::from_secs(60 * 60);
 struct SweepState {
     /// Session id → when it was first seen without a live client.
     disconnected_since: HashMap<Arc<str>, Instant>,
+    /// Sessions kept as pull rows after their connection dropped (MUS-54),
+    /// which `KEPT_STALE_AFTER` reaps sooner than other pull rows.
+    kept: HashSet<Arc<str>>,
     /// Client id → when it was last in the live Client store. Diagnostic:
     /// lets the reap log tell a session stamped with a client id that never
     /// existed from one whose client row went away.
@@ -259,8 +272,27 @@ fn sweep_once(ctx: &MykoServerContext, state: &mut SweepState) {
     state
         .client_last_live
         .retain(|_, seen| now.duration_since(*seen) < CLIENT_MEMORY);
+    let now_ms = Utc::now().timestamp_millis();
+    let waiting: HashSet<Arc<str>> = ctx
+        .registry
+        .get(WakeWatcher::ENTITY_NAME_STATIC)
+        .map(|store| {
+            store
+                .entries()
+                .materialize()
+                .get()
+                .into_iter()
+                .filter_map(|(id, item)| {
+                    downcast_item::<WakeWatcher>(&item)
+                        .filter(|w| w.until > now_ms)
+                        .map(|_| id)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let disconnected_since = &mut state.disconnected_since;
     let mut to_delete: Vec<(Arc<str>, String)> = Vec::new();
+    let mut to_demote: Vec<(Session, String)> = Vec::new();
     let mut still_disconnected: HashSet<Arc<str>> = HashSet::new();
 
     for (id, item) in session_store.entries().materialize().get() {
@@ -288,13 +320,25 @@ fn sweep_once(ctx: &MykoServerContext, state: &mut SweepState) {
                 .flatten()
                 .max()
                 .unwrap_or(0);
-                let now_ms = Utc::now().timestamp_millis();
-                if now_ms.saturating_sub(last_signal_ms) >= PULL_STALE_AFTER.as_millis() as i64 {
+                let silent_ms = now_ms.saturating_sub(last_signal_ms);
+                if silent_ms >= PULL_STALE_AFTER.as_millis() as i64 {
                     to_delete.push((id, "no hook activity for a day".to_string()));
+                } else if state.kept.contains(&id)
+                    && !waiting.contains(&id)
+                    && silent_ms >= KEPT_STALE_AFTER.as_millis() as i64
+                {
+                    to_delete.push((
+                        id,
+                        format!(
+                            "kept after its connection dropped, but no hook or waiter for {}s",
+                            silent_ms / 1000
+                        ),
+                    ));
                 }
             }
             // WS shim session bound to a live client: healthy.
             Some(cid) if live_client_ids.contains(&cid.0) => {
+                state.kept.remove(&id);
                 if disconnected_since.remove(&id).is_some() {
                     log::info!("[cleanup] session {id} is back on live client {}", cid.0);
                 }
@@ -313,14 +357,34 @@ fn sweep_once(ctx: &MykoServerContext, state: &mut SweepState) {
                     now
                 });
                 if now.duration_since(first_seen) >= STALE_AFTER {
-                    to_delete.push((
-                        id,
-                        format!(
-                            "{}; no live client for {}s",
-                            describe_client(&state.client_last_live, &cid.0, now),
-                            now.duration_since(first_seen).as_secs()
-                        ),
-                    ));
+                    // When the client was last seen, as wall-clock millis. The
+                    // sweeper may notice a drop a tick late, so prefer the
+                    // client's own last sighting.
+                    let gone_at = state
+                        .client_last_live
+                        .get(&cid.0)
+                        .copied()
+                        .unwrap_or(first_seen)
+                        .min(first_seen);
+                    let gone_ms = now_ms - now.duration_since(gone_at).as_millis() as i64;
+                    let hooked_since = session.last_activity_at.is_some_and(|at| at > gone_ms);
+                    let reason = format!(
+                        "{}; no live client for {}s",
+                        describe_client(&state.client_last_live, &cid.0, now),
+                        now.duration_since(first_seen).as_secs()
+                    );
+                    if waiting.contains(&id) || hooked_since {
+                        let why = if waiting.contains(&id) {
+                            "it's still waiting on /hook/wait"
+                        } else {
+                            "a hook fired after the drop"
+                        };
+                        let mut pull = session.clone();
+                        pull.client_id = None;
+                        to_demote.push((pull, format!("{reason}, but {why}")));
+                    } else {
+                        to_delete.push((id, reason));
+                    }
                 }
             }
         }
@@ -330,6 +394,20 @@ fn sweep_once(ctx: &MykoServerContext, state: &mut SweepState) {
     // someone DEL'd them out from under us).
     disconnected_since.retain(|id, _| still_disconnected.contains(id));
 
+    // A session that lost its connection but is still working keeps its row
+    // as a pull row: mail reaches it through its hooks, and the pull rules
+    // (SessionEnd, PULL_STALE_AFTER) govern it from here (MUS-54).
+    for (session, reason) in to_demote {
+        let id = session.id.0.clone();
+        log::info!("[cleanup] keeping session {id} as a pull session: {reason}");
+        if let Err(e) = ctx.set(&session) {
+            log::warn!("[cleanup] demote session {} failed: {}", id, e);
+            continue;
+        }
+        disconnected_since.remove(&id);
+        state.kept.insert(id);
+    }
+
     for (id, reason) in to_delete {
         log::info!("[cleanup] DELing abandoned session {id}: {reason}");
         if let Err(e) = ctx.del_by_id(Session::ENTITY_NAME_STATIC, &id) {
@@ -337,6 +415,7 @@ fn sweep_once(ctx: &MykoServerContext, state: &mut SweepState) {
             continue;
         }
         disconnected_since.remove(&id);
+        state.kept.remove(&id);
     }
 }
 
@@ -653,6 +732,138 @@ mod tests {
             "message older than the TTL must be pruned"
         );
         assert!(ids.contains("recent"), "recent message must survive");
+    }
+
+    fn set_watcher(ctx: &MykoServerContext, id: &str, until: i64) {
+        let watcher = WakeWatcher {
+            id: muster_entities::WakeWatcherId(Arc::from(id)),
+            until,
+        };
+        let ev = MEvent::from_item(&watcher, MEventType::SET, &Uuid::new_v4().to_string());
+        ctx.apply_event_batch(vec![ev]).expect("apply WakeWatcher SET");
+    }
+
+    fn session(ctx: &MykoServerContext, id: &str) -> Option<Session> {
+        ctx.registry
+            .get(Session::ENTITY_NAME_STATIC)?
+            .get(&Arc::from(id))
+            .materialize()
+            .get()
+            .and_then(|item| downcast_item::<Session>(&item).cloned())
+    }
+
+    /// A state where `id`'s client went more than the grace ago.
+    fn past_the_grace(id: &str, client: &str) -> SweepState {
+        let mut state = SweepState::default();
+        let gone = Instant::now() - STALE_AFTER - Duration::from_secs(1);
+        state.disconnected_since.insert(Arc::from(id), gone);
+        state.client_last_live.insert(Arc::from(client), gone);
+        state
+    }
+
+    #[test]
+    fn a_session_still_waiting_is_kept_as_a_pull_row_when_its_connection_drops() {
+        let ctx = setup();
+        set_client(&ctx, "ws-client");
+        set_ws_session(&ctx, "waiter", "gone-client");
+        set_watcher(&ctx, "waiter", Utc::now().timestamp_millis() + 60_000);
+        set_message(&ctx, "mail", Utc::now().timestamp_millis());
+        let mut state = past_the_grace("waiter", "gone-client");
+
+        sweep_once(&ctx, &mut state);
+
+        let kept = session(&ctx, "waiter").expect("a waiting session isn't reaped (MUS-54)");
+        assert!(kept.client_id.is_none(), "it becomes a pull row");
+        assert!(state.kept.contains("waiter"));
+        assert!(!state.disconnected_since.contains_key("waiter"));
+    }
+
+    #[test]
+    fn a_session_whose_hook_fired_after_the_drop_is_kept() {
+        let ctx = setup();
+        set_client(&ctx, "ws-client");
+        set_ws_session(&ctx, "hooked", "gone-client");
+        let mut row = session(&ctx, "hooked").unwrap();
+        row.last_activity_at = Some(Utc::now().timestamp_millis());
+        ctx.set(&row).expect("hook activity");
+        let mut state = past_the_grace("hooked", "gone-client");
+
+        sweep_once(&ctx, &mut state);
+
+        assert!(session(&ctx, "hooked").is_some_and(|s| s.client_id.is_none()));
+    }
+
+    #[test]
+    fn a_session_with_no_waiter_and_no_hook_since_the_drop_is_still_reaped() {
+        let ctx = setup();
+        set_client(&ctx, "ws-client");
+        set_ws_session(&ctx, "crashed", "gone-client");
+        let mut row = session(&ctx, "crashed").unwrap();
+        // Its last hook came before the drop, like a TUI that crashed mid-turn.
+        row.last_activity_at = Some(Utc::now().timestamp_millis() - 120_000);
+        ctx.set(&row).expect("old hook activity");
+        let mut state = past_the_grace("crashed", "gone-client");
+
+        sweep_once(&ctx, &mut state);
+
+        assert!(session(&ctx, "crashed").is_none());
+    }
+
+    #[test]
+    fn a_kept_session_that_goes_silent_is_reaped_sooner_than_other_pull_rows() {
+        let ctx = setup();
+        set_client(&ctx, "ws-client");
+        let silent = Utc::now().timestamp_millis() - KEPT_STALE_AFTER.as_millis() as i64 - 60_000;
+        set_hook_session(&ctx, "kept", silent);
+        set_hook_session(&ctx, "codex", silent);
+        let mut state = SweepState::default();
+        state.kept.insert(Arc::from("kept"));
+
+        sweep_once(&ctx, &mut state);
+
+        let ids = session_ids(&ctx);
+        assert!(!ids.contains("kept"), "a kept row that has gone quiet is reaped");
+        assert!(ids.contains("codex"), "other pull rows keep the day-long backstop");
+        assert!(!state.kept.contains("kept"));
+    }
+
+    #[test]
+    fn a_kept_session_still_waiting_isnt_reaped_for_silence() {
+        let ctx = setup();
+        set_client(&ctx, "ws-client");
+        let silent = Utc::now().timestamp_millis() - KEPT_STALE_AFTER.as_millis() as i64 - 60_000;
+        set_hook_session(&ctx, "kept", silent);
+        set_watcher(&ctx, "kept", Utc::now().timestamp_millis() + 60_000);
+        let mut state = SweepState::default();
+        state.kept.insert(Arc::from("kept"));
+
+        sweep_once(&ctx, &mut state);
+
+        assert!(session_ids(&ctx).contains("kept"));
+    }
+
+    #[test]
+    fn mail_to_a_kept_session_survives_the_next_boot() {
+        muster_entities::link();
+        crate::link();
+        let blackhole: Arc<dyn Persister> = Arc::new(BlackholePersister);
+        let server: &'static MykoServer = Box::leak(Box::new(
+            MykoServer::builder()
+                .with_default_persister(blackhole)
+                .build(),
+        ));
+        let ctx = server.ctx();
+        set_client(&ctx, "ws-client");
+        // `set_message` addresses its mail to "recipient".
+        set_ws_session(&ctx, "recipient", "gone-client");
+        set_watcher(&ctx, "recipient", Utc::now().timestamp_millis() + 60_000);
+        let mut state = past_the_grace("recipient", "gone-client");
+        sweep_once(&ctx, &mut state);
+        set_message(&ctx, "sent-in-the-window", Utc::now().timestamp_millis());
+
+        server.establish_relations();
+
+        assert!(message_ids(&ctx).contains("sent-in-the-window"));
     }
 
     #[test]

@@ -19,6 +19,7 @@ use std::sync::Arc;
 use hyphae::{Gettable, Materialize};
 use muster_entities::{
     LivePushStatus, Message, SendMessage, SendMessageResult, Session, SessionId, WakeStatus,
+    WakeWatcher, WakeWatcherId,
 };
 use myko::{
     command::{CommandContext, CommandHandler},
@@ -135,6 +136,33 @@ fn offline_recipient_succeeds_and_persists_for_pull() {
     assert_eq!(result.wake, WakeStatus::Unobserved);
     assert_eq!(message_count(&ctx), 1, "message must persist for pull");
     assert_eq!(only_message(&ctx).body, "hi");
+}
+
+#[test]
+fn a_pull_recipient_with_a_waiter_expects_a_wake() {
+    // A session kept after its connection dropped (MUS-54) has no client but
+    // still holds `/hook/wait`, so the message will wake it.
+    let ctx = setup();
+    set_session(&ctx, &session("sender", Some("c-sender")));
+    set_session(&ctx, &session("recipient", None));
+    let watcher = WakeWatcher {
+        id: WakeWatcherId(Arc::from("recipient")),
+        until: chrono::Utc::now().timestamp_millis() + 60_000,
+    };
+    let ev = MEvent::from_item(&watcher, MEventType::SET, &Uuid::new_v4().to_string());
+    ctx.apply_event_batch(vec![ev]).expect("apply WakeWatcher SET");
+
+    let cmd = SendMessage {
+        to_session_id: SessionId(Arc::from("recipient")),
+        body: "hi".into(),
+        as_session: None,
+        idempotency_key: None,
+    };
+    let result = cmd.execute(cmd_ctx(&ctx, Some("c-sender"))).expect("send");
+
+    assert_eq!(result.live_push, LivePushStatus::Unavailable);
+    assert_eq!(result.wake, WakeStatus::Expected);
+    assert_eq!(message_count(&ctx), 1);
 }
 
 #[test]
