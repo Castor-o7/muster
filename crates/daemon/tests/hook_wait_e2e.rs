@@ -12,7 +12,10 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use muster_entities::{GetAllWakeWatchers, SendMessage, Session, SessionId, WakeWatcher};
+use muster_entities::{
+    GetAllMessages, GetAllSessions, GetAllWakeWatchers, Message, SendMessage, Session, SessionId,
+    WakeWatcher,
+};
 use myko::{
     command::{CommandContext, CommandHandler},
     entities::client::ClientId,
@@ -300,6 +303,23 @@ fn a_stopping_daemon_ends_held_waits_cleanly() {
     let late = http_post_raw(addr, "/hook/wait?timeout=30", RECIPIENT);
     assert!(started.elapsed() < Duration::from_secs(2));
     assert!(late.contains("X-Muster-Restarting: 1"), "{late:?}");
+}
+
+#[test]
+fn a_clean_session_end_keeps_its_mail() {
+    let (ctx, addr) = start();
+    send(&ctx, "left before reading");
+    http_post(addr, "/hook/session-end", RECIPIENT);
+    let sessions: Vec<Arc<Session>> = cmd_ctx(&ctx).exec_query(GetAllSessions {}).unwrap();
+    assert!(
+        !sessions.iter().any(|s| s.id.0.as_ref() == "recipient"),
+        "SessionEnd removed the session"
+    );
+    let mail: Vec<Arc<Message>> = cmd_ctx(&ctx).exec_query(GetAllMessages {}).unwrap();
+    assert!(
+        mail.iter().any(|m| m.body == "left before reading"),
+        "its mail outlives it, until the 14-day sweep (MUS-46)"
+    );
 }
 
 #[test]
