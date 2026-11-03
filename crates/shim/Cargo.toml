@@ -1,6 +1,6 @@
 [package]
 name = "muster-shim"
-version = "0.53.6"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "Stdio MCP shim that bridges Claude Code sessions to the muster coordination daemon."

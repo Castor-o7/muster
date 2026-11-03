@@ -1,6 +1,6 @@
 [package]
 name = "muster-daemon"
-version = "0.53.6"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "Coordination daemon for the muster multi-agent service. Owns the live roster and routes messages between Claude Code sessions."
