@@ -272,6 +272,9 @@ impl std::fmt::Display for PostFailure {
 pub struct Reply {
     pub body: String,
     pub ack_ids: Vec<String>,
+    /// The daemon ended this wait because it's stopping, so a retry will
+    /// briefly find it unreachable.
+    pub restarting: bool,
 }
 
 /// A complete HTTP response, or why there isn't a usable one.
@@ -298,9 +301,14 @@ pub fn parse_response(buf: &[u8]) -> Result<Reply, PostFailure> {
                 .collect()
         })
         .unwrap_or_default();
+    let restarting = text[..idx]
+        .lines()
+        .filter_map(|line| line.split_once(':'))
+        .any(|(name, _)| name.eq_ignore_ascii_case("x-muster-restarting"));
     Ok(Reply {
         body: text[idx + 4..].to_string(),
         ack_ids,
+        restarting,
     })
 }
 
@@ -377,8 +385,12 @@ mod tests {
             Ok(Reply {
                 body: "body".to_string(),
                 ack_ids: vec!["a".to_string(), "b".to_string()],
+                restarting: false,
             })
         );
+        let stopping =
+            parse_response(b"HTTP/1.1 200 OK\r\nX-Muster-Restarting: 1\r\n\r\n").unwrap();
+        assert!(stopping.restarting && stopping.body.is_empty());
         for code in [401, 403] {
             let raw = format!("HTTP/1.1 {code} No\r\n\r\n");
             let failure = parse_response(raw.as_bytes()).unwrap_err();

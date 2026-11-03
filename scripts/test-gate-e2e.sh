@@ -286,6 +286,20 @@ T $BIN/muster-shim tell $KEEP kept and reachable >/dev/null 2>&1
 wait $KEEP_WAIT
 check "and a message sent after the drop reaches its held wait" 'grep -q "kept and reachable" $WORK/keep-wait.out'
 
+# SIGTERM ends a held wait with an empty reply marked as a restart, then exits cleanly (MUS-55).
+env MUSTER_STATE_DIR=$WORK/state3 MUSTER_BIND=127.0.0.1:16455 MUSTER_HOOK_BIND=127.0.0.1:16456 MUSTER_INTERNAL_BIND=127.0.0.1:16457 RUST_LOG=info $BIN/muster-daemon >$WORK/stop.log 2>&1 &
+STOP_PID=$!
+for i in {1..50}; do nc -z 127.0.0.1 16456 2>/dev/null && break; sleep 0.2; done
+curl -s -m 20 -D $WORK/stop-head.txt -o $WORK/stop-body.txt -X POST "http://127.0.0.1:16456/hook/wait?timeout=15" -d '{"session_id":"a0000000-0000-4000-8000-0000000000d1","cwd":"/tmp/stop"}' &
+STOP_WAIT=$!
+sleep 1
+STOP_AT=$SECONDS
+kill -TERM $STOP_PID
+wait $STOP_WAIT
+wait $STOP_PID; STOP_RC=$?
+check "SIGTERM ends a held wait promptly, marked as a restart" '(( SECONDS - STOP_AT < 5 )) && grep -qi "x-muster-restarting: 1" $WORK/stop-head.txt && [[ ! -s $WORK/stop-body.txt ]]'
+check "and the daemon then exits cleanly" '[[ $STOP_RC == 0 ]] && grep -q "SIGTERM; ending held waits" $WORK/stop.log'
+
 # A hook port that can't bind stops the daemon, rather than leaving hooks dead.
 env MUSTER_STATE_DIR=$WORK/state2 MUSTER_BIND=127.0.0.1:16355 MUSTER_INTERNAL_BIND=127.0.0.1:16357 RUST_LOG=error perl -e 'alarm 10; exec @ARGV' $BIN/muster-daemon >$WORK/bind.log 2>&1; RC=$?
 check "a failed hook bind stops the daemon and says why" '[[ $RC != 0 && $RC != 142 ]] && grep -q "hook listener on 127.0.0.1:16256" $WORK/bind.log'

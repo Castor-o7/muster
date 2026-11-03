@@ -19,6 +19,7 @@ use std::{
     sync::Arc,
     time::Duration,
 };
+use tokio::sync::watch;
 
 use myko::server::MykoServerContext;
 use tokio::{
@@ -39,9 +40,13 @@ const WAIT_DEFAULT_SECS: u64 = 240;
 const WAIT_MAX_SECS: u64 = 600;
 const WAIT_POLL: Duration = Duration::from_millis(500);
 
+/// Header on a wait the daemon ended because it's stopping, so the waiter can
+/// back off quietly rather than report the daemon unreachable.
+pub const RESTARTING_HEADER: &str = "X-Muster-Restarting";
+
 /// Run the hook listener forever. Spawn on a tokio task.
 pub async fn run(bind: SocketAddr, ctx: Arc<MykoServerContext>) -> std::io::Result<()> {
-    run_bound(bind, ctx, None).await
+    run_until(bind, ctx, None, watch::channel(false).1).await
 }
 
 /// [`run`], refusing requests the gate marked as coming from a machine that
@@ -51,6 +56,17 @@ pub async fn run_bound(
     bind: SocketAddr,
     ctx: Arc<MykoServerContext>,
     state_dir: Option<Arc<PathBuf>>,
+) -> std::io::Result<()> {
+    run_until(bind, ctx, state_dir, watch::channel(false).1).await
+}
+
+/// [`run_bound`], ending every held wait once `stopping` turns true, with an
+/// empty reply marked by [`RESTARTING_HEADER`].
+pub async fn run_until(
+    bind: SocketAddr,
+    ctx: Arc<MykoServerContext>,
+    state_dir: Option<Arc<PathBuf>>,
+    stopping: watch::Receiver<bool>,
 ) -> std::io::Result<()> {
     let listener = TcpListener::bind(bind).await?;
     log::info!("muster hook listener on http://{bind} (/hook/*)");
@@ -64,8 +80,9 @@ pub async fn run_bound(
         };
         let ctx = ctx.clone();
         let state_dir = state_dir.clone();
+        let stopping = stopping.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_conn(stream, ctx, state_dir).await {
+            if let Err(e) = handle_conn(stream, ctx, state_dir, stopping).await {
                 log::debug!("[hook] connection error: {e}");
             }
         });
@@ -76,6 +93,7 @@ async fn handle_conn(
     mut stream: TcpStream,
     ctx: Arc<MykoServerContext>,
     state_dir: Option<Arc<PathBuf>>,
+    stopping: watch::Receiver<bool>,
 ) -> std::io::Result<()> {
     let mut buf: Vec<u8> = Vec::with_capacity(2048);
     let mut tmp = [0u8; 2048];
@@ -142,7 +160,7 @@ async fn handle_conn(
     }
 
     if path == "/hook/wait" {
-        return handle_wait(stream, query, &body, &ctx).await;
+        return handle_wait(stream, query, &body, &ctx, stopping).await;
     }
 
     match hooks::dispatch(path, query, &body, &ctx) {
@@ -204,6 +222,7 @@ async fn handle_wait(
     query: &str,
     body: &[u8],
     ctx: &Arc<MykoServerContext>,
+    mut stopping: watch::Receiver<bool>,
 ) -> std::io::Result<()> {
     let Some((sid, cmd_ctx)) = hooks::begin_wait(query, body, ctx) else {
         return write_response(&mut stream, 200, "").await;
@@ -217,7 +236,11 @@ async fn handle_wait(
     let client_acks = query.split('&').any(|kv| kv == "ack=client");
     let deadline = tokio::time::Instant::now() + Duration::from_secs(secs);
     let mut probe = [0u8; 64];
+    let restarting = format!("{RESTARTING_HEADER}: 1\r\n");
     loop {
+        if *stopping.borrow() {
+            return write_response_with(&mut stream, 200, &restarting, "").await;
+        }
         hooks::mark_waiting_now(&cmd_ctx, &sid);
         if let Some(outcome) = hooks::poll_wait(&cmd_ctx, &sid) {
             hooks::end_wait(&cmd_ctx, &sid);
@@ -240,6 +263,7 @@ async fn handle_wait(
         }
         tokio::select! {
             _ = tokio::time::sleep(WAIT_POLL) => {}
+            _ = stopping.changed() => {}
             _ = stream.read(&mut probe) => {
                 hooks::end_wait(&cmd_ctx, &sid);
                 return Ok(());
