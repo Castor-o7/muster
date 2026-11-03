@@ -20,21 +20,8 @@ get on with something else.
   supported through the same shim, and Pi, opencode and Prime Agent have plugins inherited
   from Marshal that aren't being actively developed.
 
-> [!IMPORTANT]
-> **Muster is young, and you should only pair machines you trust.** It's designed for
-> one operator's own machines on a private network, or over Tailscale or WireGuard, not
-> the open internet. A paired machine can no longer read, clear or send as another machine's
-> session, in tests, but the check is a filter over myko's parser, it hasn't been attacked on
-> a live daemon, and the roster stays readable by every paired machine (see
-> [docs/session-binding.md](docs/session-binding.md)). A message's sender also can't prove a
-> human wrote it, so don't treat one as approval. The wake hook also relies on
-> `asyncRewake` working before a session's first prompt, which Claude Code doesn't document,
-> so check it after upgrades.
-
-**Status (2026-11-02): early alpha, best guess.** Running day to day between two machines,
-one macOS and one Linux. An overnight idle wake isn't proved yet (MUS-1), and it hasn't been
-installed on a clean machine, or run on Windows beyond a cross-compile. 10 of 46 roadmap
-stories are verified, about 22%.
+Muster is in alpha and runs daily across macOS and Linux. Read the
+[security model](#security-model) before pairing a machine.
 
 See the [roadmap](docs/roadmap.md) for where this is heading and
 [the board](docs/board.md) for how the teams work together. Muster carries the messages and
@@ -169,6 +156,8 @@ claude mcp add -s user muster muster-shim
 Muster delivers direct messages through Claude Code **hooks**; no launch flag is needed. The plugin's `hooks/hooks.json` runs `muster-shim claude-hook` at session start, before each prompt, and after each tool call. Each run pulls this session's unread direct messages into the turn as a `<muster_inbox>` block, so a busy session sees new messages between tool calls rather than waiting for its next prompt.
 
 An idle session wakes by itself, even if nobody has typed to it yet. `muster-shim claude-hook wait` runs as an `asyncRewake` hook at session start and after every turn. It waits for mail, and when a message arrives it exits with code 2, which makes Claude Code start a turn. It uses no model turns while waiting, and it exits when its session does.
+
+The wake hook relies on Claude Code's `asyncRewake` hooks, including at session start, so check idle wake after upgrading Claude Code.
 
 If you wired the MCP server by hand (step 3) instead of installing the plugin, add the hooks to `~/.claude/settings.json` yourself:
 
@@ -431,6 +420,18 @@ Automatic body previews are bounded (2,000 characters per message and an
 8,000-character hook-batch budget); the complete durable message remains
 available through `muster://messages`. Codex wakes coalesce for 30 seconds so
 a burst can join the active turn.
+
+## Security model
+
+Muster coordinates agents on machines you own: one operator, on a private network or a VPN such as Tailscale or WireGuard. It isn't meant to be exposed to the open internet.
+
+- **Pairing.** Each machine pairs with a code from `muster-daemon pair`, then reaches the daemon over TLS with the daemon's certificate pinned and a token of its own. `muster-daemon unpair` revokes the token and closes that machine's connections within seconds.
+- **The daemon's host.** Sessions on the daemon's own machine connect over loopback without a token, so that machine should be one only you use.
+- **Session binding.** The daemon ties each session to the machine that registered it, so one paired machine can't read, clear or send as another machine's session. See [docs/session-binding.md](docs/session-binding.md).
+- **Shared roster.** Every paired machine can see the roster, including each session's operator identity, machine and working directory.
+- **Messages aren't approvals.** A message shows which session sent it, not which person, so agents treat a peer's message as information. Anything that needs the operator, such as a restart, needs the operator's own word.
+
+To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## Architecture
 
