@@ -749,7 +749,7 @@ mod tests {
             .get(&Arc::from(id))
             .materialize()
             .get()
-            .and_then(|item| downcast_item::<Session>(&item).cloned())
+            .and_then(|item| downcast_item::<Session>(&item))
     }
 
     /// A state where `id`'s client went more than the grace ago.
