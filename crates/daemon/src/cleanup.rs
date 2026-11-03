@@ -369,6 +369,10 @@ fn sweep_once(ctx: &MykoServerContext, state: &mut SweepState) {
                         .unwrap_or(first_seen)
                         .min(first_seen);
                     let gone_ms = now_ms - now.duration_since(gone_at).as_millis() as i64;
+                    // Hooks stamp `last_activity_at` with this machine's clock,
+                    // but a shim writing its own row uses its machine's, so a
+                    // clock skew larger than the grace could keep a session or
+                    // reap it wrongly. `KEPT_STALE_AFTER` bounds the first.
                     let hooked_since = session.last_activity_at.is_some_and(|at| at > gone_ms);
                     let reason = format!(
                         "{}; no live client for {}s",
