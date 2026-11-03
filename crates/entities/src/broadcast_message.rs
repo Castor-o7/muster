@@ -209,7 +209,7 @@ impl CommandHandler for BroadcastMessage {
             // Persist a direct Message so it lands in the target's inbox and is
             // pulled next turn regardless of live state. The body carries the
             // room context so the recipient knows it came from a broadcast. A
-            // human @mention (`@max@lucid.rocks`) carries `to_operator` so it's
+            // human @mention (`@operator@example.com`) carries `to_operator` so it's
             // surfaced to the person, same as a direct human-addressed send.
             let ping = Message {
                 id: MessageId(Arc::from(Uuid::now_v7().to_string())),
@@ -277,7 +277,7 @@ fn err(ctx: &CommandContext, message: &str) -> CommandError {
 /// Extract `@mention` handles from a broadcast body. A mention is an `@` at a
 /// word boundary (start of string or after whitespace) followed by a handle
 /// run: alphanumerics plus `. _ - + : @` — covering nicknames (`swift-falcon`),
-/// operator emails (`max@lucid.rocks`), and `op:`/`human:` prefixes. Trailing
+/// operator emails (`operator@example.com`), and `op:`/`human:` prefixes. Trailing
 /// sentence punctuation is trimmed. The word-boundary rule means a bare email
 /// in prose (`ping max@x.com`) is NOT a mention; address the human as
 /// `@max@x.com`.
@@ -322,8 +322,8 @@ mod tests {
             vec!["swift-falcon"]
         );
         assert_eq!(
-            parse_mentions("@max@lucid.rocks your call on the redeploy"),
-            vec!["max@lucid.rocks"]
+            parse_mentions("@operator@example.com your call on the redeploy"),
+            vec!["operator@example.com"]
         );
         assert_eq!(
             parse_mentions("cc @op:trevor and @human:max"),
@@ -348,7 +348,7 @@ mod tests {
 }
 
 /// The channel banner for an `@mention` ping. Same split as a direct send: an
-/// agent mention stays a concise ping; a human mention (`@max@lucid.rocks`)
+/// agent mention stays a concise ping; a human mention (`@operator@example.com`)
 /// opens with the relay-to-operator contract.
 pub(crate) fn mention_push_content(
     from_nickname: &str,
@@ -404,8 +404,8 @@ mod push_content_tests {
 
     #[test]
     fn human_mention_banner_opens_with_the_relay_contract() {
-        let content = mention_push_content("fleet-wolf", "everyone", Some("max@lucid.rocks"));
-        assert!(content.starts_with("For operator (max@lucid.rocks): relay to them;"));
+        let content = mention_push_content("fleet-wolf", "everyone", Some("operator@example.com"));
+        assert!(content.starts_with("For operator (operator@example.com): relay to them;"));
         assert!(content.ends_with("fleet-wolf mentioned you in everyone."));
     }
 }

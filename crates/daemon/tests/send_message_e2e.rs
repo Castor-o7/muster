@@ -461,7 +461,7 @@ fn human_addressed_push_content_carries_the_relay_contract() {
 
     // B is one of max's agents. A addresses the PERSON, not the session.
     let mut max_agent = make_session("sess-max");
-    max_agent.operator = Some("max@lucid.rocks".into());
+    max_agent.operator = Some("operator@example.com".into());
     max_agent.last_activity_at = Some(chrono::Utc::now().timestamp_millis());
     send_session_set(&client_a, &make_session("sess-alpha"));
     send_session_set(&client_b, &max_agent);
@@ -476,7 +476,7 @@ fn human_addressed_push_content_carries_the_relay_contract() {
     }
 
     let cmd = SendMessage {
-        to_session_id: SessionId(Arc::from("max@lucid.rocks")),
+        to_session_id: SessionId(Arc::from("operator@example.com")),
         body: "please approve PR #527".into(),
         as_session: None,
         idempotency_key: None,
@@ -504,10 +504,10 @@ fn human_addressed_push_content_carries_the_relay_contract() {
     // `content` — the line the model actually reads — did not.
     assert_eq!(
         push.meta.get("to_operator"),
-        Some(&serde_json::json!("max@lucid.rocks")),
+        Some(&serde_json::json!("operator@example.com")),
     );
     assert!(
-        push.content.contains("For operator (max@lucid.rocks)"),
+        push.content.contains("For operator (operator@example.com)"),
         "human-addressed push content must open with the relay-to-operator contract, got: {}",
         push.content,
     );

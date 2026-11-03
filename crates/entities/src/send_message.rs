@@ -348,7 +348,7 @@ fn err(ctx: &CommandContext, message: &str) -> CommandError {
 ///   1. exact session id;
 ///   2. a unique nickname (`swift-falcon`, what the statusline shows);
 ///   3. an OPERATOR identity — the human, addressed by their resolved operator
-///      string (an email like `max@lucid.rocks`, optionally `op:`/`human:`
+///      string (an email like `operator@example.com`, optionally `op:`/`human:`
 ///      prefixed). This is human-via-agent routing: it delivers to that
 ///      operator's most-recently-active session, preferring one with a live,
 ///      render-capable client, so the sender addresses the *person* and the
@@ -590,8 +590,8 @@ mod push_content_tests {
 
     #[test]
     fn human_addressed_banner_opens_with_the_relay_contract() {
-        let content = direct_push_content("fleet-wolf", Some("max@lucid.rocks"));
-        assert!(content.starts_with("For operator (max@lucid.rocks): relay to them;"));
+        let content = direct_push_content("fleet-wolf", Some("operator@example.com"));
+        assert!(content.starts_with("For operator (operator@example.com): relay to them;"));
         assert!(content.ends_with("New message from fleet-wolf."));
     }
 }

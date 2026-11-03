@@ -305,8 +305,8 @@ mod tests {
     #[test]
     fn parses_ws_url_with_port() {
         assert_eq!(
-            parse_host_port("ws://100.86.142.61:6255"),
-            Some(("100.86.142.61".to_string(), 6255))
+            parse_host_port("ws://192.0.2.20:6255"),
+            Some(("192.0.2.20".to_string(), 6255))
         );
     }
 

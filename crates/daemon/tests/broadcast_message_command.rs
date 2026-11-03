@@ -229,12 +229,12 @@ fn operator_mention_routes_to_the_humans_agent() {
     room_with_two(&ctx);
     // Max's agent — not a room member; addressed by operator identity.
     let mut maxs = session("max-agent", Some("c-max"));
-    maxs.operator = Some("max@lucid.rocks".into());
+    maxs.operator = Some("operator@example.com".into());
     set_session(&ctx, &maxs);
 
     let res = BroadcastMessage {
         to_room_id: RoomId(Arc::from("everyone")),
-        body: "@max@lucid.rocks need a call on the redeploy".into(),
+        body: "@operator@example.com need a call on the redeploy".into(),
         as_session: None,
     }
     .execute(cmd_ctx(&ctx, Some("c-sender")))

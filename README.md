@@ -87,7 +87,7 @@ The daemon keeps its TLS certificate and the paired machines' token hashes in `M
 Every machine other than the daemon's own host needs a pairing. (On the daemon's host, an unpaired shim connects to the internal loopback listener on 6257, so it works without one. Pair it too if other people can log in to that machine.) On the daemon's host:
 
 ```bash
-muster-daemon pair --name a1 --address 192.168.1.241:6255
+muster-daemon pair --name a1 --address 192.0.2.10:6255
 ```
 
 It prints a `muster-shim pair muster-pair:v1:…` command. Run that on the machine you're pairing. The code holds the gate's address, the certificate fingerprint to pin, and that machine's access token, so treat it like a password. Then restart that machine's Claude Code sessions.
@@ -484,3 +484,8 @@ on a clean machine, and Windows beyond a cross-compile.
 ## License
 
 MIT OR Apache-2.0, at your option (`LICENSE-MIT`, `LICENSE-APACHE`). Muster is a fork of [Marshal](https://github.com/ignition-is-go/marshal), under the same licence.
+
+That covers Muster's own source code. Muster depends on myko, myko-macros and autosocket
+(and myko-server for `muster-daemon`), which declare the AGPL-3.0-or-later licence. Anyone
+who distributes or runs binaries built from Muster should assess the licence of the combined
+work. This isn't legal advice.

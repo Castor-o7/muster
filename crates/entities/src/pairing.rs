@@ -99,7 +99,7 @@ mod tests {
 
     fn sample() -> Pairing {
         Pairing {
-            address: "192.168.1.241:6255".into(),
+            address: "192.0.2.10:6255".into(),
             fingerprint: "ab".repeat(32),
             token: "tok_abc-DEF_123".into(),
             name: "a1".into(),
