@@ -86,6 +86,11 @@ log, and `briny-tortoise`'s messages were recovered from it on 2026-10-30.
 5. **Recovery depends on the event log.** It works today only because rows are
    appended and never compacted.
 
+`scripts/restart-preview.sh` reports what the next restart will remove (MUS-49). Run against
+the backups taken before the last two restarts, it predicted 422 messages, 421 read records
+and 32 memberships for 2026-11-02 (35 memberships went, the other 3 to MUS-40's room tidy-up,
+which it doesn't count), and exactly the 323, 323 and 12 removed on 2026-11-03.
+
 ## Recommendation
 
 1. **Don't simply switch reaping to a cascading delete.** That moves the loss from
