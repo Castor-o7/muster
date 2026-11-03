@@ -3,6 +3,7 @@ name = "muster-shim"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
 description = "Stdio MCP shim that bridges Claude Code sessions to the muster coordination daemon."
 repository = "https://github.com/Castor-o7/muster"
 keywords = ["muster", "agent", "mcp", "claude", "myko"]

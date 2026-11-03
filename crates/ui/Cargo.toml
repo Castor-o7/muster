@@ -3,6 +3,7 @@ name = "muster-ui"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
 description = "Leptos-based operator dashboard for the muster coordination daemon."
 repository = "https://github.com/Castor-o7/muster"
 keywords = ["muster", "agent", "leptos", "wasm", "myko"]

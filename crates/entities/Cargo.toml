@@ -3,6 +3,7 @@ name = "muster-entities"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
 description = "Shared entity types and server-handled commands for the muster multi-agent coordination service."
 repository = "https://github.com/Castor-o7/muster"
 keywords = ["muster", "agent", "coordination", "myko"]
