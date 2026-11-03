@@ -14,11 +14,12 @@ evidence from a real run by the person or team named.
 
 ## Status
 
-2026-11-02: 10 of 46 stories ticked, about 22%, not counting the 3 moved to Rally. Live on
-Murph since 2026-11-02: `c0ece8c`, which includes MUS-5, MUS-6, MUS-29, MUS-33, MUS-34,
-MUS-35 and MUS-40. Sessions pick up a rebuilt shim when they restart, and no keyed send
-(MUS-29) has been seen live yet. Merged, live and not yet verified: MUS-34 and MUS-35.
-Merged and needing a live run: MUS-36 and MUS-37.
+2026-11-03: 12 of 51 stories ticked, about 24%, not counting the 3 moved to Rally. Live on
+Murph since 2026-11-03: `c3dbd45`, which includes MUS-4, MUS-5, MUS-6, MUS-29, MUS-33,
+MUS-34, MUS-35, MUS-40, MUS-44, MUS-50 and MUS-53. Sessions pick up a rebuilt shim when they
+restart, and no keyed send (MUS-29) has been seen live yet. Merged, live and not yet
+verified: MUS-4, MUS-34, MUS-35, MUS-44 and MUS-50. Merged and needing a live run:
+MUS-36 and MUS-37.
 
 ## Decisions
 
@@ -96,7 +97,7 @@ Merged and needing a live run: MUS-36 and MUS-37.
   session can save as it goes. Findings and design: [agent-disappearance.md](agent-disappearance.md).
   Done when: `docs/` records the ways work gets lost and a recommended design, with
   follow-up stories filed here.
-- [ ] **MUS-45: Pin what `del_by_id` cascades.** From MUS-31, and do this first: the
+- [x] **MUS-45: Pin what `del_by_id` cascades.** From MUS-31, and do this first: the
   cause there is from reading the code. Done when: a test shows whether reaping a
   session leaves its mail live until the next boot, and fails if myko changes that.
 - [ ] **MUS-46: Keep mail to a reaped session.** From MUS-31. Don't just switch to a
@@ -254,7 +255,7 @@ Merged and needing a live run: MUS-36 and MUS-37.
 - [ ] **MUS-52: Show `wake` in the TUI and web UI.** Follow-up to MUS-4, which added it to
   `muster://roster`. Done when: both show each session's wake state, and tell observed
   `waiting` from declared `channel` and `busy`.
-- [ ] **MUS-53: Make the truncation notice name a working address.** Found by `copper-gulch`
+- [x] **MUS-53: Make the truncation notice name a working address.** Found by `copper-gulch`
   on 2026-11-02: a reader following the notice to `muster://messages/<id>` gets a client error
   saying the server doesn't implement resource reads. Done when: the notice names a URI that
   returns the full message, shown on a real truncated message.
