@@ -38,7 +38,7 @@ daemon and the sessions.
 
 ## Licence
 
-Muster's own source code is licensed MIT OR Apache-2.0, at your option. Muster depends on
-myko, myko-server and myko-macros, which declare the AGPL-3.0-or-later licence. Anyone who
-distributes or runs binaries built from it should assess the licence of the combined work.
-This isn't legal advice.
+Muster's own source code is licensed MIT OR Apache-2.0, at your option. This crate
+depends on myko, myko-macros and autosocket, which declare the AGPL-3.0-or-later licence.
+Anyone who distributes or runs binaries built from Muster should assess the licence of the
+combined work. This isn't legal advice.
