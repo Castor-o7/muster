@@ -267,6 +267,18 @@ MUS-37. Merged and waiting for the next daemon restart: MUS-54.
   repairs a row left without a client binding. Done when: a session whose connection drops but
   whose hooks are still active stays reachable, or its client reconnects and re-registers, shown
   by a test that drops the connection, and a message sent in that window reaches it.
+- [ ] **MUS-55: Make a daemon restart one command.** Requested by the operator on 2026-11-03.
+  A restart already disrupts little: in the last three, sessions were back on the roster within
+  about 2 s and no wake misfired. The cost is the operator's and the daemon-holder's time: about
+  20 to 30 minutes of manual steps each rollout (build and e2e, count mail at risk, back up
+  Postgres and the binaries, swap the binary, restart, health checks, a 5-minute watch), with no
+  rollback. Two parts. A rollout command that runs those steps against a named commit on main and
+  rolls back by itself if the daemon doesn't come up healthy. And a graceful stop: on SIGTERM the
+  daemon ends held waits with an empty reply, so waiters re-poll quietly instead of reporting the
+  daemon unreachable. Done when: one command rolls a commit out on the daemon host and reports
+  what it did, a test shows it rolls back a daemon that fails its health check, and a test shows a
+  held wait ends cleanly on SIGTERM. The operator's direct OK is still needed to run it. Related:
+  MUS-15, `scripts/restart-preview.sh`.
 - [ ] **MUS-30: Decide the future of the TypeScript plugins.** The operator decides
   whether to keep, freeze or remove them. Done when: the decision is recorded here,
   and if they're removed, the repository's `package.json` workspace goes with them.
