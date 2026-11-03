@@ -270,6 +270,22 @@ MAIL=$(curl -s -m 5 -X POST "http://127.0.0.1:16256/hook/wait?timeout=1" -d '{"s
 check "and the recipient gets it once" '[[ $(print -r -- "$MAIL" | grep -c "lost reply body") == 1 ]]'
 [[ $OUT == *RETRY-OK* ]] || print -r -- "$OUT"
 
+# A session whose connection drops while it's still waiting stays reachable (MUS-54).
+KEEP=a0000000-0000-4000-8000-0000000000c1
+(sleep 120) | env CLAUDE_CODE_SESSION_ID=$KEEP RUST_LOG=info $BIN/muster-shim >/dev/null 2>$WORK/keep.log &
+KEEP_SHIM=$!
+for i in {1..50}; do grep -q "(re)sending session" $WORK/keep.log 2>/dev/null && break; sleep 0.2; done
+curl -sk -m 110 -H "Authorization: Bearer $TOKEN" -X POST "https://127.0.0.1:16255/hook/wait?timeout=100" -d "{\"session_id\":\"$KEEP\",\"cwd\":\"/tmp/keep\"}" >$WORK/keep-wait.out &
+KEEP_WAIT=$!
+sleep 1
+kill -9 $KEEP_SHIM
+echo "... waiting 70s for the sweeper's reconnect grace"
+sleep 70
+check "a waiting session isn't reaped when its connection drops" '[[ $(ROSTER) == *$KEEP* ]]'
+T $BIN/muster-shim tell $KEEP kept and reachable >/dev/null 2>&1
+wait $KEEP_WAIT
+check "and a message sent after the drop reaches its held wait" 'grep -q "kept and reachable" $WORK/keep-wait.out'
+
 # A hook port that can't bind stops the daemon, rather than leaving hooks dead.
 env MUSTER_STATE_DIR=$WORK/state2 MUSTER_BIND=127.0.0.1:16355 MUSTER_INTERNAL_BIND=127.0.0.1:16357 RUST_LOG=error perl -e 'alarm 10; exec @ARGV' $BIN/muster-daemon >$WORK/bind.log 2>&1; RC=$?
 check "a failed hook bind stops the daemon and says why" '[[ $RC != 0 && $RC != 142 ]] && grep -q "hook listener on 127.0.0.1:16256" $WORK/bind.log'
