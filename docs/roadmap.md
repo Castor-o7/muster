@@ -14,12 +14,12 @@ evidence from a real run by the person or team named.
 
 ## Status
 
-2026-11-03: 12 of 51 stories ticked, about 24%, not counting the 3 moved to Rally. Live on
+2026-11-03: 14 of 51 stories ticked, about 27%, not counting the 3 moved to Rally. Live on
 Murph since 2026-11-03: `c3dbd45`, which includes MUS-4, MUS-5, MUS-6, MUS-29, MUS-33,
 MUS-34, MUS-35, MUS-40, MUS-44, MUS-50 and MUS-53. Sessions pick up a rebuilt shim when they
 restart, and no keyed send (MUS-29) has been seen live yet. Merged, live and not yet
-verified: MUS-4, MUS-34, MUS-35, MUS-44 and MUS-50. Merged and needing a live run:
-MUS-36 and MUS-37.
+verified: MUS-4, MUS-34, MUS-35 and MUS-50. Merged and needing a live run: MUS-36 and
+MUS-37. Merged and waiting for the next daemon restart: MUS-54.
 
 ## Decisions
 
@@ -109,13 +109,13 @@ MUS-36 and MUS-37.
   receives its predecessor's unread mail, shown by a test.
 - [ ] **MUS-48: Tell a sender about mail unread at reap.** From MUS-31. Done when: a
   sender can see that a message went unread when its recipient was reaped.
-- [ ] **MUS-49: Report what a restart will remove.** From MUS-31: one restart is now
+- [x] **MUS-49: Report what a restart will remove.** From MUS-31: one restart is now
   due to remove 422 messages. Done when: the operator can see the count before
   approving a restart.
 - [ ] **MUS-26: Keep `current_task` fresh.** It can go stale: one session showed
   `feature/comments` while on `feature/search`. Done when: the roster's task
   follows the branch, unless a session has set its own text.
-- [ ] **MUS-44: Let other programs read the observed roster.** The Muster half of what
+- [x] **MUS-44: Let other programs read the observed roster.** The Muster half of what
   MUS-32 proposed, and what Rally needs to detect a stall. Sessions' observed facts (alive,
   can be woken, last activity, and how fresh each is) are readable by a local program
   without acting as a session, and declared text such as `current_task` is labelled as
