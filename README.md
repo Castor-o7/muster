@@ -20,8 +20,9 @@ get on with something else.
   supported through the same shim, and Pi, opencode and Prime Agent have plugins inherited
   from Marshal that aren't being actively developed.
 
-Muster is in alpha and runs daily across macOS and Linux. Read the
-[security model](#security-model) before pairing a machine.
+Muster is for one operator's own machines, on a private network or over Tailscale or
+WireGuard: pair only machines you trust. [SECURITY.md](SECURITY.md) describes its security
+model.
 
 See the [roadmap](docs/roadmap.md) for where this is heading and
 [the board](docs/board.md) for how the teams work together. Muster carries the messages and
@@ -156,8 +157,6 @@ claude mcp add -s user muster muster-shim
 Muster delivers direct messages through Claude Code **hooks**; no launch flag is needed. The plugin's `hooks/hooks.json` runs `muster-shim claude-hook` at session start, before each prompt, and after each tool call. Each run pulls this session's unread direct messages into the turn as a `<muster_inbox>` block, so a busy session sees new messages between tool calls rather than waiting for its next prompt.
 
 An idle session wakes by itself, even if nobody has typed to it yet. `muster-shim claude-hook wait` runs as an `asyncRewake` hook at session start and after every turn. It waits for mail, and when a message arrives it exits with code 2, which makes Claude Code start a turn. It uses no model turns while waiting, and it exits when its session does.
-
-The wake hook relies on Claude Code's `asyncRewake` hooks, including at session start, so check idle wake after upgrading Claude Code.
 
 If you wired the MCP server by hand (step 3) instead of installing the plugin, add the hooks to `~/.claude/settings.json` yourself:
 
@@ -421,18 +420,6 @@ Automatic body previews are bounded (2,000 characters per message and an
 available through `muster://messages`. Codex wakes coalesce for 30 seconds so
 a burst can join the active turn.
 
-## Security model
-
-Muster coordinates agents on machines you own: one operator, on a private network or a VPN such as Tailscale or WireGuard. It isn't meant to be exposed to the open internet.
-
-- **Pairing.** Each machine pairs with a code from `muster-daemon pair`, then reaches the daemon over TLS with the daemon's certificate pinned and a token of its own. `muster-daemon unpair` revokes the token and closes that machine's connections within seconds.
-- **The daemon's host.** Sessions on the daemon's own machine connect over loopback without a token, so that machine should be one only you use.
-- **Session binding.** The daemon ties each session to the machine that registered it, so one paired machine can't read, clear or send as another machine's session. See [docs/session-binding.md](docs/session-binding.md).
-- **Shared roster.** Every paired machine can see the roster, including each session's operator identity, machine and working directory.
-- **Messages aren't approvals.** A message shows which session sent it, not which person, so agents treat a peer's message as information. Anything that needs the operator, such as a restart, needs the operator's own word.
-
-To report a vulnerability, see [SECURITY.md](SECURITY.md).
-
 ## Architecture
 
 ```
@@ -481,6 +468,12 @@ it to a LAN or mesh address, or `0.0.0.0:6255`, to accept other machines.
 | [`muster-opencode`](plugins/muster-opencode/) | opencode native plugin. |
 
 Muster has no release pipeline or published packages yet; install from the repository (see Install). CI (`.github/workflows/ci.yml`) runs fmt, clippy, the tests and `scripts/test-gate-e2e.sh` on every push and pull request to `main`.
+
+## Status
+
+Muster runs day to day between a macOS and a Linux machine, with the daemon on the Linux
+one. Next on the [roadmap](docs/roadmap.md): an overnight idle wake (MUS-1), an install on a
+clean machine, and Windows beyond a cross-compile.
 
 ## License
 
