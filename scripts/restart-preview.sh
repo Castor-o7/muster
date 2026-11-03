@@ -33,6 +33,8 @@ gone_messages as (
     and m.item->>'toSessionId' is not null and not exists
       (select 1 from live s where s.item_type = 'Session' and s.item_id = m.item->>'toSessionId')
     and m.item_id not in (select item_id from gone_messages)
+    -- Older mail is pruned by the 14-day sweep instead, so it isn't kept.
+    and (m.item->>'sentAt')::bigint >= (extract(epoch from now()) * 1000)::bigint - 14 * 86400000
 ), reads as (
   select item->>'messageId' as message_id, item->>'sessionId' as session_id
   from live where item_type = 'MessageRead'
