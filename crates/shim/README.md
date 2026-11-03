@@ -15,8 +15,12 @@ sets up Codex on the daemon's own host (`muster-shim codex-setup`).
 **What the shim shares.** The shim puts each session on a roster that every paired machine
 can read, with its operator identity: your Claude account email, or failing that the
 workspace's git `user.email`, then your login name. Set `MUSTER_OPERATOR` to use a
-different identity. The roster also shows the session's host, working directory, git
-branch and status.
+different identity. On a paired machine, the daemon's `MUSTER_OPERATOR`, if set, decides
+the operator shown instead. The roster also shows the session's title (the name you gave
+it in Claude Code, which can reveal what you're working on), process id, host name, OS and
+architecture, working directory, project, git branch, status, activity (busy, idle or
+shell), kind (interactive or background), and the name of its last MCP tool call and when
+it ran (names only, never arguments).
 
 ## Install
 
