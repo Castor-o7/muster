@@ -4,10 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Stdio MCP shim that bridges Claude Code sessions to the muster coordination daemon."
+description = "Stdio MCP server and hook command that connects Claude Code sessions to the Muster coordination daemon. Early alpha."
 repository = "https://github.com/Castor-o7/muster"
-keywords = ["muster", "agent", "mcp", "claude", "myko"]
-categories = ["network-programming", "command-line-utilities"]
+keywords = ["mcp", "claude-code", "agents", "messaging", "coordination"]
+categories = ["network-programming", "command-line-utilities", "development-tools"]
+readme = "README.md"
 # claude_hook.rs reads the plugin's hooks.json from outside the crate, so it
 # runs in the workspace only and stays out of the published package.
 exclude = ["tests/claude_hook.rs"]

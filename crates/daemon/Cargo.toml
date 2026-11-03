@@ -4,10 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Coordination daemon for the muster multi-agent service. Owns the live roster and routes messages between Claude Code sessions."
+description = "Muster coordination daemon: keeps the roster of coding-agent sessions and routes messages between them, with a TLS gate for paired machines. Early alpha."
 repository = "https://github.com/Castor-o7/muster"
-keywords = ["muster", "agent", "coordination", "myko", "daemon"]
+keywords = ["agents", "coordination", "messaging", "daemon", "claude-code"]
 categories = ["network-programming", "command-line-utilities"]
+readme = "README.md"
 
 [lib]
 name = "daemon"

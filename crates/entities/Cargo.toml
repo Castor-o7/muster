@@ -4,10 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Shared entity types and server-handled commands for the muster multi-agent coordination service."
+description = "Shared entity types and commands for Muster, a coordination service that lets coding-agent sessions message each other. Early alpha; used by the other muster crates."
 repository = "https://github.com/Castor-o7/muster"
-keywords = ["muster", "agent", "coordination", "myko"]
+keywords = ["agents", "coordination", "messaging", "myko"]
 categories = ["network-programming"]
+readme = "README.md"
 
 [package.metadata.flux]
 # Published as a transitive dep of muster-daemon/shim/tui. Cargo
