@@ -7,10 +7,8 @@ Connects this Claude Code session to the [muster](https://github.com/Castor-o7/m
 This plugin assumes the `muster-shim` and `muster-daemon` binaries are already on your `PATH`. Install them once with:
 
 ```bash
-cargo install --locked muster-shim muster-daemon
+cargo install --git https://github.com/Castor-o7/muster muster-shim muster-daemon
 ```
-
-Or build from the repository with `cargo install --git https://github.com/Castor-o7/muster muster-shim muster-daemon`.
 
 Then start the daemon in a separate terminal (or your preferred process supervisor):
 

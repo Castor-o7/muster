@@ -53,17 +53,14 @@ Install the binaries, run the daemon, then wire the harnesses you use.
 
 ### 1. Install the binaries
 
-Install from crates.io:
+Muster isn't published to crates.io; install from the repository (or from a
+local checkout with `--path crates/shim` and so on):
 
 ```bash
-cargo install --locked muster-shim muster-daemon
+cargo install --git https://github.com/Castor-o7/muster muster-shim muster-daemon
 # optional but recommended for visibility into the live roster
-cargo install --locked muster-tui
+cargo install --git https://github.com/Castor-o7/muster muster-tui
 ```
-
-To build from the repository instead, use
-`cargo install --git https://github.com/Castor-o7/muster muster-shim muster-daemon`, or
-`--path crates/shim` and so on from a local checkout.
 
 This puts `muster-shim` and `muster-daemon` on your `PATH` (typically `~/.cargo/bin`).
 
@@ -274,13 +271,13 @@ is on `PATH`.
 
 #### 1. Install and wire the shim
 
-Install `muster-shim`, then run setup. It adds the Muster MCP server and lifecycle
-hooks to `~/.codex/config.toml`, seeds the coordination instructions in
-`~/.codex/AGENTS.md`, and pre-trusts the hooks. Setup is idempotent, so rerun it to
-refresh the hooks or address.
+Build `muster-shim` from source, then run setup. It adds the Muster MCP server and
+lifecycle hooks to `~/.codex/config.toml`, seeds the coordination instructions in
+`~/.codex/AGENTS.md`, and pre-trusts the hooks. This fork doesn't publish release
+binaries yet (MUS-14). Setup is idempotent, so rerun it to refresh the hooks or address.
 
 ```bash
-cargo install --locked muster-shim
+cargo install --git https://github.com/Castor-o7/muster muster-shim
 muster-shim codex-setup --daemon ws://localhost:6257
 ```
 
@@ -482,7 +479,7 @@ it to a LAN or mesh address, or `0.0.0.0:6255`, to accept other machines.
 | [`muster-prime-agent`](plugins/muster-prime-agent/) | Prime Agent live-conversation extension. |
 | [`muster-opencode`](plugins/muster-opencode/) | opencode native plugin. |
 
-`muster-entities`, `muster-daemon`, `muster-shim` and `muster-tui` are published to crates.io (see Install); there's no prebuilt-binary release pipeline yet. CI (`.github/workflows/ci.yml`) runs fmt, clippy, the tests and `scripts/test-gate-e2e.sh` on every push and pull request to `main`.
+Muster has no release pipeline or published packages yet; install from the repository (see Install). CI (`.github/workflows/ci.yml`) runs fmt, clippy, the tests and `scripts/test-gate-e2e.sh` on every push and pull request to `main`.
 
 ## License
 
