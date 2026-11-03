@@ -7,6 +7,7 @@ description = "Leptos-based operator dashboard for the muster coordination daemo
 repository = "https://github.com/Castor-o7/muster"
 keywords = ["muster", "agent", "leptos", "wasm", "myko"]
 categories = ["wasm", "web-programming"]
+publish = false
 
 [lib]
 name = "muster_ui"
