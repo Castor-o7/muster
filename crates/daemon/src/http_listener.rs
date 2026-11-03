@@ -239,6 +239,8 @@ async fn handle_wait(
     let restarting = format!("{RESTARTING_HEADER}: 1\r\n");
     loop {
         if *stopping.borrow() {
+            // No end_wait here: the daemon is about to exit, and WakeWatcher
+            // records aren't persisted (#43), so the record goes with it.
             return write_response_with(&mut stream, 200, &restarting, "").await;
         }
         hooks::mark_waiting_now(&cmd_ctx, &sid);
