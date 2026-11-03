@@ -14,11 +14,11 @@ evidence from a real run by the person or team named.
 
 ## Status
 
-2026-11-03: 11 of 51 stories ticked, about 22%, not counting the 3 moved to Rally. Live on
+2026-11-03: 12 of 51 stories ticked, about 24%, not counting the 3 moved to Rally. Live on
 Murph since 2026-11-03: `c3dbd45`, which includes MUS-4, MUS-5, MUS-6, MUS-29, MUS-33,
 MUS-34, MUS-35, MUS-40, MUS-44, MUS-50 and MUS-53. Sessions pick up a rebuilt shim when they
 restart, and no keyed send (MUS-29) has been seen live yet. Merged, live and not yet
-verified: MUS-4, MUS-34, MUS-35, MUS-44, MUS-50 and MUS-53. Merged and needing a live run:
+verified: MUS-4, MUS-34, MUS-35, MUS-44 and MUS-50. Merged and needing a live run:
 MUS-36 and MUS-37.
 
 ## Decisions
@@ -255,7 +255,7 @@ MUS-36 and MUS-37.
 - [ ] **MUS-52: Show `wake` in the TUI and web UI.** Follow-up to MUS-4, which added it to
   `muster://roster`. Done when: both show each session's wake state, and tell observed
   `waiting` from declared `channel` and `busy`.
-- [ ] **MUS-53: Make the truncation notice name a working address.** Found by `copper-gulch`
+- [x] **MUS-53: Make the truncation notice name a working address.** Found by `copper-gulch`
   on 2026-11-02: a reader following the notice to `muster://messages/<id>` gets a client error
   saying the server doesn't implement resource reads. Done when: the notice names a URI that
   returns the full message, shown on a real truncated message.
