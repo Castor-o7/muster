@@ -66,6 +66,8 @@ muster-daemon &
 # or under your favorite supervisor (systemd user unit, launchd, tmux pane, ...)
 ```
 
+To stop it, send SIGTERM (what `systemctl stop` and `restart` do) or press Ctrl-C. Held waits end with an empty reply marked as a restart, so each session's waiter backs off quietly and reconnects when the daemon is back.
+
 Before restarting a daemon that uses Postgres, run `scripts/restart-preview.sh` (it reads
 `MYKO_POSTGRES_URL`). A restart removes mail to sessions reaped since the last one, and the
 script lists it by recipient, read and unread, without changing anything.

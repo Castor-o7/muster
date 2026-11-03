@@ -100,8 +100,29 @@ fn http_post(addr: SocketAddr, target: &str, body: &str) -> String {
         .to_string()
 }
 
+/// The whole response, status line and headers included.
+fn http_post_raw(addr: SocketAddr, target: &str, body: &str) -> String {
+    let mut s = TcpStream::connect(addr).expect("connect hook listener");
+    s.write_all(request(target, body).as_bytes())
+        .expect("write request");
+    let mut resp = String::new();
+    s.read_to_string(&mut resp).expect("read response");
+    resp
+}
+
 /// Bring up a daemon context with the real hook listener and a seeded sender.
 fn start() -> (MykoServerContext, SocketAddr) {
+    let (ctx, addr, stop) = start_stoppable();
+    // Never stopped: leak the sender so the listener keeps running.
+    Box::leak(Box::new(stop));
+    (ctx, addr)
+}
+
+fn start_stoppable() -> (
+    MykoServerContext,
+    SocketAddr,
+    tokio::sync::watch::Sender<bool>,
+) {
     muster_entities::link();
     daemon::link();
     let blackhole: Arc<dyn Persister> = Arc::new(BlackholePersister);
@@ -115,13 +136,15 @@ fn start() -> (MykoServerContext, SocketAddr) {
 
     let addr: SocketAddr = format!("127.0.0.1:{}", pick_free_port()).parse().unwrap();
     let listener_ctx = ctx.clone();
+    let (stop, stop_rx) = tokio::sync::watch::channel(false);
     thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .expect("rt");
         rt.block_on(async move {
-            let _ = daemon::http_listener::run(addr, Arc::new(listener_ctx)).await;
+            let _ =
+                daemon::http_listener::run_until(addr, Arc::new(listener_ctx), None, stop_rx).await;
         });
     });
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -131,7 +154,7 @@ fn start() -> (MykoServerContext, SocketAddr) {
     }
     // Register the recipient so sends to it are routable.
     http_post(addr, "/hook/session-register?harness=claude", RECIPIENT);
-    (ctx, addr)
+    (ctx, addr, stop)
 }
 
 #[test]
@@ -248,6 +271,35 @@ fn an_old_waiter_dropping_does_not_hide_the_new_one() {
     // Past the old waiter's removal and one of the new waiter's inbox checks.
     thread::sleep(Duration::from_millis(1200));
     assert!(watching(&ctx), "the new waiter is still reported");
+}
+
+#[test]
+fn a_stopping_daemon_ends_held_waits_cleanly() {
+    let (_ctx, addr, stop) = start_stoppable();
+    let held = thread::spawn(move || {
+        let started = Instant::now();
+        let response = http_post_raw(addr, "/hook/wait?timeout=30", RECIPIENT);
+        (response, started.elapsed())
+    });
+    thread::sleep(Duration::from_millis(300));
+    stop.send(true).unwrap();
+    let (response, took) = held.join().unwrap();
+    assert!(
+        took < Duration::from_secs(5),
+        "the wait ended promptly, not at its timeout"
+    );
+    assert!(response.starts_with("HTTP/1.1 200"), "{response:?}");
+    assert!(response.contains("X-Muster-Restarting: 1"), "{response:?}");
+    assert!(
+        response.ends_with("\r\n\r\n"),
+        "with an empty body: {response:?}"
+    );
+
+    // A wait that starts while the daemon is stopping is answered at once.
+    let started = Instant::now();
+    let late = http_post_raw(addr, "/hook/wait?timeout=30", RECIPIENT);
+    assert!(started.elapsed() < Duration::from_secs(2));
+    assert!(late.contains("X-Muster-Restarting: 1"), "{late:?}");
 }
 
 #[test]

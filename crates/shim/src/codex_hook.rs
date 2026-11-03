@@ -243,6 +243,9 @@ fn wait_for_mail(
     // Report only a change of cause: stdout would wake the session, and
     // repeating it every retry would just bury the Monitor's output file.
     let mut failing = None;
+    // After the daemon says it's stopping, stay quiet about it being unreachable
+    // until this deadline, since that's expected while it restarts.
+    let mut restart_quiet_until: Option<std::time::Instant> = None;
     let parent = parent_pid();
     loop {
         if parent_pid() != parent {
@@ -258,6 +261,11 @@ fn wait_for_mail(
             Ok(reply) => {
                 failing = None;
                 clear_refusal(session_id);
+                if reply.restarting {
+                    restart_quiet_until = Some(std::time::Instant::now() + RESTART_QUIET);
+                    std::thread::sleep(RESTART_BACKOFF);
+                    continue;
+                }
                 let resp = reply.body.trim_end_matches(['\n', '\r', ' ']);
                 if !resp.is_empty() {
                     // The session closed during the poll: leave the mail unacked,
@@ -304,7 +312,9 @@ fn wait_for_mail(
                 if once && failure.is_refusal() {
                     return false;
                 }
-                if failing != Some(failure) && !once {
+                let restarting =
+                    restart_quiet_until.is_some_and(|until| std::time::Instant::now() < until);
+                if failing != Some(failure) && !once && !restarting {
                     eprintln!("muster-shim watch: {failure}; retrying");
                     failing = Some(failure);
                 }
@@ -363,6 +373,10 @@ fn parent_pid() -> Option<u32> {
 const WATCH_WAIT: Duration = Duration::from_secs(240);
 const ONCE_WAIT: Duration = Duration::from_secs(30);
 const WATCH_RETRY: Duration = Duration::from_secs(5);
+/// How long to pause after the daemon ends a wait because it's stopping, and
+/// how long its being unreachable goes unreported afterwards.
+const RESTART_BACKOFF: Duration = Duration::from_secs(2);
+const RESTART_QUIET: Duration = Duration::from_secs(30);
 const ACK_TIMEOUT: Duration = Duration::from_secs(10);
 const LOCK_RETRY: Duration = Duration::from_secs(1);
 

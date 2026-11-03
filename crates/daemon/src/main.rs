@@ -198,10 +198,12 @@ async fn run_daemon() -> Result<()> {
     // Spawn muster's own plain-HTTP listener for the Claude Code `/hook/*`
     // endpoints. Shares the server ctx (same registry + event log); stock
     // myko's MCP listener is left untouched on its own port.
+    // Set on SIGTERM or Ctrl-C, so held waits end cleanly before the daemon exits.
+    let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
     let hooks = {
         let hook_ctx = Arc::new(server.ctx());
         let bindings_dir = Arc::new(state_dir.clone());
-        daemon::http_listener::run_bound(hook_bind, hook_ctx, Some(bindings_dir))
+        daemon::http_listener::run_until(hook_bind, hook_ctx, Some(bindings_dir), stop_rx)
     };
 
     log::info!(
@@ -220,8 +222,41 @@ async fn run_daemon() -> Result<()> {
         r = server.run() => r.map_err(|e| anyhow::anyhow!(e))?,
         r = gate => exit_listener_stopped(&format!("gate on {gate_bind}"), r),
         r = hooks => exit_listener_stopped(&format!("hook listener on {hook_bind}"), r),
+        signal = stop_signal() => {
+            log::info!("muster-daemon: {signal}; ending held waits, then stopping");
+            let _ = stop_tx.send(true);
+            // Long enough for each held wait to write its reply through the gate.
+            tokio::time::sleep(STOP_DRAIN).await;
+        }
     }
     Ok(())
+}
+
+/// How long a stopping daemon gives held waits to write their replies.
+const STOP_DRAIN: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// Waits for SIGTERM, which systemd sends on stop and restart, or Ctrl-C.
+async fn stop_signal() -> &'static str {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        match signal(SignalKind::terminate()) {
+            Ok(mut term) => tokio::select! {
+                _ = term.recv() => "SIGTERM",
+                _ = tokio::signal::ctrl_c() => "Ctrl-C",
+            },
+            Err(e) => {
+                log::warn!("muster-daemon: can't watch for SIGTERM: {e}");
+                let _ = tokio::signal::ctrl_c().await;
+                "Ctrl-C"
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+        "Ctrl-C"
+    }
 }
 
 /// Exit directly, so the cause is printed at once whatever myko's tasks are doing.
