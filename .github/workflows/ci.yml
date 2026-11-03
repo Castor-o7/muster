@@ -23,6 +23,20 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
+      # Each published crate ships its own copy of the licences; they must
+      # match the root files exactly.
+      - name: Crate licence copies match the root
+        run: |
+          status=0
+          for crate in entities daemon shim tui; do
+            for f in LICENSE-MIT LICENSE-APACHE; do
+              if ! cmp -s "$f" "crates/$crate/$f"; then
+                echo "::error file=crates/$crate/$f::differs from the root $f (or is missing)"
+                status=1
+              fi
+            done
+          done
+          exit $status
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
