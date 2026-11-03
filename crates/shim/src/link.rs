@@ -357,6 +357,19 @@ mod tests {
     use super::*;
     use std::net::{SocketAddr, TcpListener};
 
+    /// A loopback address that refuses connections, held for as long as the
+    /// returned socket lives. It's bound but not listening, so the port can't be
+    /// handed to another test running in parallel, as a dropped listener's can.
+    fn refusing_address() -> (socket2::Socket, SocketAddr) {
+        use socket2::{Domain, Socket, Type};
+        let socket = Socket::new(Domain::IPV4, Type::STREAM, None).unwrap();
+        socket
+            .bind(&SocketAddr::from(([127, 0, 0, 1], 0)).into())
+            .unwrap();
+        let addr = socket.local_addr().unwrap().as_socket().unwrap();
+        (socket, addr)
+    }
+
     #[test]
     fn a_response_says_why_it_failed() {
         assert_eq!(
@@ -379,11 +392,7 @@ mod tests {
 
     #[test]
     fn connect_any_skips_an_address_that_refuses() {
-        // Bind then drop to get a loopback port nothing is listening on.
-        let refused: SocketAddr = {
-            let gone = TcpListener::bind("127.0.0.1:0").unwrap();
-            gone.local_addr().unwrap()
-        };
+        let (_held, refused) = refusing_address();
         let live = TcpListener::bind("127.0.0.1:0").unwrap();
         let live_addr = live.local_addr().unwrap();
 
@@ -394,10 +403,7 @@ mod tests {
 
     #[test]
     fn connect_any_is_none_when_every_address_refuses() {
-        let refused: SocketAddr = {
-            let gone = TcpListener::bind("127.0.0.1:0").unwrap();
-            gone.local_addr().unwrap()
-        };
+        let (_held, refused) = refusing_address();
         assert!(connect_any(&[refused][..], Duration::from_secs(1)).is_none());
     }
 }
