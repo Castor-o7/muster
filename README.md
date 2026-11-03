@@ -20,21 +20,9 @@ get on with something else.
   supported through the same shim, and Pi, opencode and Prime Agent have plugins inherited
   from Marshal that aren't being actively developed.
 
-> [!IMPORTANT]
-> **Muster is young, and you should only pair machines you trust.** It's designed for
-> one operator's own machines on a private network, or over Tailscale or WireGuard, not
-> the open internet. A paired machine can no longer read, clear or send as another machine's
-> session, in tests, but the check is a filter over myko's parser, it hasn't been attacked on
-> a live daemon, and the roster stays readable by every paired machine (see
-> [docs/session-binding.md](docs/session-binding.md)). A message's sender also can't prove a
-> human wrote it, so don't treat one as approval. The wake hook also relies on
-> `asyncRewake` working before a session's first prompt, which Claude Code doesn't document,
-> so check it after upgrades.
-
-**Status (2026-11-02): early alpha, best guess.** Running day to day between two machines,
-one macOS and one Linux. An overnight idle wake isn't proved yet (MUS-1), and it hasn't been
-installed on a clean machine, or run on Windows beyond a cross-compile. 10 of 46 roadmap
-stories are verified, about 22%.
+Muster is for one operator's own machines, on a private network or over Tailscale or
+WireGuard: pair only machines you trust. [SECURITY.md](SECURITY.md) describes its security
+model.
 
 See the [roadmap](docs/roadmap.md) for where this is heading and
 [the board](docs/board.md) for how the teams work together. Muster carries the messages and
@@ -480,6 +468,14 @@ it to a LAN or mesh address, or `0.0.0.0:6255`, to accept other machines.
 | [`muster-opencode`](plugins/muster-opencode/) | opencode native plugin. |
 
 Muster has no release pipeline or published packages yet; install from the repository (see Install). CI (`.github/workflows/ci.yml`) runs fmt, clippy, the tests and `scripts/test-gate-e2e.sh` on every push and pull request to `main`.
+
+## Status
+
+Muster runs day to day between a macOS and a Linux machine, with the daemon on the Linux
+one. Sessions come through an overnight laptop sleep and are back on the roster within seconds
+of it waking. Next on the [roadmap](docs/roadmap.md): a message waking a session that has been
+idle overnight (MUS-1), a session's client reconnecting after its connection drops, an install
+on a clean machine, and Windows beyond a cross-compile.
 
 ## License
 
