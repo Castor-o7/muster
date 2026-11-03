@@ -17,8 +17,8 @@ cause directly (MUS-45).
 | What | When it leaves live state | Recoverable? |
 | --- | --- | --- |
 | The session row | At reap, by `sweep_once` | Event log |
-| Direct mail to that session | At the next daemon start | Event log, backups |
-| Read records for that mail | At the next daemon start | Event log, backups |
+| Direct mail to that session | Kept until the 14-day sweep, since MUS-46. Before, at the next daemon start, or at once on a clean SessionEnd | Live |
+| Read records for that mail | Kept with their message, since MUS-46 | Live |
 | Room memberships of that session | At the next daemon start (seen in the log; cause not traced per row) | Event log, backups |
 | Messages over 14 days old | Swept while running, at boot and about every 5 minutes | Event log, backups |
 | Mail the session sent | Stays while its recipient lives | Live |

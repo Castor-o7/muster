@@ -67,11 +67,10 @@ pub const PULL_STALE_AFTER: Duration = Duration::from_secs(24 * 60 * 60);
 pub const KEPT_STALE_AFTER: Duration = Duration::from_secs(10 * 60);
 
 /// Messages older than this are pruned by `sweep_messages`, regardless of
-/// recipient. Direct messages to a reaped session go at the next boot, as
-/// orphans, because `del_by_id` doesn't cascade (MUS-31); this bounds the ones
-/// that DON'T — broadcasts addressed to the never-DEL'd `everyone`/`op:`/
-/// `project:` rooms, which otherwise accumulate forever (review R6/D). Their
-/// `MessageRead` rows also wait for the next boot.
+/// recipient. It's what bounds direct mail to a reaped session, which no longer
+/// cascades on its recipient and so survives a restart (MUS-46), and broadcasts
+/// to the never-DEL'd `everyone`/`op:`/`project:` rooms (review R6/D). A pruned
+/// message's `MessageRead` rows go at the next boot.
 pub const MESSAGE_TTL: Duration = Duration::from_secs(14 * 24 * 60 * 60);
 
 /// Run the message-retention sweep every N session-sweeper ticks. The scan is
@@ -164,11 +163,11 @@ fn sweep_wake_watchers(ctx: &MykoServerContext) {
     }
 }
 
-/// Prune messages older than `MESSAGE_TTL`. Bounds the never-cascaded
-/// broadcasts (to `everyone`/`op:`/`project:`, which are never DEL'd) that
-/// would otherwise grow the store without limit. Read-state goes at the next
-/// boot: `del_by_id` doesn't cascade, so `MessageRead` rows wait for orphan
-/// cleanup (MUS-31).
+/// Prune messages older than `MESSAGE_TTL`. Bounds direct mail to reaped
+/// sessions (MUS-46) and broadcasts to rooms that are never DEL'd, which would
+/// otherwise grow the store without limit. Read-state goes at the next boot:
+/// `del_by_id` doesn't cascade, so `MessageRead` rows wait for orphan cleanup
+/// on `belongs_to(Message)` (MUS-31).
 fn sweep_messages(ctx: &MykoServerContext) {
     let Some(store) = ctx.registry.get(Message::ENTITY_NAME_STATIC) else {
         return;
@@ -879,6 +878,105 @@ mod tests {
         assert!(message_ids(&ctx).contains("sent-in-the-window"));
     }
 
+    fn booted_server() -> (&'static MykoServer, MykoServerContext) {
+        muster_entities::link();
+        crate::link();
+        let blackhole: Arc<dyn Persister> = Arc::new(BlackholePersister);
+        let server: &'static MykoServer = Box::leak(Box::new(
+            MykoServer::builder()
+                .with_default_persister(blackhole)
+                .build(),
+        ));
+        let ctx = server.ctx();
+        set_client(&ctx, "ws-client");
+        (server, ctx)
+    }
+
+    fn set_read(ctx: &MykoServerContext, message: &str, session: &str) {
+        let read = muster_entities::MessageRead {
+            id: muster_entities::MessageReadId(Arc::from(
+                muster_entities::MessageRead::make_id(message, session).as_str(),
+            )),
+            message_id: MessageId(Arc::from(message)),
+            session_id: SessionId(Arc::from(session)),
+            read_at: Utc::now().timestamp_millis(),
+        };
+        let ev = MEvent::from_item(&read, MEventType::SET, &Uuid::new_v4().to_string());
+        ctx.apply_event_batch(vec![ev])
+            .expect("apply MessageRead SET");
+    }
+
+    fn read_ids(ctx: &MykoServerContext) -> HashSet<String> {
+        ctx.registry
+            .get(muster_entities::MessageRead::ENTITY_NAME_STATIC)
+            .map(|s| {
+                s.entries()
+                    .materialize()
+                    .get()
+                    .into_iter()
+                    .map(|(id, _)| id.to_string())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn a_restart_after_a_reap_keeps_mail_under_fourteen_days() {
+        let (server, ctx) = booted_server();
+        let now = Utc::now().timestamp_millis();
+        let stale = now - PULL_STALE_AFTER.as_millis() as i64 - 60_000;
+        let almost_expired = now - MESSAGE_TTL.as_millis() as i64 + 3_600_000;
+        set_hook_session(&ctx, "recipient", stale);
+        set_message(&ctx, "fresh", now - 1_000);
+        set_message(&ctx, "nearly-two-weeks", almost_expired);
+        set_message(
+            &ctx,
+            "expired",
+            now - MESSAGE_TTL.as_millis() as i64 - 60_000,
+        );
+
+        sweep_once(&ctx, &mut SweepState::default());
+        assert!(
+            !session_ids(&ctx).contains("recipient"),
+            "the session was reaped"
+        );
+        server.establish_relations();
+        sweep_messages(&ctx);
+
+        let ids = message_ids(&ctx);
+        assert!(
+            ids.contains("fresh"),
+            "a restart after a reap keeps mail (MUS-46)"
+        );
+        assert!(
+            ids.contains("nearly-two-weeks"),
+            "anything under 14 days old"
+        );
+        assert!(!ids.contains("expired"), "the 14-day sweep still bounds it");
+    }
+
+    #[test]
+    fn a_session_returning_under_its_old_id_keeps_its_read_mail_read() {
+        let (server, ctx) = booted_server();
+        let now = Utc::now().timestamp_millis();
+        let stale = now - PULL_STALE_AFTER.as_millis() as i64 - 60_000;
+        set_hook_session(&ctx, "recipient", stale);
+        set_message(&ctx, "already-read", now - 1_000);
+        set_read(&ctx, "already-read", "recipient");
+
+        sweep_once(&ctx, &mut SweepState::default());
+        server.establish_relations();
+        set_hook_session(&ctx, "recipient", now);
+
+        assert!(
+            read_ids(&ctx).contains(&muster_entities::MessageRead::make_id(
+                "already-read",
+                "recipient"
+            )),
+            "its read record survived the restart, so the mail isn't offered again (MUS-46)"
+        );
+    }
+
     #[test]
     fn a_reaped_sessions_mail_stays_live_until_the_next_boot() {
         muster_entities::link();
@@ -908,9 +1006,11 @@ mod tests {
         // What the daemon runs at boot, after catch-up.
         server.establish_relations();
 
+        // Since MUS-46 a direct message doesn't belong to its recipient, so boot's
+        // orphan cleanup leaves it. This still pins what reaping and boot remove.
         assert!(
-            !message_ids(&ctx).contains("mail"),
-            "orphan cleanup at boot removes mail to a reaped session (MUS-31)"
+            message_ids(&ctx).contains("mail"),
+            "boot keeps mail to a reaped session; only the 14-day sweep removes it (MUS-46)"
         );
     }
 }
