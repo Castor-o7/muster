@@ -162,7 +162,9 @@ async fn run_daemon() -> Result<()> {
         // wait's refreshes shouldn't grow the event table (lv-6731).
         .with_persister_override("WakeWatcher", blackhole.clone())
         .with_persister_override("Session", session_filter.clone())
-        .with_server_info(muster_server_info());
+        .with_server_info(muster_server_info())
+        // Only the gates reach myko (MUS-59); see `gate::myko_request_filter`.
+        .with_request_filter(daemon::gate::myko_request_filter(local_token.clone()));
 
     // Persistence: Postgres via myko when `MYKO_POSTGRES_URL` is set — durable,
     // latest-state-per-entity (no append-forever event log and no full-file
