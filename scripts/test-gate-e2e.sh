@@ -7,17 +7,21 @@ BIN=$(cd "$(dirname "$0")/.." && pwd)/target/debug
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/muster-gate-e2e.XXXX")
 export MUSTER_STATE_DIR=$WORK/state
 export MUSTER_ACK_LEASE_SECS=2
-export MUSTER_BIND=127.0.0.1:16255 MUSTER_HOOK_BIND=127.0.0.1:16256 MUSTER_INTERNAL_BIND=127.0.0.1:16257
+export MUSTER_BIND=127.0.0.1:16255 MUSTER_HOOK_BIND=127.0.0.1:16256 MUSTER_INTERNAL_BIND=127.0.0.1:16257 MUSTER_MYKO_BIND=127.0.0.1:16258
 unset MUSTER_BASE_URL MUSTER_DAEMON_ADDRESS
 T() { perl -e 'alarm 10; exec @ARGV' "$@"; }
 pass=0; fail=0
 check() { if eval "$2"; then echo "PASS  $1"; pass=$((pass+1)); else echo "FAIL  $1"; fail=$((fail+1)); fi; }
 
-RUST_LOG=info $BIN/muster-daemon >$WORK/daemon.log 2>&1 &
+# The daemon writes its local token under its own config dir (MUS-7), so a
+# run here plants nothing in the real one.
+XDG_CONFIG_HOME=$WORK/daemon RUST_LOG=info $BIN/muster-daemon >$WORK/daemon.log 2>&1 &
 DPID=$!
 trap 'kill $DPID 2>/dev/null; wait $DPID 2>/dev/null' EXIT
 for i in {1..50}; do nc -z 127.0.0.1 16255 2>/dev/null && break; sleep 0.2; done
 
+LOCAL_TOKEN=$(<$WORK/daemon/muster/local-token)
+check "local token stored owner-only" '[[ $(python3 -I -c "import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777))" $WORK/daemon/muster/local-token) == 0o600 ]]'
 CODE=$(T $BIN/muster-daemon pair --name e2e 2>/dev/null | awk '{print $3}')
 OTHER=$(T $BIN/muster-daemon pair --name revoked 2>/dev/null | awk '{print $3}')
 export XDG_CONFIG_HOME=$WORK/client
@@ -83,7 +87,16 @@ python3 -I $ATTACK "$ATTACKER" "$EVENT" "$SEND" "$QUERY"
 check "a raw write to another entity is refused" 'grep -q "refused attacker: event on Message" $WORK/daemon.log'
 check "sending as another machine's session is refused" 'grep -q "refused attacker: SendMessage for session a0000000-0000-4000-8000-000000000001" $WORK/daemon.log'
 check "reading all messages is refused" 'grep -q "refused attacker: query GetAllMessages" $WORK/daemon.log'
-curl -s -m 3 -o /dev/null -X POST http://127.0.0.1:16256/hook/session-start -d '{"session_id":"a0000000-0000-4000-8000-000000000002","cwd":"/tmp/demo"}'
+# The daemon's own host: a process without the local token can't act, a browser
+# can't at all, and one with the token claims the session as local (MUS-7).
+LOCAL_HOOK='{"session_id":"a0000000-0000-4000-8000-000000000002","cwd":"/tmp/demo"}'
+check "a local process without the token gets 401" '[[ $(curl -s -m 3 -o /dev/null -w %{http_code} -X POST http://127.0.0.1:16256/hook/session-start -d "$LOCAL_HOOK") == 401 ]]'
+check "a browser origin gets 403 at the hook listener" '[[ $(curl -s -m 3 -o /dev/null -w %{http_code} -H "Origin: https://evil.example" -H "Authorization: Bearer $LOCAL_TOKEN" -X POST http://127.0.0.1:16256/hook/session-start -d "$LOCAL_HOOK") == 403 ]]'
+check "a websocket at the hook listener gets 403" '[[ $(curl -s -m 3 -o /dev/null -w %{http_code} --http1.1 -H "Connection: Upgrade" -H "Upgrade: websocket" -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" "http://127.0.0.1:16256/hook/wait?token=$LOCAL_TOKEN") == 403 ]]'
+check "the local gate refuses a websocket without the token" '[[ $(curl -s -m 3 -o /dev/null -w %{http_code} --http1.1 -H "Connection: Upgrade" -H "Upgrade: websocket" -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" http://127.0.0.1:16257/myko) == 401 ]]'
+check "and one from a browser with the token" '[[ $(curl -s -m 3 -o /dev/null -w %{http_code} --http1.1 -H "Origin: https://evil.example" -H "Connection: Upgrade" -H "Upgrade: websocket" -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" "http://127.0.0.1:16257/myko?token=$LOCAL_TOKEN") == 403 ]]'
+check "but admits a local process with it (101)" '[[ $(curl -s -m 3 -o /dev/null -w %{http_code} --http1.1 -H "Connection: Upgrade" -H "Upgrade: websocket" -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" "http://127.0.0.1:16257/myko?token=$LOCAL_TOKEN") == 101 ]]'
+check "a local process with the token acts" '[[ $(curl -s -m 3 -o /dev/null -w %{http_code} -H "Authorization: Bearer $LOCAL_TOKEN" -X POST http://127.0.0.1:16256/hook/session-start -d "$LOCAL_HOOK") == 200 ]]'
 check "a paired machine can't take a session on the daemon's own host" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_code} -H "Authorization: Bearer $ATTACKER" -X POST "https://127.0.0.1:16255/hook/wait?timeout=1" -d "{\"session_id\":\"a0000000-0000-4000-8000-000000000002\",\"cwd\":\"/tmp/demo\"}") == 403 ]]'
 READAS='{"event":"ws:m:command","data":{"command":{"asSession":"a0000000-0000-4000-8000-000000000001","unread":true},"commandId":"ReadMessages"}}'
 ACKAS='{"event":"ws:m:command","data":{"command":{"asSession":"a0000000-0000-4000-8000-000000000001","messageIds":["m1"]},"commandId":"AckMessages"}}'
@@ -260,13 +273,14 @@ if key:
     print("RETRY-OK" if "message_id" in second else "RETRY-FAILED: " + second[:300])
 p.kill()
 PY
-curl -s -m 3 -o /dev/null -X POST http://127.0.0.1:16256/hook/session-start -d '{"session_id":"a0000000-0000-4000-8000-00000000000b","cwd":"/tmp/lost"}'
-mkdir -p $WORK/lost-home
+curl -s -m 3 -o /dev/null -H "Authorization: Bearer $LOCAL_TOKEN" -X POST http://127.0.0.1:16256/hook/session-start -d '{"session_id":"a0000000-0000-4000-8000-00000000000b","cwd":"/tmp/lost"}'
+# An unpaired shim on the daemon's host reads the local token from its config dir (MUS-7).
+mkdir -p $WORK/lost-home/muster && cp $WORK/daemon/muster/local-token $WORK/lost-home/muster/
 OUT=$(perl -e 'alarm 60; exec @ARGV' python3 -I $LOST $BIN/muster-shim $WORK/lost-home 2>&1)
 check "a dropped reply times out and gives a retry key" '[[ $OUT == *TIMEOUT* && $OUT != *NO-TIMEOUT* ]]'
 check "and the retry with that key succeeds" '[[ $OUT == *RETRY-OK* ]]'
 sleep 3
-MAIL=$(curl -s -m 5 -X POST "http://127.0.0.1:16256/hook/wait?timeout=1" -d '{"session_id":"a0000000-0000-4000-8000-00000000000b","cwd":"/tmp/lost"}')
+MAIL=$(curl -s -m 5 -H "Authorization: Bearer $LOCAL_TOKEN" -X POST "http://127.0.0.1:16256/hook/wait?timeout=1" -d '{"session_id":"a0000000-0000-4000-8000-00000000000b","cwd":"/tmp/lost"}')
 check "and the recipient gets it once" '[[ $(print -r -- "$MAIL" | grep -c "lost reply body") == 1 ]]'
 [[ $OUT == *RETRY-OK* ]] || print -r -- "$OUT"
 
@@ -287,10 +301,10 @@ wait $KEEP_WAIT
 check "and a message sent after the drop reaches its held wait" 'grep -q "kept and reachable" $WORK/keep-wait.out'
 
 # SIGTERM ends a held wait with an empty reply marked as a restart, then exits cleanly (MUS-55).
-env MUSTER_STATE_DIR=$WORK/state3 MUSTER_BIND=127.0.0.1:16455 MUSTER_HOOK_BIND=127.0.0.1:16456 MUSTER_INTERNAL_BIND=127.0.0.1:16457 RUST_LOG=info $BIN/muster-daemon >$WORK/stop.log 2>&1 &
+env XDG_CONFIG_HOME=$WORK/daemon MUSTER_STATE_DIR=$WORK/state3 MUSTER_BIND=127.0.0.1:16455 MUSTER_HOOK_BIND=127.0.0.1:16456 MUSTER_INTERNAL_BIND=127.0.0.1:16457 MUSTER_MYKO_BIND=127.0.0.1:16458 RUST_LOG=info $BIN/muster-daemon >$WORK/stop.log 2>&1 &
 STOP_PID=$!
 for i in {1..50}; do nc -z 127.0.0.1 16456 2>/dev/null && break; sleep 0.2; done
-curl -s -m 20 -D $WORK/stop-head.txt -o $WORK/stop-body.txt -X POST "http://127.0.0.1:16456/hook/wait?timeout=15" -d '{"session_id":"a0000000-0000-4000-8000-0000000000d1","cwd":"/tmp/stop"}' &
+curl -s -m 20 -D $WORK/stop-head.txt -o $WORK/stop-body.txt -H "Authorization: Bearer $LOCAL_TOKEN" -X POST "http://127.0.0.1:16456/hook/wait?timeout=15" -d '{"session_id":"a0000000-0000-4000-8000-0000000000d1","cwd":"/tmp/stop"}' &
 STOP_WAIT=$!
 sleep 1
 STOP_AT=$SECONDS
@@ -301,7 +315,7 @@ check "SIGTERM ends a held wait promptly, marked as a restart" '(( SECONDS - STO
 check "and the daemon then exits cleanly" '[[ $STOP_RC == 0 ]] && grep -q "SIGTERM; ending held waits" $WORK/stop.log'
 
 # A hook port that can't bind stops the daemon, rather than leaving hooks dead.
-env MUSTER_STATE_DIR=$WORK/state2 MUSTER_BIND=127.0.0.1:16355 MUSTER_INTERNAL_BIND=127.0.0.1:16357 RUST_LOG=error perl -e 'alarm 10; exec @ARGV' $BIN/muster-daemon >$WORK/bind.log 2>&1; RC=$?
+env XDG_CONFIG_HOME=$WORK/daemon MUSTER_STATE_DIR=$WORK/state2 MUSTER_BIND=127.0.0.1:16355 MUSTER_INTERNAL_BIND=127.0.0.1:16357 MUSTER_MYKO_BIND=127.0.0.1:16358 RUST_LOG=error perl -e 'alarm 10; exec @ARGV' $BIN/muster-daemon >$WORK/bind.log 2>&1; RC=$?
 check "a failed hook bind stops the daemon and says why" '[[ $RC != 0 && $RC != 142 ]] && grep -q "hook listener on 127.0.0.1:16256" $WORK/bind.log'
 
 # A pairing whose fingerprint doesn't match: the hook must get nothing.
@@ -314,11 +328,12 @@ check "wrong certificate fingerprint: waiter tells the session" '[[ $RC == 2 && 
 OUT=$(echo $HOOK | T $BIN/muster-shim claude-hook wait 2>&1); RC=$?
 check "and only once" '[[ $RC == 0 && -z $OUT ]]'
 
-# Unpaired, on the daemon's own host: the shim falls back to myko's loopback port.
-mkdir -p $WORK/unpaired
+# Unpaired, on the daemon's own host: the shim reaches the local gate with the local token (MUS-7).
+mkdir -p $WORK/unpaired/muster && cp $WORK/daemon/muster/local-token $WORK/unpaired/muster/
 # HOME too, so a real pairing on the machine running this can't be picked up.
 (sleep 4) | env HOME=$WORK/unpaired XDG_CONFIG_HOME=$WORK/unpaired MUSTER_DAEMON_ADDRESS=ws://127.0.0.1:16257 CLAUDE_CODE_SESSION_ID=e2e-local RUST_LOG=info perl -e "alarm 8; exec @ARGV" $BIN/muster-shim >/dev/null 2>$WORK/local.log
-check "unpaired shim on the daemon host connects to the internal port" 'grep -q "connected to ws://127.0.0.1:16257/myko" $WORK/local.log'
+check "unpaired shim on the daemon host connects through the local gate" 'grep -q "connected to ws://127.0.0.1:16257/myko" $WORK/local.log'
+check "and its log never shows the local token" '! grep -qF "$LOCAL_TOKEN" $WORK/local.log'
 
 echo "--- $pass passed, $fail failed"
 rm -rf "$WORK/client" "$WORK/state"

@@ -196,7 +196,14 @@ fn require_owned(
     let Some(session) = session.as_str() else {
         return Err(Refused(format!("{what} without a session id")));
     };
-    match credentials::claim_machine_session(state_dir, machine, session) {
+    // A paired machine may only bind UUIDs; the daemon's own host (through the
+    // local gate as `(local)`, MUS-7) binds any safe id, as its hooks already do.
+    let claimed = if machine == credentials::LOCAL_MACHINE {
+        credentials::claim_session(state_dir, machine, session)
+    } else {
+        credentials::claim_machine_session(state_dir, machine, session)
+    };
+    match claimed {
         Ok(true) => Ok(()),
         Ok(false) => Err(Refused(format!("{what} for session {session}"))),
         Err(e) => Err(Refused(format!("{what}: can't read session bindings: {e}"))),
