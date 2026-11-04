@@ -124,6 +124,11 @@ also needs a rebuilt shim to be seen), and MUS-55's graceful stop.
   a test shows it can't change anything. Depends on MUS-4.
   `muster-shim roster` does this. `last_activity_at` turned out to be declared, since a shim
   can set it, and `bound_to_connection` can outlast a dropped connection until the row is reaped.
+- [ ] **MUS-58: Drop ended sessions from rooms.** Found by the watchman on 2026-11-04: `everyone`
+  still held room rows for ten sessions that had ended the night before, so the takeover
+  broadcast reached 4 of 14 members, each miss failing as "session vanished from roster
+  mid-broadcast". Done when: a session that leaves the roster leaves its rooms too, a
+  broadcast counts only live members, and a test covers a session reaped during a broadcast.
 
 ## Phase 2: Security
 
