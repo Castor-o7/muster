@@ -226,6 +226,11 @@ async fn handle(
     let Some(request) = Request::parse(&head) else {
         return respond(&mut tls, "400 Bad Request").await;
     };
+    // Exchanging a one-time invite for a token (MUS-8). The invite rides where a
+    // token would, as `Authorization: Bearer`, and works once before it expires.
+    if request.path() == PAIR_PATH {
+        return redeem(&mut tls, peer, &request, config).await;
+    }
     let Some(name) = request
         .token
         .as_deref()
@@ -340,6 +345,42 @@ where
         () = from_myko => {}
     }
     Ok(())
+}
+
+/// The route `muster-shim pair` exchanges an invite on (MUS-8).
+const PAIR_PATH: &str = "/pair";
+
+async fn redeem<S: AsyncWrite + Unpin>(
+    stream: &mut S,
+    peer: SocketAddr,
+    request: &Request,
+    config: &GateConfig,
+) -> std::io::Result<()> {
+    if request.method != "POST" {
+        return respond(stream, "405 Method Not Allowed").await;
+    }
+    let secret = request.token.as_deref().unwrap_or_default();
+    match credentials::redeem_invite(&config.state_dir, secret) {
+        Ok(Some((name, token))) => {
+            log::info!("[gate] {peer} paired as {name} with a one-time invite");
+            let body = serde_json::json!({ "name": name, "token": token }).to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
+                 Connection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).await?;
+            stream.shutdown().await
+        }
+        Ok(None) => {
+            log::warn!("[gate] refused {peer}: an unknown, used or expired invite");
+            respond(stream, "401 Unauthorized").await
+        }
+        Err(e) => {
+            log::warn!("[gate] refused {peer}: can't read invites: {e}");
+            respond(stream, "500 Internal Server Error").await
+        }
+    }
 }
 
 /// Read up to the end of the request head. Returns the head (without the

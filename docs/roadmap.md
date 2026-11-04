@@ -14,7 +14,7 @@ evidence from a real run by the person or team named.
 
 ## Status
 
-2026-11-04: 23 of 55 stories ticked, about 42%, not counting the 3 moved to Rally. Live on
+2026-11-04: 24 of 55 stories ticked, about 44%, not counting the 3 moved to Rally. Live on
 Murph since 2026-11-03 22:40:57: `e797fa3`, deployed with `rollout.sh` and confirmed by Lamplighter
 from the sha256 of the installed binaries against that stage's `SHA256SUMS`. It carries every code
 change on main, so MUS-46, MUS-48 and MUS-55's graceful stop, which were waiting for a restart, are
@@ -264,8 +264,15 @@ and MUS-55. Merged and needing a live run: MUS-36 and MUS-37.
   Sessions are still in `op:josh` (a1) and `op:joshd` (Murph) beside `op:joshd@pdx.edu`,
   so a broadcast to an old room reaches only one machine. Done when: a paired session is
   only in its attested `op:` room, shown by a test and on the live roster.
-- [ ] **MUS-8: Single-use, expiring pairing codes.** Done when: a used or expired
+- [x] **MUS-8: Single-use, expiring pairing codes.** Done when: a used or expired
   code is refused.
+  Done 2026-11-04 by gentle-pulsar: `muster-daemon pair` prints a `muster-pair:v2:` code holding
+  a one-time invite, not the token, good for 15 minutes by default (`--expires`). `muster-shim
+  pair` exchanges it at the gate's `/pair` route for a token; the invite is deleted on first use,
+  and the daemon keeps only its hash. Shown by the invite tests in
+  `crates/daemon/src/credentials.rs` and five checks in `scripts/test-gate-e2e.sh` (no token in
+  the code, a used code refused, an expired code refused and given no token). Live on Murph only
+  after the next daemon restart; v1 codes and stored pairings keep working.
 - [ ] **MUS-9: Limit connections and message rates.** Done when: a test shows a
   flooding client is throttled and other sessions keep working.
 - [ ] **MUS-10: Treat peer messages as untrusted.** Done when: the operator can

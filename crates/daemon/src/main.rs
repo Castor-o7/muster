@@ -38,8 +38,8 @@ const DEFAULT_MYKO_BIND: &str = "127.0.0.1:6258";
 const USAGE: &str = "\
 usage:
   muster-daemon                       run the daemon
-  muster-daemon pair --name NAME [--address HOST:PORT]
-                                      pair a machine; prints its pairing code
+  muster-daemon pair --name NAME [--address HOST:PORT] [--expires 15m]
+                                      print a one-time pairing code for a machine
   muster-daemon unpair NAME           revoke a machine's access
   muster-daemon pairs                 list paired machines";
 
@@ -82,11 +82,19 @@ fn main() -> Result<()> {
 /// `pair --name NAME [--address HOST:PORT]`: mint a token and print the code.
 fn pair(args: &[String]) -> Result<()> {
     let (mut name, mut address) = (None, None);
+    let mut ttl = DEFAULT_INVITE_TTL;
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--name" => name = it.next().cloned(),
             "--address" => address = it.next().cloned(),
+            "--expires" => {
+                let spec = it
+                    .next()
+                    .with_context(|| format!("--expires needs a value\n{USAGE}"))?;
+                ttl = parse_duration(spec)
+                    .with_context(|| format!("--expires takes e.g. 30s, 15m or 2h, not {spec}"))?;
+            }
             _ => anyhow::bail!("unknown argument: {arg}\n{USAGE}"),
         }
     }
@@ -98,18 +106,46 @@ fn pair(args: &[String]) -> Result<()> {
 
     let dir = daemon::credentials::state_dir()?;
     let identity = daemon::credentials::load_or_create_identity(&dir)?;
-    let token = daemon::credentials::add_token(&dir, &name)?;
-    let code = muster_entities::pairing::Pairing {
+    let invite = daemon::credentials::add_invite(&dir, &name, ttl)?;
+    let code = muster_entities::pairing::Invite {
         address,
         fingerprint: identity.fingerprint(),
-        token,
+        invite,
         name: name.clone(),
     }
     .to_code();
-    eprintln!("Paired {name}. On that machine, run:\n");
+    eprintln!("Invited {name}. On that machine, run:\n");
     println!("muster-shim pair {code}");
-    eprintln!("\nThe code contains the access token; treat it like a password.");
+    eprintln!(
+        "\nThe code works once and expires in {}. Until then, treat it like a password.",
+        describe_duration(ttl)
+    );
     Ok(())
+}
+
+/// How long a pairing code works when `--expires` isn't given (MUS-8).
+const DEFAULT_INVITE_TTL: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+
+/// `30s`, `15m` or `2h`.
+fn parse_duration(spec: &str) -> Option<std::time::Duration> {
+    let (number, unit) = spec.split_at(spec.find(|c: char| !c.is_ascii_digit())?);
+    let n: u64 = number.parse().ok()?;
+    let secs = match unit {
+        "s" => n,
+        "m" => n.checked_mul(60)?,
+        "h" => n.checked_mul(3600)?,
+        _ => return None,
+    };
+    Some(std::time::Duration::from_secs(secs))
+}
+
+fn describe_duration(d: std::time::Duration) -> String {
+    let s = d.as_secs();
+    match s {
+        s if s % 3600 == 0 && s > 0 => format!("{} h", s / 3600),
+        s if s % 60 == 0 && s > 0 => format!("{} min", s / 60),
+        s => format!("{s} s"),
+    }
 }
 
 /// The address to put in a pairing code when `--address` isn't given: the

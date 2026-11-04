@@ -20,6 +20,13 @@ use muster_entities::pairing::{cert_fingerprint, token_hash};
 const CERT_FILE: &str = "gate-cert.der";
 const KEY_FILE: &str = "gate-key.der";
 const TOKENS_FILE: &str = "tokens";
+/// One `name sha256(secret) expires-unix-seconds` line per outstanding invite
+/// (MUS-8). Only hashes are kept, so the file can't be used to pair.
+const INVITES_FILE: &str = "invites";
+
+/// Serializes invite redemption within the daemon, so two machines racing
+/// with the same code can't both get a token.
+static INVITES_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// The daemon's state directory, resolved from the environment.
 pub fn state_dir() -> io::Result<PathBuf> {
@@ -103,6 +110,113 @@ pub fn add_token(dir: &Path, name: &str) -> io::Result<String> {
     entries.push((name.to_string(), token_hash(&token)));
     write_tokens(dir, &entries)?;
     Ok(token)
+}
+
+/// Make a one-time invite for `name`, good for `ttl` (MUS-8). Returns the
+/// secret, which `redeem_invite` exchanges for a token once. A new invite for
+/// the same name replaces any outstanding one.
+pub fn add_invite(dir: &Path, name: &str, ttl: std::time::Duration) -> io::Result<String> {
+    if !valid_name(name) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "names are 1-64 characters of letters, digits, '-', '_' or '.'",
+        ));
+    }
+    let mut raw = [0u8; 32];
+    getrandom::fill(&mut raw).map_err(io::Error::other)?;
+    let secret = {
+        use base64::Engine as _;
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(raw)
+    };
+    let expires = unix_now().saturating_add(ttl.as_secs());
+    let _guard = INVITES_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _file_lock = lock_file(dir, INVITES_FILE)?;
+    let now = unix_now();
+    let mut entries: Vec<(String, String, u64)> = read_invites(dir)?
+        .into_iter()
+        .filter(|(n, _, exp)| n != name && *exp > now)
+        .collect();
+    entries.push((name.to_string(), token_hash(&secret), expires));
+    write_invites(dir, &entries)?;
+    Ok(secret)
+}
+
+/// Exchange an invite for the name it was made for and a fresh token (MUS-8).
+/// The invite is deleted whether or not anything else succeeds, so it works
+/// once. An unknown, used or expired invite gets `None`.
+pub fn redeem_invite(dir: &Path, secret: &str) -> io::Result<Option<(String, String)>> {
+    let presented = token_hash(secret);
+    let name = {
+        let _guard = INVITES_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _file_lock = lock_file(dir, INVITES_FILE)?;
+        let now = unix_now();
+        let entries = read_invites(dir)?;
+        let mut found = None;
+        let mut kept = Vec::with_capacity(entries.len());
+        for (name, hash, expires) in entries {
+            if constant_time_eq(hash.as_bytes(), presented.as_bytes()) {
+                if expires > now {
+                    found = Some(name);
+                }
+            } else if expires > now {
+                kept.push((name, hash, expires));
+            }
+        }
+        write_invites(dir, &kept)?;
+        found
+    };
+    let Some(name) = name else {
+        return Ok(None);
+    };
+    let token = add_token(dir, &name)?;
+    Ok(Some((name, token)))
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+fn read_invites(dir: &Path) -> io::Result<Vec<(String, String, u64)>> {
+    let text = match std::fs::read_to_string(dir.join(INVITES_FILE)) {
+        Ok(t) => t,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e),
+    };
+    Ok(text
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.split_whitespace();
+            let (name, hash, expires) = (parts.next()?, parts.next()?, parts.next()?);
+            Some((name.to_string(), hash.to_string(), expires.parse().ok()?))
+        })
+        .collect())
+}
+
+fn write_invites(dir: &Path, entries: &[(String, String, u64)]) -> io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let text: String = entries
+        .iter()
+        .map(|(n, h, e)| format!("{n} {h} {e}\n"))
+        .collect();
+    let tmp = dir.join(format!("{INVITES_FILE}.tmp"));
+    write_private(&tmp, text.as_bytes())?;
+    std::fs::rename(tmp, dir.join(INVITES_FILE))
+}
+
+/// Hold `<name>.lock` in `dir` across processes, so `muster-daemon pair`
+/// and the running daemon don't rewrite the same file at once.
+fn lock_file(dir: &Path, name: &str) -> io::Result<std::fs::File> {
+    std::fs::create_dir_all(dir)?;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join(format!("{name}.lock")))?;
+    file.lock()?;
+    Ok(file)
 }
 
 /// Revoke `name`. Returns whether it was paired.
@@ -318,6 +432,51 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    fn invite_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("muster-invites-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    #[test]
+    fn an_invite_works_once() {
+        let dir = invite_dir("once");
+        let secret = add_invite(&dir, "a1", std::time::Duration::from_secs(600)).unwrap();
+        let (name, token) = redeem_invite(&dir, &secret)
+            .unwrap()
+            .expect("first use works");
+        assert_eq!(name, "a1");
+        assert_eq!(verify_token(&dir, &token).as_deref(), Some("a1"));
+        assert!(
+            redeem_invite(&dir, &secret).unwrap().is_none(),
+            "a used invite is refused"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_expired_or_unknown_invite_is_refused() {
+        let dir = invite_dir("expired");
+        let secret = add_invite(&dir, "a1", std::time::Duration::ZERO).unwrap();
+        assert!(redeem_invite(&dir, &secret).unwrap().is_none(), "expired");
+        assert!(
+            redeem_invite(&dir, "never-issued").unwrap().is_none(),
+            "unknown"
+        );
+        assert!(token_names(&dir).unwrap().is_empty(), "no token was made");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_new_invite_replaces_the_old_one_for_that_name() {
+        let dir = invite_dir("replace");
+        let old = add_invite(&dir, "a1", std::time::Duration::from_secs(600)).unwrap();
+        let new = add_invite(&dir, "a1", std::time::Duration::from_secs(600)).unwrap();
+        assert!(redeem_invite(&dir, &old).unwrap().is_none());
+        assert!(redeem_invite(&dir, &new).unwrap().is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     #[cfg(unix)]

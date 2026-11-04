@@ -325,6 +325,31 @@ fn tls_failure(e: &io::Error) -> PostFailure {
     }
 }
 
+/// Exchange a one-time invite at the gate for this machine's pairing (MUS-8).
+/// The gate pins the same certificate the pairing will.
+pub fn redeem_invite(invite: muster_entities::pairing::Invite) -> anyhow::Result<Pairing> {
+    let probe = invite.clone().into_pairing(invite.invite.clone());
+    let reply = match https_post_why(&probe, "/pair", "{}", Duration::from_secs(15)) {
+        Ok(reply) => reply,
+        Err(PostFailure::Status(401)) => anyhow::bail!(
+            "the daemon refused this code: it was already used or has expired. \
+             Ask for a new one (`muster-daemon pair --name {}`)",
+            invite.name
+        ),
+        Err(failure) => anyhow::bail!("couldn't pair with {}: {failure}", invite.address),
+    };
+    #[derive(serde::Deserialize)]
+    struct Paired {
+        name: String,
+        token: String,
+    }
+    let paired: Paired = serde_json::from_str(&reply.body)
+        .map_err(|e| anyhow::anyhow!("the daemon's reply to pairing wasn't understood: {e}"))?;
+    let mut pairing = invite.into_pairing(paired.token);
+    pairing.name = paired.name;
+    Ok(pairing)
+}
+
 /// [`https_post`], saying why it failed.
 pub fn https_post_why(
     pairing: &Pairing,

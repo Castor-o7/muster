@@ -8,6 +8,12 @@
 //!
 //! Format: `muster-pair:v1:` followed by the base64url (no padding) of a JSON
 //! object. Shared by the daemon and the shim so the two can't drift.
+//!
+//! Since MUS-8, `muster-daemon pair` prints a `muster-pair:v2:` code instead:
+//! an [`Invite`] carrying a one-time secret, not the token. `muster-shim pair`
+//! exchanges it at the gate for a token, which only the stored pairing (a v1
+//! code, kept owner-only) holds. A used or expired invite is refused, so a
+//! code seen in a transcript is useless.
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -15,6 +21,79 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 const PREFIX: &str = "muster-pair:v1:";
+const INVITE_PREFIX: &str = "muster-pair:v2:";
+
+/// A one-time invitation to pair, as `muster-daemon pair` prints it (MUS-8).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Invite {
+    /// The gate's `host:port`, as this machine should dial it.
+    pub address: String,
+    /// Lowercase hex SHA-256 of the daemon certificate's DER encoding.
+    pub fingerprint: String,
+    /// The one-time secret the gate exchanges for a token.
+    pub invite: String,
+    /// The name this machine will be paired under.
+    pub name: String,
+}
+
+/// Either kind of code `muster-shim pair` accepts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Code {
+    /// A v1 code: the credentials themselves (older daemons print these).
+    Pairing(Pairing),
+    /// A v2 code: a one-time invite to exchange for credentials.
+    Invite(Invite),
+}
+
+impl Code {
+    pub fn parse(code: &str) -> Result<Self, PairingError> {
+        let code = code.trim();
+        if code.starts_with(INVITE_PREFIX) {
+            return Invite::from_code(code).map(Code::Invite);
+        }
+        Pairing::from_code(code).map(Code::Pairing)
+    }
+}
+
+impl Invite {
+    pub fn to_code(&self) -> String {
+        let json = serde_json::to_vec(self).expect("Invite serializes");
+        format!("{INVITE_PREFIX}{}", URL_SAFE_NO_PAD.encode(json))
+    }
+
+    pub fn from_code(code: &str) -> Result<Self, PairingError> {
+        let payload = code
+            .trim()
+            .strip_prefix(INVITE_PREFIX)
+            .ok_or(PairingError::NotAPairingCode)?;
+        let json = URL_SAFE_NO_PAD
+            .decode(payload)
+            .map_err(|_| PairingError::Malformed)?;
+        let invite: Invite = serde_json::from_slice(&json).map_err(|_| PairingError::Malformed)?;
+        let valid = !invite.address.is_empty()
+            && !invite.invite.is_empty()
+            && !invite.name.is_empty()
+            && invite.fingerprint.len() == 64
+            && invite.fingerprint.bytes().all(|b| b.is_ascii_hexdigit());
+        if !valid {
+            return Err(PairingError::Malformed);
+        }
+        Ok(Invite {
+            fingerprint: invite.fingerprint.to_ascii_lowercase(),
+            ..invite
+        })
+    }
+
+    /// The pairing this invite becomes once the gate hands over `token`.
+    pub fn into_pairing(self, token: String) -> Pairing {
+        Pairing {
+            address: self.address,
+            fingerprint: self.fingerprint,
+            token,
+            name: self.name,
+        }
+    }
+}
 
 /// One machine's credentials for one daemon.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -132,7 +211,7 @@ pub fn read_local_token() -> Option<String> {
 /// through this, and the daemon runs message bodies through it, so a secret
 /// pasted by mistake never reaches a transcript or the model API.
 pub fn redact(text: &str) -> std::borrow::Cow<'_, str> {
-    const MARKERS: [&str; 2] = [PREFIX, "bearer "];
+    const MARKERS: [&str; 3] = [PREFIX, INVITE_PREFIX, "bearer "];
     // Markers are matched without regard to case, so `bearer ` and `BEARER `
     // are masked too; the text itself is copied as written.
     let lower = text.to_ascii_lowercase();
@@ -271,5 +350,32 @@ mod tests {
         let shown = p.masked();
         assert!(shown.contains("murph:6255") && shown.contains("a1"));
         assert!(!shown.contains("secret-token"));
+    }
+
+    #[test]
+    fn an_invite_round_trips_and_parses_as_an_invite() {
+        let invite = Invite {
+            address: "murph:6255".into(),
+            fingerprint: "AB".repeat(32),
+            invite: "one-time".into(),
+            name: "a1".into(),
+        };
+        let code = invite.to_code();
+        assert!(code.starts_with("muster-pair:v2:"));
+        match Code::parse(&code).unwrap() {
+            Code::Invite(parsed) => {
+                assert_eq!(parsed.fingerprint, "ab".repeat(32));
+                assert_eq!(parsed.into_pairing("tok".into()).token, "tok");
+            }
+            other => panic!("parsed as {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_v2_code_is_redacted_too() {
+        assert_eq!(
+            redact("code muster-pair:v2:eyJh rest"),
+            "code muster-pair:v2:<redacted> rest"
+        );
     }
 }

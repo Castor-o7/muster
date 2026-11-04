@@ -162,7 +162,11 @@ fn main() -> Result<()> {
             let code = argv
                 .next()
                 .context("usage: muster-shim pair <pairing code>")?;
-            let pairing = muster_entities::pairing::Pairing::from_code(&code)?;
+            let pairing = match muster_entities::pairing::Code::parse(&code)? {
+                muster_entities::pairing::Code::Pairing(pairing) => pairing,
+                // A one-time invite (MUS-8): exchange it at the gate for a token.
+                muster_entities::pairing::Code::Invite(invite) => link::redeem_invite(invite)?,
+            };
             let path = link::save_pairing(&pairing)?;
             println!(
                 "paired with {} as {} (saved to {}); restart Claude Code sessions to use it",
