@@ -14,7 +14,7 @@ evidence from a real run by the person or team named.
 
 ## Status
 
-2026-11-03: 16 of 52 stories ticked, about 31%, not counting the 3 moved to Rally. Live on
+2026-11-03: 16 of 54 stories ticked, about 30%, not counting the 3 moved to Rally. Live on
 Murph since 2026-11-03 16:22: `5a19735`, which adds MUS-54 to what `c3dbd45` carried (MUS-4,
 MUS-5, MUS-6, MUS-29, MUS-33, MUS-34, MUS-35, MUS-40, MUS-44, MUS-50 and MUS-53). Sessions pick
 up a rebuilt shim when they restart, and no keyed send (MUS-29) has been seen live yet. Merged,
@@ -127,6 +127,41 @@ also needs a rebuilt shim to be seen), and MUS-55's graceful stop.
 
 ## Phase 2: Security
 
+- [ ] **MUS-39: Operator-verified, scoped approvals.** Top priority, set by the operator on
+  2026-11-03. A message can't prove who wrote it: a session runs as the operator's own account,
+  so it can send "the operator says yes" as easily as a relay can, and MUS-5 and MUS-6 don't
+  change that. So a restart or a new service has needed the operator's word in the acting
+  session's own terminal, which held up the Rally rollout on Murph repeatedly. Fix: the operator
+  approves with a step a session can't perform, such as a `sudo` password on the daemon host or
+  Touch ID on a laptop. That signs an approval naming one action and target, which expires and
+  works once. The daemon checks it, and a relay carrying a valid one is shown as
+  operator-verified. Standing approvals, for example "restarts to a commit on main that passed
+  CI", could live in a root-owned file that sessions can read but not change. MUS-7 comes first,
+  since an unauthenticated local port lets any process act as a session. Done when: a relayed
+  approval with a valid signed token is accepted for exactly its action; a forged, expired,
+  reused or mismatched one is refused; and a session on the operator's account can't produce a
+  valid one. Each is shown by a test.
+- [ ] **MUS-7: Protect the local ports.** The first step of MUS-39. 6256 and 6257 have no
+  authentication, and the hook listener doesn't check `Origin`, so any process on the daemon's
+  host, or a web page in its browser, can reach them. Done when: a test shows a cross-origin web
+  page can't reach either port, including by WebSocket, and a local process without
+  credentials can't act as a session.
+- [ ] **MUS-56: Let only authorized devices reach Murph's ports.** Requested by the operator on
+  2026-11-03. Murph's firewall (`/etc/nftables.conf`) opens 6255 to the whole `192.168.1.0/24`,
+  and Rally's 6300 isn't open at all, so a1 can't reach it. The services already refuse a
+  client without a pairing, but any device on the LAN can still reach the gate. Fix: open
+  6255 and 6300 only to listed machines (a1 today, with its address reserved on the router),
+  and keep pairing as the real check. Changing the firewall needs root, so the operator applies
+  it. Done when: from a LAN device not on the list, 6255 and 6300 can't be reached; from a1 both
+  work; and an unpaired client that does reach either is refused. Each is shown by a run.
+- [ ] **MUS-57: Keep pairing secrets out of sessions.** On 2026-11-02 a session printed a1's
+  whole pairing code, token included, into its own output while looking for Murph's address,
+  so it reached that session's transcript and the model API. Nothing public. The token was
+  rotated on 2026-11-03 at 23:03 EST on the operator's word, with the new code written only to a
+  private file. Fix: make the safe way the easy one. A command shows the pairing's address,
+  name and fingerprint with the token masked, and the shim and daemon redact `muster-pair:v1:`
+  codes and Bearer tokens from their logs and from message bodies. Done when: that command
+  exists, and a test shows a code or token in a log line or message comes out redacted.
 - [x] **MUS-5: Tie sessions to the machine's token.** The gate discards the
   machine name and `session_id` is taken on trust, so any paired machine can claim
   another session and read and clear its mail. Paired clients can also write raw events
@@ -162,9 +197,6 @@ also needs a rebuilt shim to be seen), and MUS-55's graceful stop.
   Sessions are still in `op:josh` (a1) and `op:joshd` (Murph) beside `op:joshd@pdx.edu`,
   so a broadcast to an old room reaches only one machine. Done when: a paired session is
   only in its attested `op:` room, shown by a test and on the live roster.
-- [ ] **MUS-7: Protect the local ports.** 6256 and 6257 have no authentication,
-  and the hook listener doesn't check `Origin`. Done when: a test shows a
-  cross-origin web page can't reach either port, including by WebSocket.
 - [ ] **MUS-8: Single-use, expiring pairing codes.** Done when: a used or expired
   code is refused.
 - [ ] **MUS-9: Limit connections and message rates.** Done when: a test shows a
@@ -224,13 +256,6 @@ also needs a rebuilt shim to be seen), and MUS-55's graceful stop.
   when: from another terminal on either machine, a message reaches that team and wakes it
   if idle; a team with several sessions gets one clear result for each; an unknown or
   ambiguous name is refused, not guessed; and the label is as in MUS-36.
-- [ ] **MUS-39: Show that a terminal message came from the operator.** Found building
-  MUS-36. A session runs as the same account as the operator's terminal, so it can read
-  the pairing token and run the same command; MUS-5 and MUS-6 don't change that. Telling
-  them apart needs something a session can't reach, such as a key that needs the
-  operator's touch or passphrase. Until then these messages carry no extra authority.
-  Done when: a session on the operator's own account can't produce a message recipients
-  see as from the operator, shown by a test that tries.
 - [ ] **MUS-38: Muster team name not displaying correctly (adjective-animal).** Reported
   by the operator on 2026-10-31. Sessions show an adjective-animal nickname. The cause,
   and where the wrong name appears, aren't confirmed yet; the first step is to confirm
