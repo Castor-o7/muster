@@ -151,6 +151,7 @@ pub fn redeem_invite(dir: &Path, secret: &str) -> io::Result<Option<(String, Str
         let _file_lock = lock_file(dir, INVITES_FILE)?;
         let now = unix_now();
         let entries = read_invites(dir)?;
+        let before = entries.len();
         let mut found = None;
         let mut kept = Vec::with_capacity(entries.len());
         for (name, hash, expires) in entries {
@@ -162,7 +163,10 @@ pub fn redeem_invite(dir: &Path, secret: &str) -> io::Result<Option<(String, Str
                 kept.push((name, hash, expires));
             }
         }
-        write_invites(dir, &kept)?;
+        // A wrong guess with nothing expired changes nothing, so it writes nothing.
+        if kept.len() != before {
+            write_invites(dir, &kept)?;
+        }
         found
     };
     let Some(name) = name else {

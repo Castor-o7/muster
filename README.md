@@ -111,7 +111,7 @@ It prints a `muster-shim pair muster-pair:v2:…` command. Run that on the machi
 - `muster-shim pair` still accepts a `muster-pair:v1:` code from an older daemon. Those hold the token itself, so pair again to retire one that has been seen.
 - `muster-daemon pairs` lists paired machines, and `muster-daemon unpair a1` revokes one. Its open connections close within seconds and new ones are refused; nothing needs restarting.
 - `muster-shim unpair` removes a machine's own pairing.
-- Pairing again under the same name replaces that machine's token.
+- Pairing again under the same name replaces that machine's token, so that machine's running sessions lose their connection until they restart. This is also how to rotate a machine's token.
 - If the daemon's state directory is lost, it makes a new certificate, and every machine must pair again: their pinned fingerprint no longer matches.
 
 A paired shim never sends anything unencrypted. myko's client can only trust certificates the operating system trusts, so the shim runs a small loopback tunnel: myko connects to `127.0.0.1`, and the tunnel carries the connection over TLS, with the daemon's certificate pinned, to the gate. The hooks make the same pinned TLS connection themselves. Codex, Pi, opencode and Prime Agent clients don't support pairing yet.
