@@ -281,6 +281,8 @@ and MUS-55. Merged and needing a live run: MUS-36 and MUS-37.
   is refused and another keeps sending), the limiter unit tests, and three checks in
   `scripts/test-gate-e2e.sh` (a machine at its cap gets 503, another machine keeps working, and
   the first gets back in once its connections close). Live on Murph only after a daemon restart.
+  The message limit is per session, so a machine with many sessions (it can register any number
+  of its own) gets that many allowances; a per-machine total is MUS-60.
 - [ ] **MUS-10: Treat peer messages as untrusted.** Done when: the operator can
   set sender allowlists and pause all wake-ups.
 - [ ] **MUS-11: Audit dependencies and write the threat model.** Done when: CI
@@ -289,6 +291,10 @@ and MUS-55. Merged and needing a live run: MUS-36 and MUS-37.
   watchman can verify a story in all three repositories and a merge attempt with
   its token is refused. Needs a run: the operator, who holds the token.
 
+- [ ] **MUS-60: Cap messages per machine, not only per session.** From MUS-9's review. A paired
+  machine may register any number of sessions, and each gets its own message allowance, so a
+  machine can multiply its rate. Done when: a machine's sessions share a total, and a test shows a
+  machine spreading a flood across new sessions is throttled while another machine keeps sending.
 ## Phase 3: Portability
 
 - [ ] **MUS-13: Run CI on macOS.** Done when: CI runs on macOS and passes,
