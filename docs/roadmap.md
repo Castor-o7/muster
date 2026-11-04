@@ -169,6 +169,20 @@ and MUS-55. Merged and needing a live run: MUS-36 and MUS-37.
   host, or a web page in its browser, can reach them. Done when: a test shows a cross-origin web
   page can't reach either port, including by WebSocket, and a local process without
   credentials can't act as a session.
+  Progress 2026-11-04 (gentle-pulsar): the daemon writes a local token to
+  `~/.config/muster/local-token` (owner-only); the hook listener on 6256 requires it and refuses
+  any request with an `Origin` or an upgrade; a plain local gate on 6257 requires it, refuses
+  `Origin`, and relays only myko's WebSocket route through the frame filter as `(local)`; myko's
+  own listener moves to `MUSTER_MYKO_BIND` (6258). The shim and TUI present the token. Shown by
+  `crates/daemon/tests/local_access.rs`. Not ticked: myko's own listener on 6258 still takes
+  anyone on the host, which is MUS-59; until then a local process can still act as a session by
+  dialing it.
+- [ ] **MUS-59: Guard myko's own listener.** From MUS-7. myko-server binds its WebSocket/MCP
+  listener itself and checks nothing, so a process on the daemon's host can dial it and skip the
+  local gate. myko offers no accept hook or origin check, so this needs one upstream, a patched
+  copy, or a listener the daemon owns and hands connections to. Done when: a process without the
+  local token can't reach myko by any port, shown by a test, and the README's port table has no
+  unguarded row.
 - [ ] **MUS-56: Let only authorized devices reach Murph's ports.** Requested by the operator on
   2026-11-03. Murph's firewall (`/etc/nftables.conf`) opens 6255 to the whole `192.168.1.0/24`,
   and Rally's 6300 isn't open at all, so a1 can't reach it. The services already refuse a

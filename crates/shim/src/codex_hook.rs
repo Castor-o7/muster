@@ -560,9 +560,15 @@ fn http_post_why(
     stream
         .set_write_timeout(Some(timeout))
         .map_err(unreachable)?;
+    // On the daemon's host the hook listener requires the local token (MUS-7).
+    // A paired machine posts through its tunnel, which carries its own token,
+    // and has no local token file.
+    let auth = muster_entities::pairing::read_local_token()
+        .map(|t| format!("Authorization: Bearer {t}\r\n"))
+        .unwrap_or_default();
     let req = format!(
         "POST {path} HTTP/1.1\r\nHost: {hostport}\r\nContent-Type: application/json\r\n\
-         Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+         Content-Length: {}\r\n{auth}Connection: close\r\n\r\n{body}",
         body.len()
     );
     stream.write_all(req.as_bytes()).map_err(unreachable)?;

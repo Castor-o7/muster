@@ -44,6 +44,15 @@ const WAIT_POLL: Duration = Duration::from_millis(500);
 /// back off quietly rather than report the daemon unreachable.
 pub const RESTARTING_HEADER: &str = "X-Muster-Restarting";
 
+/// What the daemon's real listener checks on every request (MUS-7): the local
+/// token it must carry, as `Authorization: Bearer` or a `token` query parameter
+/// (the gate adds it when forwarding for a paired machine), and the session
+/// bindings behind the gate's `machine` mark. Tests run without it.
+pub struct Access {
+    pub state_dir: PathBuf,
+    pub local_token: String,
+}
+
 /// Run the hook listener forever. Spawn on a tokio task.
 pub async fn run(bind: SocketAddr, ctx: Arc<MykoServerContext>) -> std::io::Result<()> {
     run_until(bind, ctx, None, watch::channel(false).1).await
@@ -55,9 +64,9 @@ pub async fn run(bind: SocketAddr, ctx: Arc<MykoServerContext>) -> std::io::Resu
 pub async fn run_bound(
     bind: SocketAddr,
     ctx: Arc<MykoServerContext>,
-    state_dir: Option<Arc<PathBuf>>,
+    access: Option<Arc<Access>>,
 ) -> std::io::Result<()> {
-    run_until(bind, ctx, state_dir, watch::channel(false).1).await
+    run_until(bind, ctx, access, watch::channel(false).1).await
 }
 
 /// [`run_bound`], ending every held wait once `stopping` turns true, with an
@@ -65,7 +74,7 @@ pub async fn run_bound(
 pub async fn run_until(
     bind: SocketAddr,
     ctx: Arc<MykoServerContext>,
-    state_dir: Option<Arc<PathBuf>>,
+    access: Option<Arc<Access>>,
     stopping: watch::Receiver<bool>,
 ) -> std::io::Result<()> {
     let listener = TcpListener::bind(bind).await?;
@@ -79,10 +88,10 @@ pub async fn run_until(
             }
         };
         let ctx = ctx.clone();
-        let state_dir = state_dir.clone();
+        let access = access.clone();
         let stopping = stopping.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_conn(stream, ctx, state_dir, stopping).await {
+            if let Err(e) = handle_conn(stream, ctx, access, stopping).await {
                 log::debug!("[hook] connection error: {e}");
             }
         });
@@ -92,7 +101,7 @@ pub async fn run_until(
 async fn handle_conn(
     mut stream: TcpStream,
     ctx: Arc<MykoServerContext>,
-    state_dir: Option<Arc<PathBuf>>,
+    access: Option<Arc<Access>>,
     stopping: watch::Receiver<bool>,
 ) -> std::io::Result<()> {
     let mut buf: Vec<u8> = Vec::with_capacity(2048);
@@ -121,10 +130,19 @@ async fn handle_conn(
     let method = rl.next().unwrap_or("");
     let target = rl.next().unwrap_or("");
 
-    let content_length = lines
+    let headers: Vec<(String, String)> = lines
         .filter_map(|l| l.split_once(':'))
-        .find(|(k, _)| k.trim().eq_ignore_ascii_case("content-length"))
-        .and_then(|(_, v)| v.trim().parse::<usize>().ok())
+        .map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().to_string()))
+        .collect();
+    let header = |name: &str| {
+        headers
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.as_str())
+    };
+
+    let content_length = header("content-length")
+        .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(0)
         .min(MAX_BODY);
 
@@ -149,14 +167,34 @@ async fn handle_conn(
         None => (target, ""),
     };
 
+    // A browser names its page in `Origin` on every cross-origin request, and
+    // nothing but a browser opens a WebSocket here, so both are refused before
+    // anything else is looked at (MUS-7).
+    if header("origin").is_some() {
+        return write_response(&mut stream, 403, "browser origins are refused").await;
+    }
+    if header("upgrade").is_some() || header("sec-websocket-key").is_some() {
+        return write_response(&mut stream, 403, "no websocket here").await;
+    }
+
     if method != "POST" {
         return write_response(&mut stream, 405, "method not allowed").await;
     }
 
-    if let Some(dir) = &state_dir
-        && !machine_may_act(dir, query, &body)
-    {
-        return write_response(&mut stream, 403, "forbidden").await;
+    let (query, presented) = strip_token(query);
+    let query = query.as_str();
+    if let Some(access) = &access {
+        let presented = presented.or_else(|| {
+            header("authorization")
+                .and_then(|v| v.strip_prefix("Bearer "))
+                .map(|t| t.trim().to_string())
+        });
+        if !presented.is_some_and(|t| credentials::local_token_matches(&access.local_token, &t)) {
+            return write_response(&mut stream, 401, "local token required").await;
+        }
+        if !machine_may_act(&access.state_dir, query, &body) {
+            return write_response(&mut stream, 403, "forbidden").await;
+        }
     }
 
     if path == "/hook/wait" {
@@ -178,6 +216,23 @@ async fn handle_conn(
         }
         None => write_response(&mut stream, 404, "not found").await,
     }
+}
+
+/// Split a `token` parameter out of the query, as the gate does (MUS-7).
+fn strip_token(query: &str) -> (String, Option<String>) {
+    let mut token = None;
+    let kept: Vec<&str> = query
+        .split('&')
+        .filter(|p| !p.is_empty())
+        .filter(|p| match p.strip_prefix("token=") {
+            Some(t) => {
+                token = Some(t.to_string());
+                false
+            }
+            None => true,
+        })
+        .collect();
+    (kept.join("&"), token)
 }
 
 /// Whether the machine the gate named in `query` may act for the session in

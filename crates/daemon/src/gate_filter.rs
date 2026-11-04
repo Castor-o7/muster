@@ -124,7 +124,11 @@ fn attest_session(item: &mut Value, machine: &str, operator: Option<&str>) {
     if !host.is_object() {
         *host = serde_json::json!({"name": "", "os": "", "arch": ""});
     }
-    if let Some(host) = host.as_object_mut() {
+    // A session on the daemon's own host (through the local gate, MUS-7) keeps
+    // the host name it claims; the gate has no pairing name to put there.
+    if machine != crate::credentials::LOCAL_MACHINE
+        && let Some(host) = host.as_object_mut()
+    {
         host.insert("name".into(), Value::from(machine));
     }
 }
@@ -136,7 +140,12 @@ fn check_message(state_dir: &Path, machine: &str, message: &MykoMessage) -> Resu
             if !query.query.is_object() {
                 return Err(Refused(format!("query {} body", query.query_id)));
             }
-            if QUERIES.contains(&query.query_id.as_ref()) {
+            // The daemon host's own tools (the TUI reads messages and clients)
+            // come through the local gate as `(local)` with the local token,
+            // and may read what they could read from myko directly (MUS-7).
+            if machine == crate::credentials::LOCAL_MACHINE
+                || QUERIES.contains(&query.query_id.as_ref())
+            {
                 Ok(())
             } else {
                 Err(Refused(format!("query {}", query.query_id)))
@@ -187,7 +196,14 @@ fn require_owned(
     let Some(session) = session.as_str() else {
         return Err(Refused(format!("{what} without a session id")));
     };
-    match credentials::claim_machine_session(state_dir, machine, session) {
+    // A paired machine may only bind UUIDs; the daemon's own host (through the
+    // local gate as `(local)`, MUS-7) binds any safe id, as its hooks already do.
+    let claimed = if machine == credentials::LOCAL_MACHINE {
+        credentials::claim_session(state_dir, machine, session)
+    } else {
+        credentials::claim_machine_session(state_dir, machine, session)
+    };
+    match claimed {
         Ok(true) => Ok(()),
         Ok(false) => Err(Refused(format!("{what} for session {session}"))),
         Err(e) => Err(Refused(format!("{what}: can't read session bindings: {e}"))),
