@@ -159,7 +159,10 @@ impl CommandHandler for SendMessage {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn execute(self, ctx: CommandContext) -> Result<Self::Result, CommandError> {
+    fn execute(mut self, ctx: CommandContext) -> Result<Self::Result, CommandError> {
+        // A pasted pairing code or token is masked before anything is stored
+        // or delivered (MUS-57).
+        self.body = crate::pairing::redact(&self.body).into_owned();
         if let Some(refusal) = body_too_large(&self.body) {
             return Err(err(&ctx, &refusal));
         }

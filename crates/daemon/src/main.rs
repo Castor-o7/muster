@@ -363,5 +363,17 @@ fn init_logging() {
     if std::env::var("RUST_LOG").is_err() {
         b.filter_level(log::LevelFilter::Info);
     }
+    // Pairing codes and bearer tokens never reach a log line (MUS-57).
+    b.format(|buf, record| {
+        use std::io::Write as _;
+        writeln!(
+            buf,
+            "[{} {:<5} {}] {}",
+            buf.timestamp(),
+            record.level(),
+            record.target(),
+            muster_entities::pairing::redact(&record.args().to_string())
+        )
+    });
     b.init();
 }

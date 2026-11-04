@@ -126,6 +126,50 @@ pub fn read_local_token() -> Option<String> {
     (!token.is_empty()).then(|| token.to_string())
 }
 
+/// Mask pairing codes and bearer tokens in `text` (MUS-57): everything after
+/// `muster-pair:v1:` or `Bearer ` up to the next character that can't be part
+/// of a code or token becomes `<redacted>`. Both binaries run their log lines
+/// through this, and the daemon runs message bodies through it, so a secret
+/// pasted by mistake never reaches a transcript or the model API.
+pub fn redact(text: &str) -> std::borrow::Cow<'_, str> {
+    const MARKERS: [&str; 2] = [PREFIX, "Bearer "];
+    if !MARKERS.iter().any(|m| text.contains(m)) {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    loop {
+        let next = MARKERS
+            .iter()
+            .filter_map(|m| rest.find(m).map(|i| (i, *m)))
+            .min_by_key(|(i, _)| *i);
+        let Some((idx, marker)) = next else {
+            out.push_str(rest);
+            return std::borrow::Cow::Owned(out);
+        };
+        out.push_str(&rest[..idx + marker.len()]);
+        let after = &rest[idx + marker.len()..];
+        let secret = after
+            .bytes()
+            .take_while(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'=' | b'.'))
+            .count();
+        if secret > 0 {
+            out.push_str("<redacted>");
+        }
+        rest = &after[secret..];
+    }
+}
+
+impl Pairing {
+    /// The pairing with its token masked, for showing to a person or a session.
+    pub fn masked(&self) -> String {
+        format!(
+            "address: {}\nname: {}\nfingerprint: {}\ntoken: **** (masked; see ~/.config/muster/pairing)",
+            self.address, self.name, self.fingerprint
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -178,5 +222,42 @@ mod tests {
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
         assert_eq!(cert_fingerprint(b"abc").len(), 64);
+    }
+
+    #[test]
+    fn redacts_a_pairing_code_in_a_log_line() {
+        let line = "[muster-shim] ignoring /x/pairing: muster-pair:v1:eyJhIjoiYiJ9 (bad)";
+        assert_eq!(
+            redact(line),
+            "[muster-shim] ignoring /x/pairing: muster-pair:v1:<redacted> (bad)"
+        );
+    }
+
+    #[test]
+    fn redacts_a_bearer_token_in_a_message_body() {
+        let body = "try Authorization: Bearer abc-DEF_123= then retry; Bearer alone";
+        assert_eq!(
+            redact(body),
+            "try Authorization: Bearer <redacted> then retry; Bearer <redacted>"
+        );
+    }
+
+    #[test]
+    fn leaves_ordinary_text_untouched() {
+        let text = "nothing secret here, muster-pair is just a word";
+        assert!(matches!(redact(text), std::borrow::Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn masks_the_token_in_the_shown_pairing() {
+        let p = Pairing {
+            address: "murph:6255".into(),
+            fingerprint: "ab".repeat(32),
+            token: "secret-token".into(),
+            name: "a1".into(),
+        };
+        let shown = p.masked();
+        assert!(shown.contains("murph:6255") && shown.contains("a1"));
+        assert!(!shown.contains("secret-token"));
     }
 }
