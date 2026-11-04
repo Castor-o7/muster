@@ -41,7 +41,10 @@ port_of() { print -r -- "${1##*:}"; }
 listening() { ss -Hltn "sport = :$1" | grep -q .; }
 
 # The daemon is healthy when the unit is active, hasn't restarted since `$1`,
-# runs the binary `$2`, and all three listeners accept connections.
+# runs the binary `$2`, and all its listeners accept connections. A binary from
+# MUS-7 on also runs myko's own listener (`MUSTER_MYKO_BIND`, 6258), so that's
+# checked only for a binary that knows the setting, which keeps a rollback to an
+# older one checkable.
 healthy() {
   local restarts_before=$1 expected=$2 now pid
   [[ $(systemctl --user is-active "$UNIT") == active ]] || { say "unit not active"; return 1; }
@@ -52,7 +55,12 @@ healthy() {
   local bind
   # Unset, each takes the daemon's default port.
   local gate=$(unit_env MUSTER_BIND) hook=$(unit_env MUSTER_HOOK_BIND) internal=$(unit_env MUSTER_INTERNAL_BIND)
-  for bind in "${gate:-127.0.0.1:6255}" "${hook:-127.0.0.1:6256}" "${internal:-127.0.0.1:6257}"; do
+  local -a binds=("${gate:-127.0.0.1:6255}" "${hook:-127.0.0.1:6256}" "${internal:-127.0.0.1:6257}")
+  if grep -qa MUSTER_MYKO_BIND "$expected"; then
+    local myko=$(unit_env MUSTER_MYKO_BIND)
+    binds+=("${myko:-127.0.0.1:6258}")
+  fi
+  for bind in "${binds[@]}"; do
     listening "$(port_of "$bind")" || { say "nothing listening on $bind"; return 1; }
   done
   return 0
