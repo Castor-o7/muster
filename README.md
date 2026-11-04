@@ -405,7 +405,7 @@ identity when you mean to reach the human through their most-active agent.
 | `muster://whoami` | This session's `{ session_id, pid, cwd, operator, host }`. |
 | `muster://roster` | Every live session: cwd, git branch, current task, last activity, room membership, and `wake`: `waiting` (observed: the daemon sees it holding a wait, so a message wakes it), `channel` or `busy` (declared: only what the session reports; a Claude Code session waits again when its turn ends), or `none` (no sign a message would wake it). |
 | `muster://rooms` | Every room and its members. |
-| `muster://messages` | Message history. Query params: `inbox`, `sent`, `unread`, `room`, `from`, `to_session`, `since`, `limit`. |
+| `muster://messages` | Message history. Query params: `inbox`, `sent`, `unread`, `room`, `from`, `to_session`, `since`, `limit`. On a direct message you sent, `recipient` says whether its recipient is still on the roster and whether it has read it, so `sent=true` shows mail that went unread when its recipient was reaped. That mail is kept for 14 days in case the session returns. |
 
 **Tools** (`tools/call`):
 
