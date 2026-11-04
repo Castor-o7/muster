@@ -25,7 +25,20 @@ check "local token stored owner-only" '[[ $(python3 -I -c "import os,sys; print(
 CODE=$(T $BIN/muster-daemon pair --name e2e 2>/dev/null | awk '{print $3}')
 OTHER=$(T $BIN/muster-daemon pair --name revoked 2>/dev/null | awk '{print $3}')
 export XDG_CONFIG_HOME=$WORK/client
+# A code is a one-time invite (MUS-8); this exchanges one at the gate, as
+# `muster-shim pair` does, and prints the token it gets.
+REDEEM() {
+  local inv=$(python3 -I -c 'import sys,json,base64; s=sys.argv[1].split(":",2)[2]; print(json.loads(base64.urlsafe_b64decode(s+"="*(-len(s)%4)))["invite"])' "$1")
+  curl -sk -m 5 -X POST -H "Authorization: Bearer $inv" https://127.0.0.1:16255/pair | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["token"])'
+}
+check "a pairing code carries no token" '[[ $CODE == muster-pair:v2:* ]] && python3 -I -c "import sys,json,base64; s=sys.argv[1].split(\":\",2)[2]; sys.exit(\"token\" in json.loads(base64.urlsafe_b64decode(s+\"=\"*(-len(s)%4))))" "$CODE"'
 T $BIN/muster-shim pair "$CODE" >/dev/null
+check "a used code is refused" '! T $BIN/muster-shim pair "$CODE" >/dev/null 2>&1'
+EXPIRING=$(T $BIN/muster-daemon pair --name expiring --expires 1s 2>/dev/null | awk '{print $3}')
+sleep 2
+mkdir -p $WORK/expiring
+check "an expired code is refused" '! env XDG_CONFIG_HOME=$WORK/expiring HOME=$WORK/expiring T $BIN/muster-shim pair "$EXPIRING" >/dev/null 2>&1 && [[ ! -e $WORK/expiring/muster/pairing ]]'
+check "and gets no token" '! T $BIN/muster-daemon pairs | grep -qx expiring'
 check "pairing stored owner-only" '[[ $(python3 -I -c "import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777))" $WORK/client/muster/pairing) == 0o600 ]]'
 
 HOOK='{"session_id":"a0000000-0000-4000-8000-000000000004","cwd":"/tmp/demo"}'
@@ -37,16 +50,17 @@ check "plain HTTP (no TLS) is refused" '! curl -s -m 3 http://127.0.0.1:16255/ho
 check "TLS without a token gets 401" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_code} -X POST https://127.0.0.1:16255/hook/session-start -d "$HOOK") == 401 ]]'
 check "TLS with a wrong token gets 401" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_code} -H "Authorization: Bearer nope" -X POST https://127.0.0.1:16255/hook/session-start -d "$HOOK") == 401 ]]'
 
-REVOKED_TOKEN=$(python3 -I -c 'import sys,json,base64; s=sys.argv[1].split(":",2)[2]; print(json.loads(base64.urlsafe_b64decode(s+"="*(-len(s)%4)))["token"])' "$OTHER")
+REVOKED_TOKEN=$(REDEEM "$OTHER")
 OTHER_HOOK='{"session_id":"a0000000-0000-4000-8000-000000000003","cwd":"/tmp/demo"}'
 check "a second machine's token works" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_code} -H "Authorization: Bearer $REVOKED_TOKEN" -X POST https://127.0.0.1:16255/hook/session-start -d "$OTHER_HOOK") == 200 ]]'
 check "a second machine can't read the first machine's mail" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_code} -H "Authorization: Bearer $REVOKED_TOKEN" -X POST "https://127.0.0.1:16255/hook/wait?timeout=1" -d "$HOOK") == 403 ]]'
 check "nor by forging a machine name" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_code} -H "Authorization: Bearer $REVOKED_TOKEN" -X POST "https://127.0.0.1:16255/hook/wait?timeout=1&machine=e2e" -d "$HOOK") == 403 ]]'
-check "the first machine still can" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_code} -H "Authorization: Bearer $(python3 -I -c '"'"'import sys,json,base64; s=sys.argv[1].split(":",2)[2]; print(json.loads(base64.urlsafe_b64decode(s+"="*(-len(s)%4)))["token"])'"'"' "$CODE")" -X POST "https://127.0.0.1:16255/hook/wait?timeout=1" -d "$HOOK") == 200 ]]'
+check "the first machine still can" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_code} -H "Authorization: Bearer $(python3 -I -c '"'"'import sys,json,base64; s=open(sys.argv[1]).read().strip().split(":",2)[2]; print(json.loads(base64.urlsafe_b64decode(s+"="*(-len(s)%4)))["token"])'"'"' $WORK/client/muster/pairing)" -X POST "https://127.0.0.1:16255/hook/wait?timeout=1" -d "$HOOK") == 200 ]]'
 T $BIN/muster-daemon unpair revoked >/dev/null
 check "and stops working once unpaired" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_code} -H "Authorization: Bearer $REVOKED_TOKEN" -X POST https://127.0.0.1:16255/hook/session-start -d "$HOOK") == 401 ]]'
 
-TOKEN=$(python3 -I -c 'import sys,json,base64; s=sys.argv[1].split(":",2)[2]; print(json.loads(base64.urlsafe_b64decode(s+"="*(-len(s)%4)))["token"])' "$CODE")
+# The token now lives only in the stored pairing (a v1 code, owner-only).
+TOKEN=$(python3 -I -c 'import sys,json,base64; s=open(sys.argv[1]).read().strip().split(":",2)[2]; print(json.loads(base64.urlsafe_b64decode(s+"="*(-len(s)%4)))["token"])' $WORK/client/muster/pairing)
 WS=$(curl -sk -m 2 -o /dev/null -w %{http_code} --http1.1 -H "Connection: Upgrade" -H "Upgrade: websocket" -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" "https://127.0.0.1:16255/myko?token=$TOKEN" 2>/dev/null)
 check "WebSocket upgrade with a valid token reaches myko (101)" '[[ $WS == 101 ]]'
 WS=$(curl -sk -m 2 -o /dev/null -w %{http_code} --http1.1 -H "Connection: Upgrade" -H "Upgrade: websocket" -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" "https://127.0.0.1:16255/myko?token=$REVOKED_TOKEN" 2>/dev/null)
@@ -79,7 +93,7 @@ for f in frames:
 time.sleep(1)
 PY
 T $BIN/muster-daemon pair --name attacker >$WORK/attacker.code 2>/dev/null
-ATTACKER=$(python3 -I -c 'import sys,json,base64; s=open(sys.argv[1]).read().split()[2].split(":",2)[2]; print(json.loads(base64.urlsafe_b64decode(s+"="*(-len(s)%4)))["token"])' $WORK/attacker.code)
+ATTACKER=$(REDEEM "$(awk '{print $3}' $WORK/attacker.code)")
 EVENT='{"event":"ws:m:event","data":{"item":{"id":"m1"},"changeType":"DEL","itemType":"Message","createdAt":"t"}}'
 SEND='{"event":"ws:m:command","data":{"command":{"asSession":"a0000000-0000-4000-8000-000000000001","toSessionId":"x","body":"forged"},"commandId":"SendMessage"}}'
 QUERY='{"event":"ws:m:query","data":{"query":{"tx":"t"},"queryId":"GetAllMessages","queryItemType":"Message"}}'
@@ -180,7 +194,7 @@ check "and the mail still comes" '[[ $MAIL == *"forged ack"* ]]'
 
 # Unpairing ends a machine's open long-poll, rather than leaving it running.
 LATE=$(T $BIN/muster-daemon pair --name late 2>/dev/null | awk '{print $3}')
-LATE_TOKEN=$(python3 -I -c 'import sys,json,base64; s=sys.argv[1].split(":",2)[2]; print(json.loads(base64.urlsafe_b64decode(s+"="*(-len(s)%4)))["token"])' "$LATE")
+LATE_TOKEN=$(REDEEM "$LATE")
 curl -sk -m 60 -o /dev/null -H "Authorization: Bearer $LATE_TOKEN" -X POST "https://127.0.0.1:16255/hook/wait?timeout=50" -d '{"session_id":"a0000000-0000-4000-8000-000000000009","cwd":"/tmp/late"}' &
 LATE_PID=$!
 sleep 1; kill -0 $LATE_PID 2>/dev/null; ALIVE=$?
@@ -190,7 +204,7 @@ kill $LATE_PID 2>/dev/null; wait $LATE_PID 2>/dev/null
 
 # And its open WebSocket, the connection a revoked machine would keep longest.
 LATE=$(T $BIN/muster-daemon pair --name late-ws 2>/dev/null | awk '{print $3}')
-LATE_TOKEN=$(python3 -I -c 'import sys,json,base64; s=sys.argv[1].split(":",2)[2]; print(json.loads(base64.urlsafe_b64decode(s+"="*(-len(s)%4)))["token"])' "$LATE")
+LATE_TOKEN=$(REDEEM "$LATE")
 python3 -I -c '
 import socket, ssl, sys
 ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
@@ -323,7 +337,7 @@ env XDG_CONFIG_HOME=$WORK/daemon MUSTER_STATE_DIR=$WORK/state2 MUSTER_BIND=127.0
 check "a failed hook bind stops the daemon and says why" '[[ $RC != 0 && $RC != 142 ]] && grep -q "hook listener on 127.0.0.1:16256" $WORK/bind.log'
 
 # A pairing whose fingerprint doesn't match: the hook must get nothing.
-BAD=$(python3 -I -c 'import sys,json,base64; s=sys.argv[1].split(":",2)[2]; d=json.loads(base64.urlsafe_b64decode(s+"="*(-len(s)%4))); d["fingerprint"]="0"*64; print("muster-pair:v1:"+base64.urlsafe_b64encode(json.dumps(d).encode()).decode().rstrip("="))' "$CODE")
+BAD=$(python3 -I -c 'import sys,json,base64; s=sys.argv[1].split(":",2)[2]; d=json.loads(base64.urlsafe_b64decode(s+"="*(-len(s)%4))); d["fingerprint"]="0"*64; print("muster-pair:v1:"+base64.urlsafe_b64encode(json.dumps(d).encode()).decode().rstrip("="))' "$(<$WORK/client/muster/pairing)")
 T $BIN/muster-shim pair "$BAD" >/dev/null
 OUT=$(echo $HOOK | T $BIN/muster-shim claude-hook session-start)
 check "wrong certificate fingerprint: hook gets nothing" '[[ -z $OUT ]]'

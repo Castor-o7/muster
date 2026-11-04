@@ -103,12 +103,15 @@ Every machine other than the daemon's own host needs a pairing. (On the daemon's
 muster-daemon pair --name a1 --address 192.0.2.10:6255
 ```
 
-It prints a `muster-shim pair muster-pair:v1:…` command. Run that on the machine you're pairing. The code holds the gate's address, the certificate fingerprint to pin, and that machine's access token, so treat it like a password. Then restart that machine's Claude Code sessions.
+It prints a `muster-shim pair muster-pair:v2:…` command. Run that on the machine you're pairing, within 15 minutes. The code holds the gate's address, the certificate fingerprint to pin, and a one-time invite. `muster-shim pair` exchanges the invite at the gate for that machine's access token and stores the token owner-only in `~/.config/muster/pairing`. The code then stops working, and it also stops working once it expires, so a code that ends up in a transcript or a log can't be used later. Then restart that machine's Claude Code sessions.
 
 - `--address` is how the paired machine should reach the gate. It can be left out when `MUSTER_BIND` is a specific address rather than `0.0.0.0`.
+- `--expires 30s`, `15m` or `2h` sets how long the code works. The default is 15 minutes. A used or expired code gets "the daemon refused this code"; ask for a new one.
+- `muster-shim pairing` shows a machine's pairing with its token masked.
+- `muster-shim pair` still accepts a `muster-pair:v1:` code from an older daemon. Those hold the token itself, so pair again to retire one that has been seen.
 - `muster-daemon pairs` lists paired machines, and `muster-daemon unpair a1` revokes one. Its open connections close within seconds and new ones are refused; nothing needs restarting.
 - `muster-shim unpair` removes a machine's own pairing.
-- Pairing again under the same name replaces that machine's token.
+- Pairing again under the same name replaces that machine's token, so that machine's running sessions lose their connection until they restart. This is also how to rotate a machine's token.
 - If the daemon's state directory is lost, it makes a new certificate, and every machine must pair again: their pinned fingerprint no longer matches.
 
 A paired shim never sends anything unencrypted. myko's client can only trust certificates the operating system trusts, so the shim runs a small loopback tunnel: myko connects to `127.0.0.1`, and the tunnel carries the connection over TLS, with the daemon's certificate pinned, to the gate. The hooks make the same pinned TLS connection themselves. Codex, Pi, opencode and Prime Agent clients don't support pairing yet.
