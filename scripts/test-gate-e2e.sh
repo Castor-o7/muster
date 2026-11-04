@@ -177,6 +177,16 @@ HELD=$!
 sleep 1
 OUT=$(ROSTER)
 check "roster reports a held wait as observed" '[[ $(FIELD "$OUT" "r[\"wake\"]") == waiting && $(FIELD "$OUT" "r[\"observed\"][\"waiting\"]") == True ]]'
+# The operator pauses wake-ups, and the roster says so (MUS-10).
+OUT=$(T $BIN/muster-daemon pause 2>&1)
+check "pause says what it does" '[[ $OUT == *"wake-ups are paused"* ]]'
+sleep 3
+PAUSED=$(ROSTER | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["wakes_paused"])')
+check "and the roster shows wake-ups paused" '[[ $PAUSED == True ]]'
+T $BIN/muster-daemon resume >/dev/null
+sleep 3
+PAUSED=$(ROSTER | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["wakes_paused"])')
+check "and on again after resume" '[[ $PAUSED == False ]]'
 kill $HELD 2>/dev/null; wait $HELD 2>/dev/null
 
 # A dropped path: mail handed out but never acked comes back, and an ack ends it.

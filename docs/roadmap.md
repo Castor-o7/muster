@@ -14,11 +14,11 @@ evidence from a real run by the person or team named.
 
 ## Status
 
-2026-11-04: 26 of 57 stories ticked, about 46%, not counting the 3 moved to Rally. Live on
+2026-11-04: 27 of 57 stories ticked, about 47%, not counting the 3 moved to Rally. Live on
 Murph since 2026-11-04 16:02:18: `14e2d1a`, deployed by Lamplighter on the operator's word, with
 every port check passing. It carries MUS-7 (first live at `3746864`, 14:28) and MUS-59, besides
 everything before. Merged and waiting for the next daemon restart: MUS-8 (which also needs a
-rebuilt shim wherever a machine next pairs), MUS-9 and MUS-60. Sessions pick up a rebuilt shim
+rebuilt shim wherever a machine next pairs), MUS-9, MUS-10 and MUS-60. Sessions pick up a rebuilt shim
 when they restart, and no keyed send (MUS-29) has been seen live yet. Verified live on 2026-11-04:
 MUS-4, MUS-7, MUS-34, MUS-35, MUS-54 and MUS-57. Merged, live and not yet verified: MUS-46,
 MUS-48, MUS-50 (its live half needs a session that loses its binding), MUS-55 and MUS-59.
@@ -284,8 +284,16 @@ Merged and needing a live run: MUS-36 and MUS-37.
   the first gets back in once its connections close). Live on Murph only after a daemon restart.
   The message limit is per session, so a machine with many sessions (it can register any number
   of its own) gets that many allowances; a per-machine total is MUS-60.
-- [ ] **MUS-10: Treat peer messages as untrusted.** Done when: the operator can
+- [x] **MUS-10: Treat peer messages as untrusted.** Done when: the operator can
   set sender allowlists and pause all wake-ups.
+  Done 2026-11-04 by gentle-pulsar: `muster-daemon pause` and `resume` stop and restart every
+  wake-up (held waits hand out nothing and no live push goes out, while mail is kept and seen on
+  the next prompt), and `allow`, `disallow` and `senders` set which machines may send. The
+  daemon's own host is always allowed. Both are files in the state directory that the daemon
+  applies within 2 s, and the pause shows on rosters as `wakes_paused`. Shown by
+  `crates/daemon/tests/pause_and_allow.rs`, the unit tests in `crates/daemon/src/controls.rs`, and
+  three checks in `scripts/test-gate-e2e.sh`. Limit: any process on the operator's account can
+  change those files, so this is only as strong as that account until MUS-39.
 - [ ] **MUS-11: Audit dependencies and write the threat model.** Done when: CI
   runs `cargo audit` or `cargo deny`, and the threat model is in `docs/`.
 - [ ] **MUS-12: Give the watchman a read-only GitHub token.** Done when: the

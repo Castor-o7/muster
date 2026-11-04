@@ -101,6 +101,8 @@ impl CommandHandler for BroadcastMessage {
         let sessions: Vec<Arc<Session>> = ctx.exec_query(GetAllSessions {})?;
         let sender = resolve_caller(&ctx, &sessions, self.as_session.as_ref())?;
         // One broadcast spends one message of the sender's allowance (MUS-9).
+        crate::controls::sender_allowed(sender.host.as_ref().map(|h| h.name.as_str()))
+            .map_err(|why| err(&ctx, &why))?;
         crate::rate::take(
             sender.id.0.as_ref(),
             sender.host.as_ref().map(|h| h.name.as_str()),

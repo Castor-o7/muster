@@ -21,6 +21,7 @@ const QUERIES: &[&str] = &[
     "GetAllRoomMembers",
     "GetAllSessionNicknames",
     "GetAllWakeWatchers",
+    "GetAllWakePauses",
 ];
 
 /// Commands that act as the connection's session, or as `asSession` if named.

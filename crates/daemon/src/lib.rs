@@ -9,6 +9,7 @@
 
 pub mod auto_rooms;
 pub mod cleanup;
+pub mod controls;
 pub mod credentials;
 pub mod gate;
 pub mod gate_filter;
