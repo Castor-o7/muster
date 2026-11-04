@@ -14,12 +14,13 @@ evidence from a real run by the person or team named.
 
 ## Status
 
-2026-11-03: 14 of 51 stories ticked, about 27%, not counting the 3 moved to Rally. Live on
-Murph since 2026-11-03: `c3dbd45`, which includes MUS-4, MUS-5, MUS-6, MUS-29, MUS-33,
-MUS-34, MUS-35, MUS-40, MUS-44, MUS-50 and MUS-53. Sessions pick up a rebuilt shim when they
-restart, and no keyed send (MUS-29) has been seen live yet. Merged, live and not yet
-verified: MUS-4, MUS-34, MUS-35 and MUS-50. Merged and needing a live run: MUS-36 and
-MUS-37. Merged and waiting for the next daemon restart: MUS-54.
+2026-11-03: 16 of 52 stories ticked, about 31%, not counting the 3 moved to Rally. Live on
+Murph since 2026-11-03 16:22: `5a19735`, which adds MUS-54 to what `c3dbd45` carried (MUS-4,
+MUS-5, MUS-6, MUS-29, MUS-33, MUS-34, MUS-35, MUS-40, MUS-44, MUS-50 and MUS-53). Sessions pick
+up a rebuilt shim when they restart, and no keyed send (MUS-29) has been seen live yet. Merged,
+live and not yet verified: MUS-4, MUS-34, MUS-35, MUS-50 and MUS-54. Merged and needing a live
+run: MUS-36 and MUS-37. Merged and waiting for the next daemon restart: MUS-46, MUS-48 (which
+also needs a rebuilt shim to be seen), and MUS-55's graceful stop.
 
 ## Decisions
 
@@ -100,14 +101,14 @@ MUS-37. Merged and waiting for the next daemon restart: MUS-54.
 - [x] **MUS-45: Pin what `del_by_id` cascades.** From MUS-31, and do this first: the
   cause there is from reading the code. Done when: a test shows whether reaping a
   session leaves its mail live until the next boot, and fails if myko changes that.
-- [ ] **MUS-46: Keep mail to a reaped session.** From MUS-31. Don't just switch to a
+- [x] **MUS-46: Keep mail to a reaped session.** From MUS-31. Don't just switch to a
   cascading delete, which loses mail sooner. Done when: tests show a restart after a
   reap removes no message under 14 days old, and a session returning under its old
   id doesn't get read mail again (`MessageRead` also belongs to `Session`).
 - [ ] **MUS-47: Hand unread mail to a successor.** From MUS-31. Retained mail reaches
   nobody without this. Depends on MUS-3. Done when: a session taking over an identity
   receives its predecessor's unread mail, shown by a test.
-- [ ] **MUS-48: Tell a sender about mail unread at reap.** From MUS-31. Done when: a
+- [x] **MUS-48: Tell a sender about mail unread at reap.** From MUS-31. Done when: a
   sender can see that a message went unread when its recipient was reaped.
 - [x] **MUS-49: Report what a restart will remove.** From MUS-31: one restart is now
   due to remove 422 messages. Done when: the operator can see the count before
