@@ -14,11 +14,12 @@ evidence from a real run by the person or team named.
 
 ## Status
 
-2026-11-04: 27 of 57 stories ticked, about 47%, not counting the 3 moved to Rally. Live on
+2026-11-04: 28 of 58 stories ticked, about 48%, not counting the 3 moved to Rally. Live on
 Murph since 2026-11-04 16:02:18: `14e2d1a`, deployed by Lamplighter on the operator's word, with
 every port check passing. It carries MUS-7 (first live at `3746864`, 14:28) and MUS-59, besides
 everything before. Merged and waiting for the next daemon restart: MUS-8 (which also needs a
-rebuilt shim wherever a machine next pairs), MUS-9, MUS-10 and MUS-60. Sessions pick up a rebuilt shim
+rebuilt shim wherever a machine next pairs), MUS-9, MUS-10, MUS-60, and MUS-11's rustls
+and tokio security updates. Sessions pick up a rebuilt shim
 when they restart, and no keyed send (MUS-29) has been seen live yet. Verified live on 2026-11-04:
 MUS-4, MUS-7, MUS-34, MUS-35, MUS-54 and MUS-57. Merged, live and not yet verified: MUS-46,
 MUS-48, MUS-50 (its live half needs a session that loses its binding), MUS-55 and MUS-59.
@@ -33,7 +34,7 @@ Merged and needing a live run: MUS-36 and MUS-37.
   concept of a story or a stall.
 
 - **Threat model.** Muster defends against a malicious website, and against one
-  compromised session or paired machine. All machines belong to one operator.
+  compromised session or paired machine; see [threat-model.md](threat-model.md). All machines belong to one operator.
   Other people with accounts on those machines are the next step, not yet in
   scope.
 - **Networks beyond the LAN.** Use Tailscale or WireGuard. The gate is not
@@ -294,8 +295,13 @@ Merged and needing a live run: MUS-36 and MUS-37.
   `crates/daemon/tests/pause_and_allow.rs`, the unit tests in `crates/daemon/src/controls.rs`, and
   three checks in `scripts/test-gate-e2e.sh`. Limit: any process on the operator's account can
   change those files, so this is only as strong as that account until MUS-39.
-- [ ] **MUS-11: Audit dependencies and write the threat model.** Done when: CI
+- [x] **MUS-11: Audit dependencies and write the threat model.** Done when: CI
   runs `cargo audit` or `cargo deny`, and the threat model is in `docs/`.
+  Done 2026-11-04 by gentle-pulsar: CI runs `cargo deny check` (advisories, licences, bans and
+  sources) from `deny.toml`, and the threat model is `docs/threat-model.md`. The first run found
+  five rustls advisories (the gate's TLS) and one each in rustls-webpki, tokio, ctutils and
+  webpki-roots, all fixed here by in-range updates. Three unmaintained build-time crates are
+  ignored with reasons, and four unlicensed web UI dependencies are excluded, which is MUS-61.
 - [ ] **MUS-12: Give the watchman a read-only GitHub token.** Done when: the
   watchman can verify a story in all three repositories and a merge attempt with
   its token is refused. Needs a run: the operator, who holds the token.
@@ -313,6 +319,12 @@ Merged and needing a live run: MUS-36 and MUS-37.
   a session with no host gets no machine bucket, and a session through the local gate keeps the
   host name it claims, so a process on the daemon's host could skip the shared limit or spend
   another machine's by claiming its name.
+- [ ] **MUS-61: License or replace the web UI's unlicensed dependencies.** From MUS-11. `mullion`,
+  `css-styled`, `css-styled-derive` and `css-spec-data`, from ignition-is-go's git repositories,
+  declare no licence, so Muster has no stated permission to use them. `deny.toml` excludes them
+  from the check, which also hides rkyv 0.7 under them. Open for the operator: ask their authors
+  for a licence, or drop or replace them in `crates/ui`. Done when: `deny.toml` excludes nothing.
+
 ## Phase 3: Portability
 
 - [ ] **MUS-13: Run CI on macOS.** Done when: CI runs on macOS and passes,

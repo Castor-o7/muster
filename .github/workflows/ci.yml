@@ -57,3 +57,16 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config mingw-w64
       - name: Cross-compile the Windows shim
         run: cargo check -p muster-shim --target x86_64-pc-windows-gnu
+
+  # Dependency audit (MUS-11): advisories, licences, bans and sources, as
+  # configured in deny.toml. Every ignored advisory there says why. cargo-deny
+  # is built from crates.io at a pinned version, so no third-party action runs.
+  dependency-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install --locked cargo-deny --version 0.20.2
+      - run: cargo deny check
