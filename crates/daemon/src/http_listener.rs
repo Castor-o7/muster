@@ -79,18 +79,28 @@ pub async fn run_until(
 ) -> std::io::Result<()> {
     let listener = TcpListener::bind(bind).await?;
     log::info!("muster hook listener on http://{bind} (/hook/*)");
+    let limiter =
+        crate::limits::ConnLimiter::from_env(crate::limits::HOOKS.0, crate::limits::HOOKS.1);
     loop {
-        let (stream, _peer) = match listener.accept().await {
+        let (mut stream, peer) = match listener.accept().await {
             Ok(pair) => pair,
             Err(e) => {
                 log::warn!("[hook] accept error: {e}");
                 continue;
             }
         };
+        let Some(place) = limiter.try_acquire("hooks") else {
+            log::warn!("[hook] refused {peer}: {} connections open", limiter.max());
+            tokio::spawn(async move {
+                let _ = write_response(&mut stream, 503, "too many connections").await;
+            });
+            continue;
+        };
         let ctx = ctx.clone();
         let access = access.clone();
         let stopping = stopping.clone();
         tokio::spawn(async move {
+            let _place = place;
             if let Err(e) = handle_conn(stream, ctx, access, stopping).await {
                 log::debug!("[hook] connection error: {e}");
             }

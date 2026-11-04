@@ -27,6 +27,7 @@ use tokio_tungstenite::{WebSocketStream, tungstenite::protocol::Role};
 
 use crate::credentials;
 use crate::gate_filter::{self, Refused};
+use crate::limits::{self, ConnLimiter};
 
 /// The WebSocket route the shim uses. It's the only myko route open to paired
 /// machines.
@@ -100,16 +101,23 @@ pub async fn serve_local(listener: TcpListener, config: LocalGateConfig) -> std:
         listener.local_addr()?
     );
     let config = Arc::new(config);
+    let limiter = ConnLimiter::from_env(limits::LOCAL.0, limits::LOCAL.1);
     loop {
-        let (tcp, peer) = match listener.accept().await {
+        let (mut tcp, peer) = match listener.accept().await {
             Ok(pair) => pair,
             Err(e) => {
                 log::warn!("[local] accept error: {e}");
                 continue;
             }
         };
+        let Some(place) = limiter.try_acquire("local") else {
+            log::warn!("[local] refused {peer}: {} connections open", limiter.max());
+            tokio::spawn(async move { respond(&mut tcp, "503 Service Unavailable").await });
+            continue;
+        };
         let config = config.clone();
         tokio::spawn(async move {
+            let _place = place;
             if let Err(e) = handle_local(tcp, peer, &config).await {
                 log::debug!("[local] {peer}: {e}");
             }
@@ -178,6 +186,8 @@ pub async fn serve(listener: TcpListener, config: GateConfig) -> std::io::Result
             .unwrap_or_else(|e| format!("unreadable ({e})"))
     );
     let config = Arc::new(config);
+    let per_ip = ConnLimiter::from_env(limits::PER_IP.0, limits::PER_IP.1);
+    let per_machine = ConnLimiter::from_env(limits::PER_MACHINE.0, limits::PER_MACHINE.1);
     loop {
         let (tcp, peer) = match listener.accept().await {
             Ok(pair) => pair,
@@ -186,9 +196,20 @@ pub async fn serve(listener: TcpListener, config: GateConfig) -> std::io::Result
                 continue;
             }
         };
-        let (acceptor, config) = (acceptor.clone(), config.clone());
+        // Before TLS there's no way to answer, so a peer past its cap is just
+        // closed (MUS-9).
+        let Some(place) = per_ip.try_acquire(&peer.ip().to_string()) else {
+            log::warn!(
+                "[gate] refused {peer}: {} connections open from it",
+                per_ip.max()
+            );
+            continue;
+        };
+        let (acceptor, config, per_machine) =
+            (acceptor.clone(), config.clone(), per_machine.clone());
         tokio::spawn(async move {
-            if let Err(e) = handle(tcp, peer, acceptor, &config).await {
+            let _place = place;
+            if let Err(e) = handle(tcp, peer, acceptor, &config, &per_machine).await {
                 log::debug!("[gate] {peer}: {e}");
             }
         });
@@ -214,6 +235,7 @@ async fn handle(
     peer: SocketAddr,
     acceptor: TlsAcceptor,
     config: &GateConfig,
+    per_machine: &Arc<ConnLimiter>,
 ) -> std::io::Result<()> {
     let (mut tls, head, rest) = tokio::time::timeout(HANDSHAKE_TIMEOUT, async {
         let mut tls = acceptor.accept(tcp).await?;
@@ -238,6 +260,15 @@ async fn handle(
     else {
         log::warn!("[gate] rejected {peer}: missing or unknown token");
         return respond(&mut tls, "401 Unauthorized").await;
+    };
+    // One machine flooding the gate is turned away; others keep their own
+    // places (MUS-9).
+    let Some(_place) = per_machine.try_acquire(&name) else {
+        log::warn!(
+            "[gate] refused {name}: {} connections open",
+            per_machine.max()
+        );
+        return respond(&mut tls, "503 Service Unavailable").await;
     };
 
     let is_hook = request.path().starts_with("/hook/");

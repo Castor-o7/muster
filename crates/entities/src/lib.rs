@@ -23,6 +23,7 @@ mod message_read;
 mod nickname;
 mod notify;
 pub mod pairing;
+pub mod rate;
 mod read_messages;
 mod room;
 mod room_member;

@@ -93,6 +93,15 @@ The daemon has three listeners. Only the gate is meant to be reachable from othe
 
 To accept sessions from other machines, set `MUSTER_BIND=0.0.0.0:6255` (or a LAN/mesh address) and pair each machine (below). Tools running on the daemon's own host, like the shim and the TUI, connect to the local gate on `ws://127.0.0.1:6257` with the **local token**: the daemon writes it owner-only to `~/.config/muster/local-token` (under `$XDG_CONFIG_HOME` if set) on first start, and the shim and TUI read it from there. A process that can't read that file gets `401`, and any request naming a browser `Origin` gets `403`, on the hook listener, the local gate, and myko's own listener. myko's listener admits only requests a gate forwarded, through a request filter in the patched myko-server under `vendor/myko-server` (MUS-59).
 
+**Limits (MUS-9).** Each session may send a burst of 20 messages, then 30 a minute; past that, a send gets "too many messages from this session" and says when to retry. A broadcast counts as one. Connections are capped per listener, and a refused connection gets `503`:
+
+| Variable | Default | Caps |
+|---|---|---|
+| `MUSTER_MAX_CONN_PER_IP` | 128 | connections one IP holds on the gate, before and after the token check (past it, the connection is closed) |
+| `MUSTER_MAX_CONN_PER_MACHINE` | 64 | connections one paired machine holds on the gate |
+| `MUSTER_MAX_CONN_LOCAL` | 256 | connections on the local gate |
+| `MUSTER_MAX_CONN_HOOKS` | 256 | connections on the hook listener |
+
 The daemon keeps its TLS certificate and the paired machines' token hashes in `MUSTER_STATE_DIR` (default `~/.local/state/muster`). Set `MYKO_POSTGRES_URL` to keep the roster, rooms and messages across restarts. Without it the daemon runs in memory and starts empty each time.
 
 ### 2b. Pair each machine
