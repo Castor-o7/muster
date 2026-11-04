@@ -64,6 +64,29 @@ pub struct LocalGateConfig {
     pub local_token: String,
 }
 
+/// The check myko's own listener runs on every request (MUS-59): no browser
+/// `Origin`, and the host's local token as `Authorization: Bearer`, which only
+/// the two gates add when they forward. So nothing reaches myko except through
+/// a gate, whatever port it listens on.
+pub fn myko_request_filter(local_token: String) -> myko_server::router::RequestFilter {
+    std::sync::Arc::new(move |head: &myko_server::router::HttpRequestHead, addr| {
+        if head.header("origin").is_some() {
+            log::warn!("[myko] refused {addr}: a browser origin");
+            return Err((403, "Forbidden"));
+        }
+        let presented = head
+            .header("authorization")
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .map(str::trim)
+            .unwrap_or_default();
+        if !credentials::local_token_matches(&local_token, presented) {
+            log::warn!("[myko] refused {addr}: not forwarded by a gate");
+            return Err((401, "Unauthorized"));
+        }
+        Ok(())
+    })
+}
+
 /// Bind the local gate and serve forever. Spawn on a tokio task.
 pub async fn run_local(config: LocalGateConfig) -> std::io::Result<()> {
     let listener = TcpListener::bind(config.bind).await?;
@@ -123,7 +146,11 @@ async fn handle_local(
     }
     let mut upstream = TcpStream::connect(config.myko).await?;
     upstream
-        .write_all(request.forwarded_head().as_bytes())
+        .write_all(
+            request
+                .forwarded_head_to_myko(&config.local_token)
+                .as_bytes(),
+        )
         .await?;
     filter_websocket(tcp, upstream, credentials::LOCAL_MACHINE, &config.state_dir).await
 }
@@ -237,7 +264,11 @@ async fn handle(
         };
     }
     upstream
-        .write_all(request.forwarded_head().as_bytes())
+        .write_all(
+            request
+                .forwarded_head_to_myko(&config.local_token)
+                .as_bytes(),
+        )
         .await?;
     tokio::select! {
         r = filter_websocket(tls, upstream, &name, &config.state_dir) => r,
@@ -452,6 +483,21 @@ impl Request {
         Request {
             method: self.method.clone(),
             target,
+            version: self.version.clone(),
+            headers,
+            token: None,
+        }
+        .forwarded_head()
+    }
+
+    /// The head for myko's own listener, which admits only requests carrying
+    /// the local token (MUS-59). The client's own token was stripped in `parse`.
+    fn forwarded_head_to_myko(&self, local_token: &str) -> String {
+        let mut headers = self.headers.clone();
+        headers.push(format!("Authorization: Bearer {local_token}"));
+        Request {
+            method: self.method.clone(),
+            target: self.target.clone(),
             version: self.version.clone(),
             headers,
             token: None,

@@ -14,7 +14,7 @@ evidence from a real run by the person or team named.
 
 ## Status
 
-2026-11-04: 21 of 55 stories ticked, about 38%, not counting the 3 moved to Rally. Live on
+2026-11-04: 23 of 55 stories ticked, about 42%, not counting the 3 moved to Rally. Live on
 Murph since 2026-11-03 22:40:57: `e797fa3`, deployed with `rollout.sh` and confirmed by Lamplighter
 from the sha256 of the installed binaries against that stage's `SHA256SUMS`. It carries every code
 change on main, so MUS-46, MUS-48 and MUS-55's graceful stop, which were waiting for a restart, are
@@ -164,7 +164,7 @@ and MUS-55. Merged and needing a live run: MUS-36 and MUS-37.
   approval with a valid signed token is accepted for exactly its action; a forged, expired,
   reused or mismatched one is refused; and a session on the operator's account can't produce a
   valid one. Each is shown by a test.
-- [ ] **MUS-7: Protect the local ports.** The first step of MUS-39. 6256 and 6257 have no
+- [x] **MUS-7: Protect the local ports.** The first step of MUS-39. 6256 and 6257 have no
   authentication, and the hook listener doesn't check `Origin`, so any process on the daemon's
   host, or a web page in its browser, can reach them. Done when: a test shows a cross-origin web
   page can't reach either port, including by WebSocket, and a local process without
@@ -177,12 +177,22 @@ and MUS-55. Merged and needing a live run: MUS-36 and MUS-37.
   `crates/daemon/tests/local_access.rs`. Not ticked: myko's own listener on 6258 still takes
   anyone on the host, which is MUS-59; until then a local process can still act as a session by
   dialing it.
-- [ ] **MUS-59: Guard myko's own listener.** From MUS-7. myko-server binds its WebSocket/MCP
+  Done 2026-11-04 with MUS-59: no port on the daemon's host now answers a browser origin or a
+  local process without the local token. Shown by `local_access.rs`, `myko_filter.rs` and the
+  gate end-to-end script. The 6258 half is live only after the next daemon restart.
+- [x] **MUS-59: Guard myko's own listener.** From MUS-7. myko-server binds its WebSocket/MCP
   listener itself and checks nothing, so a process on the daemon's host can dial it and skip the
   local gate. myko offers no accept hook or origin check, so this needs one upstream, a patched
   copy, or a listener the daemon owns and hands connections to. Done when: a process without the
   local token can't reach myko by any port, shown by a test, and the README's port table has no
   unguarded row.
+  Done 2026-11-04 by gentle-pulsar, with option (c) as the operator chose: a patched
+  myko-server in `vendor/myko-server` (AGPL-3.0-or-later, see its `MUSTER-PATCH.md`) adds a
+  request filter, and the daemon's filter on myko's own listener refuses any browser `Origin`
+  (403) and anything without the local token (401), which only the gates add. Shown by
+  `crates/daemon/tests/myko_filter.rs` and three checks in `scripts/test-gate-e2e.sh`. The patch
+  is dropped once upstream myko-server ships an equivalent hook; that request goes through the
+  watchman first. Live on Murph only after the next daemon restart.
 - [ ] **MUS-56: Let only authorized devices reach Murph's ports.** Requested by the operator on
   2026-11-03. Murph's firewall (`/etc/nftables.conf`) opens 6255 to the whole `192.168.1.0/24`,
   and Rally's 6300 isn't open at all, so a1 can't reach it. The services already refuse a
