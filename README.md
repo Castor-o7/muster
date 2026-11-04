@@ -71,9 +71,11 @@ To stop it, send SIGTERM (what `systemctl stop` and `restart` do) or press Ctrl-
 To roll a commit on main out to a systemd-managed daemon, use `scripts/rollout.sh`.
 `rollout.sh preflight <commit>` builds it from a fresh tree, runs the gate end-to-end
 test, stages the binaries with checksums and runs `scripts/restart-preview.sh`, without
-changing anything. `rollout.sh apply <commit> --operator-approved` backs up the binaries,
+changing anything; that's where the operator sees what the restart will remove, since `apply`
+doesn't stop for it. `rollout.sh apply <commit> --operator-approved` backs up the binaries,
 unit and database (test-restoring the dump), installs and restarts, checks the unit and
-its three ports, and rolls back to the previous binary if they aren't healthy.
+its three ports, confirms the running process is the staged binary, and rolls back to the
+previous binary if any of that fails.
 `scripts/test-rollout.sh` checks the rollback against a throwaway unit.
 
 The daemon has three listeners. Only the gate is meant to be reachable from other machines:

@@ -41,12 +41,14 @@ port_of() { print -r -- "${1##*:}"; }
 listening() { ss -Hltn "sport = :$1" | grep -q .; }
 
 # The daemon is healthy when the unit is active, hasn't restarted since `$1`,
-# and all three listeners accept connections.
+# runs the binary `$2`, and all three listeners accept connections.
 healthy() {
-  local restarts_before=$1 now
+  local restarts_before=$1 expected=$2 now pid
   [[ $(systemctl --user is-active "$UNIT") == active ]] || { say "unit not active"; return 1; }
   now=$(systemctl --user show "$UNIT" -p NRestarts --value)
   (( now == restarts_before )) || { say "unit restarted itself ($restarts_before -> $now)"; return 1; }
+  pid=$(systemctl --user show "$UNIT" -p MainPID --value)
+  cmp -s "/proc/$pid/exe" "$expected" || { say "PID $pid isn't running $expected"; return 1; }
   local bind
   # Unset, each takes the daemon's default port.
   local gate=$(unit_env MUSTER_BIND) hook=$(unit_env MUSTER_HOOK_BIND) internal=$(unit_env MUSTER_INTERNAL_BIND)
@@ -151,7 +153,7 @@ apply() {
   say "restarting $UNIT"
   systemctl --user restart "$UNIT" || say "restart failed"
   sleep "$HEALTH_WAIT"
-  if ! healthy "$restarts"; then
+  if ! healthy "$restarts" "$stage/muster-daemon"; then
     say "UNHEALTHY; rolling back to the previous binary"
     swap_in "$dir/muster-daemon.old"
     # A crashing binary can trip systemd's start limit, which would refuse the
@@ -160,7 +162,7 @@ apply() {
     restarts=$(systemctl --user show "$UNIT" -p NRestarts --value)
     systemctl --user restart "$UNIT" || say "restart of the previous binary failed"
     sleep "$HEALTH_WAIT"
-    if healthy "$restarts"; then
+    if healthy "$restarts" "$dir/muster-daemon.old"; then
       die "ROLLED BACK: $UNIT is running the previous binary again; backup in $dir"
     fi
     die "ROLLBACK FAILED: $UNIT is unhealthy on the previous binary too; backup in $dir"
