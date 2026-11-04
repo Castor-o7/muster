@@ -132,16 +132,19 @@ pub fn read_local_token() -> Option<String> {
 /// through this, and the daemon runs message bodies through it, so a secret
 /// pasted by mistake never reaches a transcript or the model API.
 pub fn redact(text: &str) -> std::borrow::Cow<'_, str> {
-    const MARKERS: [&str; 2] = [PREFIX, "Bearer "];
-    if !MARKERS.iter().any(|m| text.contains(m)) {
+    const MARKERS: [&str; 2] = [PREFIX, "bearer "];
+    // Markers are matched without regard to case, so `bearer ` and `BEARER `
+    // are masked too; the text itself is copied as written.
+    let lower = text.to_ascii_lowercase();
+    if !MARKERS.iter().any(|m| lower.contains(m)) {
         return std::borrow::Cow::Borrowed(text);
     }
     let mut out = String::with_capacity(text.len());
-    let mut rest = text;
+    let (mut rest, mut rest_lower) = (text, lower.as_str());
     loop {
         let next = MARKERS
             .iter()
-            .filter_map(|m| rest.find(m).map(|i| (i, *m)))
+            .filter_map(|m| rest_lower.find(m).map(|i| (i, *m)))
             .min_by_key(|(i, _)| *i);
         let Some((idx, marker)) = next else {
             out.push_str(rest);
@@ -157,6 +160,7 @@ pub fn redact(text: &str) -> std::borrow::Cow<'_, str> {
             out.push_str("<redacted>");
         }
         rest = &after[secret..];
+        rest_lower = &rest_lower[idx + marker.len() + secret..];
     }
 }
 
@@ -239,6 +243,14 @@ mod tests {
         assert_eq!(
             redact(body),
             "try Authorization: Bearer <redacted> then retry; Bearer <redacted>"
+        );
+    }
+
+    #[test]
+    fn masks_a_bearer_token_whatever_its_case() {
+        assert_eq!(
+            redact("header: bearer abc and BEARER def"),
+            "header: bearer <redacted> and BEARER <redacted>"
         );
     }
 
