@@ -59,13 +59,14 @@ jobs:
         run: cargo check -p muster-shim --target x86_64-pc-windows-gnu
 
   # Dependency audit (MUS-11): advisories, licences, bans and sources, as
-  # configured in deny.toml. Every ignored advisory there says why.
+  # configured in deny.toml. Every ignored advisory there says why. cargo-deny
+  # is built from crates.io at a pinned version, so no third-party action runs.
   dependency-audit:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - uses: EmbarkStudios/cargo-deny-action@v2
-        with:
-          command: check
-          arguments: --all-features
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install --locked cargo-deny --version 0.20.2
+      - run: cargo deny check --all-features
