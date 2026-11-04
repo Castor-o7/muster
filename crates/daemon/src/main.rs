@@ -41,7 +41,11 @@ usage:
   muster-daemon pair --name NAME [--address HOST:PORT] [--expires 15m]
                                       print a one-time pairing code for a machine
   muster-daemon unpair NAME           revoke a machine's access
-  muster-daemon pairs                 list paired machines";
+  muster-daemon pairs                 list paired machines
+  muster-daemon pause | resume        stop or restart message wake-ups
+  muster-daemon allow MACHINE         let only listed machines send (and this host)
+  muster-daemon disallow MACHINE      take a machine off that list
+  muster-daemon senders [--clear]     show the list, or remove it so any machine may send";
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -68,6 +72,45 @@ fn main() -> Result<()> {
             }
             for name in names {
                 println!("{name}");
+            }
+            Ok(())
+        }
+        Some("pause" | "resume") if args.len() == 1 => {
+            let dir = daemon::credentials::state_dir()?;
+            let pause = args[0] == "pause";
+            daemon::controls::set_paused(&dir, pause)?;
+            if pause {
+                println!(
+                    "wake-ups are paused: no message wakes a session until `muster-daemon resume`. \
+                     Mail is still kept, and sessions see it when someone types to them."
+                );
+            } else {
+                println!("wake-ups are on");
+            }
+            println!(
+                "(the running daemon applies this within {} s)",
+                daemon::controls::REFRESH.as_secs()
+            );
+            Ok(())
+        }
+        Some(cmd @ ("allow" | "disallow")) => match args.get(1) {
+            Some(machine) if args.len() == 2 => {
+                let dir = daemon::credentials::state_dir()?;
+                let list = daemon::controls::set_allowed(&dir, machine, cmd == "allow")?;
+                print_senders(Some(list));
+                Ok(())
+            }
+            _ => anyhow::bail!("{USAGE}"),
+        },
+        Some("senders") => {
+            let dir = daemon::credentials::state_dir()?;
+            match args.get(1).map(String::as_str) {
+                None => print_senders(daemon::controls::allowed(&dir)),
+                Some("--clear") if args.len() == 2 => {
+                    daemon::controls::clear_allowed(&dir)?;
+                    print_senders(None);
+                }
+                _ => anyhow::bail!("{USAGE}"),
             }
             Ok(())
         }
@@ -121,6 +164,25 @@ fn pair(args: &[String]) -> Result<()> {
         describe_duration(ttl)
     );
     Ok(())
+}
+
+/// Say who may send, after a change to the allowlist (MUS-10).
+fn print_senders(list: Option<Vec<String>>) {
+    let host = daemon::controls::this_host().unwrap_or_else(|| "this host".into());
+    match list {
+        None => println!("any machine may send"),
+        Some(list) if list.is_empty() => {
+            println!("only {host} may send (this host is always allowed)")
+        }
+        Some(list) => println!(
+            "only these machines may send: {} (and {host}, which is always allowed)",
+            list.join(", ")
+        ),
+    }
+    println!(
+        "(the running daemon applies this within {} s)",
+        daemon::controls::REFRESH.as_secs()
+    );
 }
 
 /// How long a pairing code works when `--expires` isn't given (MUS-8).
@@ -197,6 +259,8 @@ async fn run_daemon() -> Result<()> {
         // A wait dies with the daemon, so there's nothing to replay, and a held
         // wait's refreshes shouldn't grow the event table (lv-6731).
         .with_persister_override("WakeWatcher", blackhole.clone())
+        // Rebuilt from the state directory at start (MUS-10).
+        .with_persister_override("WakePause", blackhole.clone())
         .with_persister_override("Session", session_filter.clone())
         .with_server_info(muster_server_info())
         // Only the gates reach myko (MUS-59); see `gate::myko_request_filter`.
@@ -238,6 +302,8 @@ async fn run_daemon() -> Result<()> {
     // Spawn the periodic sweeper. WS-shim sessions reap on client loss +
     // grace; pull/hook sessions reap on the activity backstop. See cleanup.
     tokio::spawn(daemon::cleanup::run_sweeper(server.ctx()));
+    // The operator's pause and sender allowlist (MUS-10).
+    tokio::spawn(daemon::controls::run(state_dir.clone(), server.ctx()));
 
     // Spawn muster's own plain-HTTP listener for the Claude Code `/hook/*`
     // endpoints. Shares the server ctx (same registry + event log); stock

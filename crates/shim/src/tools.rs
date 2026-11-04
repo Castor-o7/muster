@@ -51,6 +51,8 @@ pub struct ToolHost {
     pub nicknames_cell: Cell<Vec<Arc<muster_entities::SessionNickname>>, CellImmutable>,
     /// Which sessions the daemon sees holding a wait, for the roster's `wake`.
     pub wake_watchers_cell: Cell<Vec<Arc<muster_entities::WakeWatcher>>, CellImmutable>,
+    /// Whether the operator has paused wake-ups (MUS-10).
+    pub wake_pause_cell: Cell<Vec<Arc<muster_entities::WakePause>>, CellImmutable>,
 }
 
 /// The daemon-assigned handle for `session_id`, read from the SessionNickname
@@ -268,7 +270,12 @@ fn read_roster(host: &ToolHost, uri: &str) -> ResourceContent {
             })
         })
         .collect();
-    json_resource(uri, json!({ "sessions": view }))
+    // While true, no message wakes any session, whatever its `wake` says (MUS-10).
+    let wakes_paused = host.wake_pause_cell.get().iter().any(|p| p.paused);
+    json_resource(
+        uri,
+        json!({ "wakes_paused": wakes_paused, "sessions": view }),
+    )
 }
 
 fn read_rooms(host: &ToolHost, uri: &str) -> ResourceContent {
