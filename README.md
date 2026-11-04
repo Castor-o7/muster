@@ -112,7 +112,7 @@ muster-daemon disallow a1
 muster-daemon senders            # show the list; `senders --clear` lets any machine send again
 ```
 
-The daemon's own host is always allowed, so an allowlist never cuts off the sessions running beside it. A session with no machine on its row is refused while a list is set. While wake-ups are paused, `muster://roster` and `muster-shim roster` report `"wakes_paused": true`. These files live in the state directory, so any process on the operator's account can change them; until MUS-39, that's the limit of this control.
+The daemon's own host is always allowed, so an allowlist never cuts off the sessions running beside it. Machine names are compared without regard to case. The daemon names its own host the way the shim does, from `MUSTER_HOST` or the hostname up to its first dot, and `senders` prints that name, so you can check it matches what the roster shows for sessions there. A session with no machine on its row is refused while a list is set. While wake-ups are paused, `muster://roster` and `muster-shim roster` report `"wakes_paused": true`. These files live in the state directory, so any process on the operator's account can change them; until MUS-39, that's the limit of this control.
 
 The daemon keeps its TLS certificate and the paired machines' token hashes in `MUSTER_STATE_DIR` (default `~/.local/state/muster`). Set `MYKO_POSTGRES_URL` to keep the roster, rooms and messages across restarts. Without it the daemon runs in memory and starts empty each time.
 
