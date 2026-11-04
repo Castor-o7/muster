@@ -18,7 +18,8 @@ evidence from a real run by the person or team named.
 Murph since 2026-11-04 16:02:18: `14e2d1a`, deployed by Lamplighter on the operator's word, with
 every port check passing. It carries MUS-7 (first live at `3746864`, 14:28) and MUS-59, besides
 everything before. Merged and waiting for the next daemon restart: MUS-8 (which also needs a
-rebuilt shim wherever a machine next pairs), MUS-9, MUS-10 and MUS-60. Sessions pick up a rebuilt shim
+rebuilt shim wherever a machine next pairs), MUS-9, MUS-10, MUS-60, and MUS-11's rustls
+and tokio security updates. Sessions pick up a rebuilt shim
 when they restart, and no keyed send (MUS-29) has been seen live yet. Verified live on 2026-11-04:
 MUS-4, MUS-7, MUS-34, MUS-35, MUS-54 and MUS-57. Merged, live and not yet verified: MUS-46,
 MUS-48, MUS-50 (its live half needs a session that loses its binding), MUS-55 and MUS-59.
