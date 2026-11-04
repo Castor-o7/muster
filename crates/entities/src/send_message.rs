@@ -212,6 +212,8 @@ impl CommandHandler for SendMessage {
         }
         // A retry of a message already stored returned above, so only a new
         // message spends the sender's allowance (MUS-9).
+        crate::controls::sender_allowed(sender.host.as_ref().map(|h| h.name.as_str()))
+            .map_err(|why| err(&ctx, &why))?;
         crate::rate::take(
             sender.id.0.as_ref(),
             sender.host.as_ref().map(|h| h.name.as_str()),
@@ -525,6 +527,11 @@ fn ambiguous(ctx: &CommandContext, kind: &str, token: &str, matches: &[Arc<Sessi
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn push_to_client(client_id: &str, content: String, meta: serde_json::Value) -> bool {
     use myko::{command::CommandRequest, server::try_client_registry};
+    // A live push wakes its session, so none goes out while the operator has
+    // paused wake-ups (MUS-10). The message is stored either way.
+    if crate::controls::wakes_paused() {
+        return false;
+    }
     let Some(registry) = try_client_registry() else {
         log::warn!("[send_message] client_registry not initialized; cannot deliver");
         return false;

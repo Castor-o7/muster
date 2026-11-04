@@ -309,7 +309,14 @@ async fn handle_wait(
             return write_response_with(&mut stream, 200, &restarting, "").await;
         }
         hooks::mark_waiting_now(&cmd_ctx, &sid);
-        if let Some(outcome) = hooks::poll_wait(&cmd_ctx, &sid) {
+        // While the operator has paused wake-ups, a wait hands out nothing
+        // (MUS-10); the mail stays unread for the next prompt.
+        let outcome = if muster_entities::controls::wakes_paused() {
+            None
+        } else {
+            hooks::poll_wait(&cmd_ctx, &sid)
+        };
+        if let Some(outcome) = outcome {
             hooks::end_wait(&cmd_ctx, &sid);
             // A client that says it will ack does so once it has handed the
             // mail on, which the gate's loopback socket can't tell us.
