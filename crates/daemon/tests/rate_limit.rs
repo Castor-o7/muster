@@ -1,5 +1,6 @@
-//! MUS-9: a session that floods SendMessage is throttled, and another session
-//! keeps sending.
+//! MUS-9 and MUS-60: a session that floods SendMessage is throttled, a machine
+//! can't dodge that by spreading a flood across new sessions, and other
+//! sessions and machines keep sending.
 
 use std::sync::Arc;
 
@@ -108,4 +109,64 @@ fn a_flooding_session_is_throttled_and_others_keep_sending() {
         "{refused:?}"
     );
     send("c-rate-calm", 0).expect("another session keeps sending");
+}
+
+fn on_host(mut s: Session, host: &str) -> Session {
+    s.host = Some(muster_entities::HostInfo {
+        name: host.into(),
+        os: "linux".into(),
+        arch: "x86_64".into(),
+    });
+    s
+}
+
+#[test]
+fn a_flood_spread_across_new_sessions_is_throttled_per_machine() {
+    let ctx = setup();
+    set_session(&ctx, &session("spread-recipient", None));
+    set_session(
+        &ctx,
+        &on_host(
+            session("spread-calm", Some("c-spread-calm")),
+            "spread-calm-host",
+        ),
+    );
+    let send = |client: &str| {
+        SendMessage {
+            to_session_id: SessionId(Arc::from("spread-recipient")),
+            body: "hi".into(),
+            as_session: None,
+            idempotency_key: None,
+        }
+        .execute(cmd_ctx(&ctx, Some(client)))
+    };
+    let per_session = muster_entities::rate::BURST as usize / 2;
+    let machine = muster_entities::rate::MACHINE_BURST as usize;
+    let mut sent = 0;
+    let mut n = 0;
+    let refused = loop {
+        let (id, client) = (format!("spread-{n}"), format!("c-spread-{n}"));
+        set_session(&ctx, &on_host(session(&id, Some(&client)), "spread-host"));
+        let mut refused = None;
+        for _ in 0..per_session {
+            match send(&client) {
+                Ok(_) => sent += 1,
+                Err(e) => {
+                    refused = Some(e);
+                    break;
+                }
+            }
+        }
+        if let Some(e) = refused {
+            break e;
+        }
+        n += 1;
+        assert!(sent <= machine, "the machine total didn't hold");
+    };
+    assert_eq!(sent, machine, "every session stayed under its own limit");
+    assert!(
+        format!("{refused:?}").contains("this machine"),
+        "{refused:?}"
+    );
+    send("c-spread-calm").expect("another machine keeps sending");
 }

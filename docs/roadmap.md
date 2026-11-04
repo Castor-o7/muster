@@ -14,14 +14,15 @@ evidence from a real run by the person or team named.
 
 ## Status
 
-2026-11-04: 25 of 55 stories ticked, about 45%, not counting the 3 moved to Rally. Live on
-Murph since 2026-11-03 22:40:57: `e797fa3`, deployed with `rollout.sh` and confirmed by Lamplighter
-from the sha256 of the installed binaries against that stage's `SHA256SUMS`. It carries every code
-change on main, so MUS-46, MUS-48 and MUS-55's graceful stop, which were waiting for a restart, are
-live now. Sessions pick up a rebuilt shim when they restart, and no keyed send (MUS-29) has been
-seen live yet. Verified live on 2026-11-04: MUS-4, MUS-34, MUS-35 and MUS-54. Merged, live and
-not yet verified: MUS-46, MUS-48, MUS-50 (its live half needs a session that loses its binding)
-and MUS-55. Merged and needing a live run: MUS-36 and MUS-37.
+2026-11-04: 26 of 57 stories ticked, about 46%, not counting the 3 moved to Rally. Live on
+Murph since 2026-11-04 16:02:18: `14e2d1a`, deployed by Lamplighter on the operator's word, with
+every port check passing. It carries MUS-7 (first live at `3746864`, 14:28) and MUS-59, besides
+everything before. Merged and waiting for the next daemon restart: MUS-8 (which also needs a
+rebuilt shim wherever a machine next pairs), MUS-9 and MUS-60. Sessions pick up a rebuilt shim
+when they restart, and no keyed send (MUS-29) has been seen live yet. Verified live on 2026-11-04:
+MUS-4, MUS-7, MUS-34, MUS-35, MUS-54 and MUS-57. Merged, live and not yet verified: MUS-46,
+MUS-48, MUS-50 (its live half needs a session that loses its binding), MUS-55 and MUS-59.
+Merged and needing a live run: MUS-36 and MUS-37.
 
 ## Decisions
 
@@ -291,11 +292,15 @@ and MUS-55. Merged and needing a live run: MUS-36 and MUS-37.
   watchman can verify a story in all three repositories and a merge attempt with
   its token is refused. Needs a run: the operator, who holds the token.
 
-- [ ] **MUS-60: Cap messages per machine, not only per session.** From MUS-9's review. A paired
+- [x] **MUS-60: Cap messages per machine, not only per session.** From MUS-9's review. A paired
   machine may register any number of sessions, and each gets its own message allowance, so a
   machine can multiply its rate. Done when: a machine's sessions share a total, and a test shows a
   machine spreading a flood across new sessions is throttled while another machine keeps sending.
-
+  Done 2026-11-04 by gentle-pulsar: besides its own bucket, each message spends one from a bucket
+  its machine's sessions share (a burst of 60, then 60 a minute), keyed on the session's host, which
+  the gate attests for a paired machine. A refusal spends neither. Shown by
+  `a_flood_spread_across_new_sessions_is_throttled_per_machine` in
+  `crates/daemon/tests/rate_limit.rs` and the unit tests in `crates/entities/src/rate.rs`.
 ## Phase 3: Portability
 
 - [ ] **MUS-13: Run CI on macOS.** Done when: CI runs on macOS and passes,
