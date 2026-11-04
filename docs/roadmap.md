@@ -295,6 +295,7 @@ and MUS-55. Merged and needing a live run: MUS-36 and MUS-37.
   machine may register any number of sessions, and each gets its own message allowance, so a
   machine can multiply its rate. Done when: a machine's sessions share a total, and a test shows a
   machine spreading a flood across new sessions is throttled while another machine keeps sending.
+
 ## Phase 3: Portability
 
 - [ ] **MUS-13: Run CI on macOS.** Done when: CI runs on macOS and passes,
