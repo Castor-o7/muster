@@ -172,6 +172,15 @@ fn main() -> Result<()> {
             );
             return Ok(());
         }
+        // Show this machine's pairing with the token masked (MUS-57), so a
+        // session can find the daemon's address without printing the secret.
+        Some("pairing") if argv.next().is_none() => {
+            match link::load_pairing() {
+                Some(pairing) => println!("{}", pairing.masked()),
+                None => println!("this machine isn't paired"),
+            }
+            return Ok(());
+        }
         Some("unpair") if argv.next().is_none() => {
             if link::remove_pairing()? {
                 println!("removed this machine's pairing");
@@ -1246,6 +1255,18 @@ fn init_logging() {
     if std::env::var("RUST_LOG").is_err() {
         b.filter_level(log::LevelFilter::Info);
     }
+    // Pairing codes and bearer tokens never reach a log line (MUS-57).
+    b.format(|buf, record| {
+        use std::io::Write as _;
+        writeln!(
+            buf,
+            "[{} {:<5} {}] {}",
+            buf.timestamp(),
+            record.level(),
+            record.target(),
+            muster_entities::pairing::redact(&record.args().to_string())
+        )
+    });
     b.target(env_logger::Target::Stderr).init();
 }
 

@@ -14,7 +14,7 @@ evidence from a real run by the person or team named.
 
 ## Status
 
-2026-11-04: 20 of 55 stories ticked, about 36%, not counting the 3 moved to Rally. Live on
+2026-11-04: 21 of 55 stories ticked, about 38%, not counting the 3 moved to Rally. Live on
 Murph since 2026-11-03 22:40:57: `e797fa3`, deployed with `rollout.sh` and confirmed by Lamplighter
 from the sha256 of the installed binaries against that stage's `SHA256SUMS`. It carries every code
 change on main, so MUS-46, MUS-48 and MUS-55's graceful stop, which were waiting for a restart, are
@@ -191,7 +191,7 @@ and MUS-55. Merged and needing a live run: MUS-36 and MUS-37.
   and keep pairing as the real check. Changing the firewall needs root, so the operator applies
   it. Done when: from a LAN device not on the list, 6255 and 6300 can't be reached; from a1 both
   work; and an unpaired client that does reach either is refused. Each is shown by a run.
-- [ ] **MUS-57: Keep pairing secrets out of sessions.** On 2026-11-02 a session printed a1's
+- [x] **MUS-57: Keep pairing secrets out of sessions.** On 2026-11-02 a session printed a1's
   whole pairing code, token included, into its own output while looking for Murph's address,
   so it reached that session's transcript and the model API. Nothing public. The token was
   rotated on 2026-11-03 at 23:03 EST on the operator's word, with the new code written only to a
@@ -199,6 +199,10 @@ and MUS-55. Merged and needing a live run: MUS-36 and MUS-37.
   name and fingerprint with the token masked, and the shim and daemon redact `muster-pair:v1:`
   codes and Bearer tokens from their logs and from message bodies. Done when: that command
   exists, and a test shows a code or token in a log line or message comes out redacted.
+  Done 2026-11-04 by gentle-pulsar: `muster-shim pairing` shows the pairing with its token masked,
+  and `pairing::redact` masks `muster-pair:v1:` codes and Bearer tokens (any case) in both binaries'
+  log lines and in message bodies before they are stored. Shown by the unit tests in
+  `crates/entities/src/pairing.rs` and `crates/daemon/tests/redaction.rs`.
 - [x] **MUS-5: Tie sessions to the machine's token.** The gate discards the
   machine name and `session_id` is taken on trust, so any paired machine can claim
   another session and read and clear its mail. Paired clients can also write raw events
