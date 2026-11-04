@@ -194,7 +194,9 @@ and MUS-55. Merged and needing a live run: MUS-36 and MUS-37.
   Options, for the operator: (a) carry a patched myko-server through `[patch.crates-io]`, adding
   a way to run on a listener the daemon owns (or an accept filter), the smallest change that
   closes it; myko is AGPL-3.0-or-later and Muster is MIT or Apache-2.0, so the patched copy
-  keeps its own license in its own directory, and it must be carried across myko upgrades;
+  keeps its own license in its own directory, and it must be carried across myko upgrades.
+  This changes what Muster carries, not its license position: every Muster crate already
+  depends on AGPL myko crates (`myko`, `myko-server`, `myko-macros`), unpatched;
   (b) ask myko's maintainers for that hook upstream, which is cleaner but has no timeline; or
   (c) both, with (a) dropped once (b) ships.
 - [ ] **MUS-56: Let only authorized devices reach Murph's ports.** Requested by the operator on
