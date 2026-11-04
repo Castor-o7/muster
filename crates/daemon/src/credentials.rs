@@ -318,6 +318,35 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    #[cfg(unix)]
+    fn the_local_token_is_owner_only_and_reused() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = std::env::temp_dir().join(format!("muster-local-token-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // A 755 config dir with a permissive umask must still get a 0600 file.
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // SAFETY: this is the only test in the crate that reads or sets the
+        // config directory, and it runs in its own process when run alone.
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", &dir) };
+        let first = ensure_local_token().unwrap();
+        let path = dir
+            .join("muster")
+            .join(muster_entities::pairing::LOCAL_TOKEN_FILE);
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "local-token mode");
+        assert!(first.len() >= 40, "token is 32 random bytes, base64url");
+        assert_eq!(
+            ensure_local_token().unwrap(),
+            first,
+            "a second start reuses it"
+        );
+        assert!(local_token_matches(&first, &first));
+        assert!(!local_token_matches(&first, "something-else"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
     use super::*;
 
     #[test]
