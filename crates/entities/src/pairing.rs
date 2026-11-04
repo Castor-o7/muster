@@ -93,6 +93,39 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// Where this user's muster config files live: `$XDG_CONFIG_HOME/muster`, else
+/// `~/.config/muster` (`%APPDATA%\muster` on Windows). The shim's `pairing`
+/// file and the daemon's `local-token` are both here.
+pub fn config_dir() -> Option<std::path::PathBuf> {
+    if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME").filter(|s| !s.is_empty()) {
+        return Some(std::path::PathBuf::from(xdg).join("muster"));
+    }
+    if cfg!(windows)
+        && let Some(appdata) = std::env::var_os("APPDATA").filter(|s| !s.is_empty())
+    {
+        return Some(std::path::PathBuf::from(appdata).join("muster"));
+    }
+    let home = std::env::var_os("HOME").filter(|s| !s.is_empty())?;
+    Some(
+        std::path::PathBuf::from(home)
+            .join(".config")
+            .join("muster"),
+    )
+}
+
+/// The file the daemon writes its local token to, owner-only (MUS-7).
+pub const LOCAL_TOKEN_FILE: &str = "local-token";
+
+/// The local token, if a daemon on this host has written one. Processes on the
+/// daemon's host present it to the hook listener and the local gate; a process
+/// that can't read the operator's config directory has nothing to present.
+pub fn read_local_token() -> Option<String> {
+    let path = config_dir()?.join(LOCAL_TOKEN_FILE);
+    let text = std::fs::read_to_string(path).ok()?;
+    let token = text.lines().next()?.trim();
+    (!token.is_empty()).then(|| token.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

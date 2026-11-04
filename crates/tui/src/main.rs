@@ -120,6 +120,15 @@ async fn main() -> Result<()> {
         .or_else(|| std::env::var(ADDRESS_ENV).ok())
         .or_else(|| std::env::var(ADDRESS_ENV_LEGACY).ok())
         .unwrap_or_else(|| DEFAULT_DAEMON_ADDRESS.to_string());
+    // The daemon's local gate requires the host's local token (MUS-7).
+    let address = if address.contains("token=") {
+        address
+    } else if let Some(token) = muster_entities::pairing::read_local_token() {
+        let sep = if address.contains('?') { '&' } else { '?' };
+        format!("{address}{sep}token={token}")
+    } else {
+        address
+    };
 
     muster_entities::link();
 

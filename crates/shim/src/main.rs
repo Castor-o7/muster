@@ -233,6 +233,22 @@ fn run_terminal_send(target: terminal_send::Target, body: String) -> Result<()> 
         .block_on(terminal_send::run(target, body))
 }
 
+/// Add the host's local token to a daemon address that has none (MUS-7). The
+/// daemon's local gate requires it; a host without a daemon has no token file,
+/// and the address is left as it was.
+pub(crate) fn with_local_token(address: String) -> String {
+    if address.contains("token=") {
+        return address;
+    }
+    match muster_entities::pairing::read_local_token() {
+        Some(token) => {
+            let sep = if address.contains('?') { '&' } else { '?' };
+            format!("{address}{sep}token={token}")
+        }
+        None => address,
+    }
+}
+
 /// Where to reach the daemon; see the resolution order at the call in `serve`.
 async fn daemon_address() -> Result<String> {
     Ok(match link::load_pairing() {
@@ -253,7 +269,7 @@ async fn daemon_address() -> Result<String> {
                 .or_else(|| std::env::var(ADDRESS_ENV_LEGACY).ok())
                 .unwrap_or_else(|| DEFAULT_DAEMON_ADDRESS.to_string());
             log::info!("[muster-shim] not paired: connecting to {address} without TLS");
-            address
+            with_local_token(address)
         }
     })
 }

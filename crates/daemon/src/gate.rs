@@ -48,6 +48,84 @@ pub struct GateConfig {
     pub hooks: SocketAddr,
     /// Where the TLS identity and token hashes live.
     pub state_dir: PathBuf,
+    /// The token the hook listener requires (MUS-7); the gate adds it when it
+    /// forwards a request for a paired machine.
+    pub local_token: String,
+}
+
+/// The local gate (MUS-7): plain TCP on the daemon host's loopback, for its own
+/// shims and tools. The same checks as the TLS gate, except the token is the
+/// host's local token rather than a machine's, and frames pass the filter as
+/// `(local)`. myko's own listener sits behind it on `MUSTER_MYKO_BIND`.
+pub struct LocalGateConfig {
+    pub bind: SocketAddr,
+    pub myko: SocketAddr,
+    pub state_dir: PathBuf,
+    pub local_token: String,
+}
+
+/// Bind the local gate and serve forever. Spawn on a tokio task.
+pub async fn run_local(config: LocalGateConfig) -> std::io::Result<()> {
+    let listener = TcpListener::bind(config.bind).await?;
+    serve_local(listener, config).await
+}
+
+/// Serve the local gate on an already-bound listener.
+pub async fn serve_local(listener: TcpListener, config: LocalGateConfig) -> std::io::Result<()> {
+    log::info!(
+        "[local] gate on {} (token required)",
+        listener.local_addr()?
+    );
+    let config = Arc::new(config);
+    loop {
+        let (tcp, peer) = match listener.accept().await {
+            Ok(pair) => pair,
+            Err(e) => {
+                log::warn!("[local] accept error: {e}");
+                continue;
+            }
+        };
+        let config = config.clone();
+        tokio::spawn(async move {
+            if let Err(e) = handle_local(tcp, peer, &config).await {
+                log::debug!("[local] {peer}: {e}");
+            }
+        });
+    }
+}
+
+async fn handle_local(
+    mut tcp: TcpStream,
+    peer: SocketAddr,
+    config: &LocalGateConfig,
+) -> std::io::Result<()> {
+    let (head, _rest) = tokio::time::timeout(HANDSHAKE_TIMEOUT, read_head(&mut tcp))
+        .await
+        .map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::TimedOut, "request head timed out")
+        })??;
+    let Some(request) = Request::parse(&head) else {
+        return respond(&mut tcp, "400 Bad Request").await;
+    };
+    // A browser names its page in `Origin`; no local tool does.
+    if request.has_header("origin") {
+        log::warn!("[local] refused {peer}: a browser origin");
+        return respond(&mut tcp, "403 Forbidden").await;
+    }
+    let presented = request.token.as_deref().unwrap_or_default();
+    if !credentials::local_token_matches(&config.local_token, presented) {
+        log::warn!("[local] rejected {peer}: missing or wrong local token");
+        return respond(&mut tcp, "401 Unauthorized").await;
+    }
+    if !(request.path() == MYKO_WS_PATH && request.is_websocket_upgrade()) {
+        log::warn!("[local] refused {peer}: {}", request.path());
+        return respond(&mut tcp, "403 Forbidden").await;
+    }
+    let mut upstream = TcpStream::connect(config.myko).await?;
+    upstream
+        .write_all(request.forwarded_head().as_bytes())
+        .await?;
+    filter_websocket(tcp, upstream, credentials::LOCAL_MACHINE, &config.state_dir).await
 }
 
 /// Bind and serve forever. Spawn on a tokio task.
@@ -146,7 +224,11 @@ async fn handle(
     let token = request.token.clone().unwrap_or_default();
     if is_hook {
         upstream
-            .write_all(request.forwarded_head_as(&name).as_bytes())
+            .write_all(
+                request
+                    .forwarded_head_as(&name, &config.local_token)
+                    .as_bytes(),
+            )
             .await?;
         upstream.write_all(&rest).await?;
         return tokio::select! {
@@ -345,10 +427,18 @@ impl Request {
         self.target.split('?').next().unwrap_or("")
     }
 
+    fn has_header(&self, name: &str) -> bool {
+        self.headers.iter().any(|h| {
+            h.split_once(':')
+                .is_some_and(|(k, _)| k.trim().eq_ignore_ascii_case(name))
+        })
+    }
+
     /// The head for a hook request, with the verified machine name in place of
-    /// any `machine` parameter the client sent. The name is restricted by
+    /// any `machine` parameter the client sent, and the daemon's local token in
+    /// place of the machine's (MUS-7). The name is restricted by
     /// `credentials::valid_name`, so it needs no escaping.
-    fn forwarded_head_as(&self, machine: &str) -> String {
+    fn forwarded_head_as(&self, machine: &str, local_token: &str) -> String {
         let (path, query) = self.target.split_once('?').unwrap_or((&self.target, ""));
         let mut kept: Vec<&str> = query
             .split('&')
@@ -357,11 +447,13 @@ impl Request {
         let verified = format!("machine={machine}");
         kept.push(&verified);
         let target = format!("{path}?{}", kept.join("&"));
+        let mut headers = self.headers.clone();
+        headers.push(format!("Authorization: Bearer {local_token}"));
         Request {
             method: self.method.clone(),
             target,
             version: self.version.clone(),
-            headers: self.headers.clone(),
+            headers,
             token: None,
         }
         .forwarded_head()
@@ -415,7 +507,7 @@ mod tests {
     fn replaces_a_client_supplied_machine_name() {
         let r =
             Request::parse("POST /hook/wait?machine=victim&timeout=1 HTTP/1.1\r\nHost: h").unwrap();
-        let head = r.forwarded_head_as("attacker");
+        let head = r.forwarded_head_as("attacker", "local-tok");
         assert!(
             head.starts_with("POST /hook/wait?timeout=1&machine=attacker HTTP/1.1\r\n"),
             "{head}"

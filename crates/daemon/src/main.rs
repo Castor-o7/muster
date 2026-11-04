@@ -30,6 +30,10 @@ const DEFAULT_INTERNAL_BIND: &str = "127.0.0.1:6257";
 /// The plain-HTTP hook listener (the `/hook/*` endpoints), also behind the
 /// gate. Keep it on loopback (`MUSTER_HOOK_BIND`) — see `http_listener`.
 const DEFAULT_HOOK_BIND: &str = "127.0.0.1:6256";
+/// myko's own WebSocket/MCP listener, which has no authentication of its own.
+/// The local gate on `MUSTER_INTERNAL_BIND` fronts it for the host's tools
+/// (MUS-7); nothing else should dial it.
+const DEFAULT_MYKO_BIND: &str = "127.0.0.1:6258";
 
 const USAGE: &str = "\
 usage:
@@ -132,7 +136,9 @@ async fn run_daemon() -> Result<()> {
     let gate_bind = resolve_bind("MUSTER_BIND", DEFAULT_BIND)?;
     let bind_addr = resolve_bind("MUSTER_INTERNAL_BIND", DEFAULT_INTERNAL_BIND)?;
     let hook_bind = resolve_bind("MUSTER_HOOK_BIND", DEFAULT_HOOK_BIND)?;
+    let myko_bind = resolve_bind("MUSTER_MYKO_BIND", DEFAULT_MYKO_BIND)?;
     let state_dir = daemon::credentials::state_dir()?;
+    let local_token = daemon::credentials::ensure_local_token()?;
 
     // Force-link entities + sagas so their `inventory` registrations aren't
     // dead-code-eliminated.
@@ -149,7 +155,7 @@ async fn run_daemon() -> Result<()> {
     // (lv-6731). Late-bound to the Postgres producer after build below.
     let session_filter = Arc::new(daemon::liveness_filter::SessionLivenessFilter::new());
     let mut builder = MykoServer::builder()
-        .with_bind_addr(bind_addr)
+        .with_bind_addr(myko_bind)
         .with_persister_override("Client", blackhole.clone())
         .with_persister_override("Server", blackhole.clone())
         // A wait dies with the daemon, so there's nothing to replay, and a held
@@ -202,18 +208,29 @@ async fn run_daemon() -> Result<()> {
     let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
     let hooks = {
         let hook_ctx = Arc::new(server.ctx());
-        let bindings_dir = Arc::new(state_dir.clone());
-        daemon::http_listener::run_until(hook_bind, hook_ctx, Some(bindings_dir), stop_rx)
+        let access = Arc::new(daemon::http_listener::Access {
+            state_dir: state_dir.clone(),
+            local_token: local_token.clone(),
+        });
+        daemon::http_listener::run_until(hook_bind, hook_ctx, Some(access), stop_rx)
     };
 
     log::info!(
-        "muster-daemon: gate on {gate_bind} (TLS), myko on ws://{bind_addr}, hooks on http://{hook_bind}"
+        "muster-daemon: gate on {gate_bind} (TLS), local gate on ws://{bind_addr}, \
+         myko on ws://{myko_bind}, hooks on http://{hook_bind}"
     );
     let gate = daemon::gate::run(daemon::gate::GateConfig {
         bind: gate_bind,
-        myko: bind_addr,
+        myko: myko_bind,
         hooks: hook_bind,
+        state_dir: state_dir.clone(),
+        local_token: local_token.clone(),
+    });
+    let local_gate = daemon::gate::run_local(daemon::gate::LocalGateConfig {
+        bind: bind_addr,
+        myko: myko_bind,
         state_dir,
+        local_token,
     });
     // The gate is the daemon's only public surface: if it can't bind or
     // stops, exit rather than keep running unreachable. The same goes for the
@@ -221,6 +238,7 @@ async fn run_daemon() -> Result<()> {
     tokio::select! {
         r = server.run() => r.map_err(|e| anyhow::anyhow!(e))?,
         r = gate => exit_listener_stopped(&format!("gate on {gate_bind}"), r),
+        r = local_gate => exit_listener_stopped(&format!("local gate on {bind_addr}"), r),
         r = hooks => exit_listener_stopped(&format!("hook listener on {hook_bind}"), r),
         signal = stop_signal() => {
             log::info!("muster-daemon: {signal}; ending held waits, then stopping");

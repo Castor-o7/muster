@@ -170,6 +170,42 @@ fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
     options.open(path)?.write_all(bytes)
 }
 
+/// The token local processes present to the hook listener and the local gate
+/// (MUS-7). Written owner-only to the operator's muster config directory on
+/// first start, so anything that can't read that directory can't act as a
+/// session. Read back on later starts, so sessions keep working across a
+/// restart.
+pub fn ensure_local_token() -> io::Result<String> {
+    let dir = muster_entities::pairing::config_dir().ok_or_else(|| {
+        io::Error::other("no config directory for the local token (is HOME set?)")
+    })?;
+    let path = dir.join(muster_entities::pairing::LOCAL_TOKEN_FILE);
+    if let Ok(text) = std::fs::read_to_string(&path) {
+        let token = text.lines().next().unwrap_or("").trim();
+        if !token.is_empty() {
+            return Ok(token.to_string());
+        }
+    }
+    std::fs::create_dir_all(&dir)?;
+    let mut raw = [0u8; 32];
+    getrandom::fill(&mut raw).map_err(io::Error::other)?;
+    let token = {
+        use base64::Engine as _;
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(raw)
+    };
+    write_private(&path, format!("{token}\n").as_bytes())?;
+    log::info!("[local] wrote a new local token to {}", path.display());
+    Ok(token)
+}
+
+/// Whether a presented local token is the daemon's, compared in constant time.
+pub fn local_token_matches(expected: &str, presented: &str) -> bool {
+    constant_time_eq(
+        token_hash(expected).as_bytes(),
+        token_hash(presented).as_bytes(),
+    )
+}
+
 /// The operator this daemon serves, from `MUSTER_OPERATOR`. When set, it's what
 /// sessions from paired machines show, whatever they claim. Without it their
 /// own claim stands.

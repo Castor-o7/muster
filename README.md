@@ -87,16 +87,17 @@ The daemon has three listeners. Only the gate is meant to be reachable from othe
 | Port | Variable | Default | Serves |
 |---|---|---|---|
 | 6255 | `MUSTER_BIND` | `127.0.0.1:6255` | **The gate**: TLS plus a per-machine access token, in front of the two below |
-| 6257 | `MUSTER_INTERNAL_BIND` | `127.0.0.1:6257` | myko's WebSocket/MCP listener (no TLS or auth; keep it on loopback) |
-| 6256 | `MUSTER_HOOK_BIND` | `127.0.0.1:6256` | The plain-HTTP hook listener (no TLS or auth; keep it on loopback) |
+| 6257 | `MUSTER_INTERNAL_BIND` | `127.0.0.1:6257` | **The local gate**: plain TCP for the host's own shims and tools, which present the local token |
+| 6256 | `MUSTER_HOOK_BIND` | `127.0.0.1:6256` | The plain-HTTP hook listener; requires the local token, refuses browser origins |
+| 6258 | `MUSTER_MYKO_BIND` | `127.0.0.1:6258` | myko's own WebSocket/MCP listener, behind the two gates (no auth of its own; keep it on loopback) |
 
-To accept sessions from other machines, set `MUSTER_BIND=0.0.0.0:6255` (or a LAN/mesh address) and pair each machine (below). Tools running on the daemon's own host, like the TUI and the web UI, can still connect to `ws://127.0.0.1:6257` directly.
+To accept sessions from other machines, set `MUSTER_BIND=0.0.0.0:6255` (or a LAN/mesh address) and pair each machine (below). Tools running on the daemon's own host, like the shim and the TUI, connect to the local gate on `ws://127.0.0.1:6257` with the **local token**: the daemon writes it owner-only to `~/.config/muster/local-token` (under `$XDG_CONFIG_HOME` if set) on first start, and the shim and TUI read it from there. A process that can't read that file gets `401`, and any request naming a browser `Origin` gets `403`, on both the hook listener and the local gate. myko's own listener on 6258 has no such check yet (MUS-59).
 
 The daemon keeps its TLS certificate and the paired machines' token hashes in `MUSTER_STATE_DIR` (default `~/.local/state/muster`). Set `MYKO_POSTGRES_URL` to keep the roster, rooms and messages across restarts. Without it the daemon runs in memory and starts empty each time.
 
 ### 2b. Pair each machine
 
-Every machine other than the daemon's own host needs a pairing. (On the daemon's host, an unpaired shim connects to the internal loopback listener on 6257, so it works without one. Pair it too if other people can log in to that machine.) On the daemon's host:
+Every machine other than the daemon's own host needs a pairing. (On the daemon's host, an unpaired shim connects to the local gate on 6257 with the local token, so it works without one. Pair it too if other people can log in to that machine.) On the daemon's host:
 
 ```bash
 muster-daemon pair --name a1 --address 192.0.2.10:6255
