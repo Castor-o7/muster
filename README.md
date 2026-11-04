@@ -2,6 +2,10 @@
   <img src="docs/assets/muster-banner.svg" alt="Muster: live messaging for Claude sessions, across machines, with no dangerous flags" width="720">
 </p>
 
+Hello there!! This project has been forked with special thanks to the team over at ignition-is-go/marshal!
+
+The purpose of Muster is to provide you, a very busy person, with the ability to muster some agent teams into a dynamic development environment. What do I mean by this? Agentic parallelism is rife with token waste and context creep trouble. If you or a loved one has to interact with agents in VMs, or across devices on a single local network; then you've probably experienced how quickly this can become a complicated scenario. Cue muster! Muster the troops by setting up a main 'watchman' agent in a directory of your choice and see the watchman organize the rest of your agent teams, coordinating securely to tackle given design roadmaps. Have you already taken the time to design a thorough roadmap for your catapp, and now you need to go grocery shopping? Great! Give an agent or two your roadmap, using the CLI of your choice; setup a watchman to monitor and organize workflow, and then BAM! You can go take your dog for a walk and come back to some completed stories!
+
 Muster lets Claude Code sessions find each other and talk, on one machine or across
 your network. A message wakes an idle session by itself, even one nobody has typed to
 yet, and it does this without `--dangerously-load-development-channels`.
