@@ -301,6 +301,10 @@ Merged and needing a live run: MUS-36 and MUS-37.
   the gate attests for a paired machine. A refusal spends neither. Shown by
   `a_flood_spread_across_new_sessions_is_throttled_per_machine` in
   `crates/daemon/tests/rate_limit.rs` and the unit tests in `crates/entities/src/rate.rs`.
+  Two limits remain, both needing the daemon host's local token (today, the operator's account):
+  a session with no host gets no machine bucket, and a session through the local gate keeps the
+  host name it claims, so a process on the daemon's host could skip the shared limit or spend
+  another machine's by claiming its name.
 ## Phase 3: Portability
 
 - [ ] **MUS-13: Run CI on macOS.** Done when: CI runs on macOS and passes,
