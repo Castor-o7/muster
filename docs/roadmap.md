@@ -183,6 +183,22 @@ and MUS-55. Merged and needing a live run: MUS-36 and MUS-37.
   copy, or a listener the daemon owns and hands connections to. Done when: a process without the
   local token can't reach myko by any port, shown by a test, and the README's port table has no
   unguarded row.
+  Found 2026-11-04 by gentle-pulsar, on a throwaway daemon built from `a054c58`: a WebSocket
+  upgrade carrying a browser `Origin` and no token gets `101` on myko's own port and `403` on
+  the local gate, and an MCP `tools/list` POST with a browser `Origin` gets `200` with the tool
+  list. So a web page in a browser on the daemon's host can still drive myko, as it could
+  on 6257 before MUS-7; this isn't a regression, but it is the gap that matters most. myko-server
+  6.9.0 has no Origin check anywhere, and the daemon can't take over the listener: `run()` binds
+  `bind_addr` itself, and the startup steps it runs first (Postgres catch-up, the saga runtime)
+  are private, though the per-connection handlers (`ws_handler::WsHandler`, `router`) are public.
+  Options, for the operator: (a) carry a patched myko-server through `[patch.crates-io]`, adding
+  a way to run on a listener the daemon owns (or an accept filter), the smallest change that
+  closes it; myko is AGPL-3.0-or-later and Muster is MIT or Apache-2.0, so the patched copy
+  keeps its own license in its own directory, and it must be carried across myko upgrades.
+  This changes what Muster carries, not its license position: every Muster crate already
+  depends on AGPL myko crates (`myko`, `myko-server`, `myko-macros`), unpatched;
+  (b) ask myko's maintainers for that hook upstream, which is cleaner but has no timeline; or
+  (c) both, with (a) dropped once (b) ships.
 - [ ] **MUS-56: Let only authorized devices reach Murph's ports.** Requested by the operator on
   2026-11-03. Murph's firewall (`/etc/nftables.conf`) opens 6255 to the whole `192.168.1.0/24`,
   and Rally's 6300 isn't open at all, so a1 can't reach it. The services already refuse a
