@@ -75,7 +75,11 @@ changing anything; that's where the operator sees what the restart will remove, 
 doesn't stop for it. `rollout.sh apply <commit> --operator-approved` backs up the binaries,
 unit and database (test-restoring the dump), installs and restarts, checks the unit and
 its three ports, confirms the running process is the staged binary, and rolls back to the
-previous binary if any of that fails.
+previous binary if any of that fails. `--operator-approved` records that the operator agreed;
+it doesn't prove it, since any session can type it, so a run is never itself the operator's
+approval. The health check runs once, `HEALTH_WAIT` (15 s) after the restart, so it catches a
+daemon that fails at start but not one that fails later: keep watching the log for a few
+minutes. The script needs Linux with a systemd user unit.
 `scripts/test-rollout.sh` checks the rollback against a throwaway unit.
 
 The daemon has three listeners. Only the gate is meant to be reachable from other machines:
