@@ -8,6 +8,8 @@ WORK=$(mktemp -d "${TMPDIR:-/tmp}/muster-gate-e2e.XXXX")
 export MUSTER_STATE_DIR=$WORK/state
 export MUSTER_ACK_LEASE_SECS=2
 export MUSTER_BIND=127.0.0.1:16255 MUSTER_HOOK_BIND=127.0.0.1:16256 MUSTER_INTERNAL_BIND=127.0.0.1:16257 MUSTER_MYKO_BIND=127.0.0.1:16258
+# A small per-machine cap, so the flood check below can reach it (MUS-9).
+export MUSTER_MAX_CONN_PER_MACHINE=8
 unset MUSTER_BASE_URL MUSTER_DAEMON_ADDRESS
 T() { perl -e 'alarm 10; exec @ARGV' "$@"; }
 pass=0; fail=0
@@ -127,6 +129,17 @@ check "a positional command body is refused" 'grep -q "refused attacker: command
 check "a NUL-suffixed key is refused" 'grep -q "refused attacker: NUL" $WORK/daemon.log'
 check "a session id posing as a nickname is refused" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_code} -H "Authorization: Bearer $ATTACKER" -X POST "https://127.0.0.1:16255/hook/session-register" -d "{\"session_id\":\"copper-komodo\",\"cwd\":\"/tmp\"}") == 403 ]]'
 check "myko's other routes are closed to paired machines" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_code} -H "Authorization: Bearer $ATTACKER" -X POST https://127.0.0.1:16255/myko/mcp -d "{}") == 403 ]]'
+# One machine holding all its connections is turned away; another isn't (MUS-9).
+FLOOD=()
+for n in {1..8}; do
+  curl -sk -m 12 -o /dev/null -H "Authorization: Bearer $ATTACKER" -X POST "https://127.0.0.1:16255/hook/wait?timeout=8" -d "{\"session_id\":\"a0000000-0000-4000-8000-0000000009$(printf %02d $n)\",\"cwd\":\"/tmp/flood\"}" &
+  FLOOD+=($!)
+done
+sleep 2
+check "a machine past its connection cap gets 503" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_code} -H "Authorization: Bearer $ATTACKER" -X POST https://127.0.0.1:16255/hook/session-start -d "{\"session_id\":\"a0000000-0000-4000-8000-000000000999\",\"cwd\":\"/tmp/flood\"}") == 503 ]]'
+check "while another machine keeps working" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_code} -H "Authorization: Bearer $TOKEN" -X POST https://127.0.0.1:16255/hook/session-start -d "$HOOK") == 200 ]]'
+wait $FLOOD
+check "and the flooding machine gets back in once its connections close" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_code} -H "Authorization: Bearer $ATTACKER" -X POST https://127.0.0.1:16255/hook/session-start -d "{\"session_id\":\"a0000000-0000-4000-8000-000000000999\",\"cwd\":\"/tmp/flood\"}") == 200 ]]'
 
 # Messaging from a terminal: reaches a named team's idle session, labelled.
 WAITSTATUS() { curl -sk -m 5 -H "Authorization: Bearer $TOKEN" -X POST "https://127.0.0.1:16255/hook/wait?timeout=2" -d "$HOOK"; }

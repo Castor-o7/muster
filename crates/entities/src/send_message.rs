@@ -210,6 +210,9 @@ impl CommandHandler for SendMessage {
                 });
             }
         }
+        // A retry of a message already stored returned above, so only a new
+        // message spends the sender's allowance (MUS-9).
+        crate::rate::take(sender.id.0.as_ref()).map_err(|why| err(&ctx, &why))?;
         let now = Utc::now().timestamp_millis();
         let msg = Message {
             id,

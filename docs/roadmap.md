@@ -14,7 +14,7 @@ evidence from a real run by the person or team named.
 
 ## Status
 
-2026-11-04: 24 of 55 stories ticked, about 44%, not counting the 3 moved to Rally. Live on
+2026-11-04: 25 of 55 stories ticked, about 45%, not counting the 3 moved to Rally. Live on
 Murph since 2026-11-03 22:40:57: `e797fa3`, deployed with `rollout.sh` and confirmed by Lamplighter
 from the sha256 of the installed binaries against that stage's `SHA256SUMS`. It carries every code
 change on main, so MUS-46, MUS-48 and MUS-55's graceful stop, which were waiting for a restart, are
@@ -273,8 +273,16 @@ and MUS-55. Merged and needing a live run: MUS-36 and MUS-37.
   `crates/daemon/src/credentials.rs` and five checks in `scripts/test-gate-e2e.sh` (no token in
   the code, a used code refused, an expired code refused and given no token). Live on Murph only
   after the next daemon restart; v1 codes and stored pairings keep working.
-- [ ] **MUS-9: Limit connections and message rates.** Done when: a test shows a
+- [x] **MUS-9: Limit connections and message rates.** Done when: a test shows a
   flooding client is throttled and other sessions keep working.
+  Done 2026-11-04 by gentle-pulsar: each sending session has a token bucket (a burst of 20, then
+  30 a minute; a broadcast counts as one), and each listener caps its open connections, the gate
+  per IP and per paired machine. Shown by `crates/daemon/tests/rate_limit.rs` (a flooding session
+  is refused and another keeps sending), the limiter unit tests, and three checks in
+  `scripts/test-gate-e2e.sh` (a machine at its cap gets 503, another machine keeps working, and
+  the first gets back in once its connections close). Live on Murph only after a daemon restart.
+  The message limit is per session, so a machine with many sessions (it can register any number
+  of its own) gets that many allowances; a per-machine total is MUS-60.
 - [ ] **MUS-10: Treat peer messages as untrusted.** Done when: the operator can
   set sender allowlists and pause all wake-ups.
 - [ ] **MUS-11: Audit dependencies and write the threat model.** Done when: CI
@@ -282,6 +290,11 @@ and MUS-55. Merged and needing a live run: MUS-36 and MUS-37.
 - [ ] **MUS-12: Give the watchman a read-only GitHub token.** Done when: the
   watchman can verify a story in all three repositories and a merge attempt with
   its token is refused. Needs a run: the operator, who holds the token.
+
+- [ ] **MUS-60: Cap messages per machine, not only per session.** From MUS-9's review. A paired
+  machine may register any number of sessions, and each gets its own message allowance, so a
+  machine can multiply its rate. Done when: a machine's sessions share a total, and a test shows a
+  machine spreading a flood across new sessions is throttled while another machine keeps sending.
 
 ## Phase 3: Portability
 
