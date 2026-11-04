@@ -57,3 +57,15 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config mingw-w64
       - name: Cross-compile the Windows shim
         run: cargo check -p muster-shim --target x86_64-pc-windows-gnu
+
+  # Dependency audit (MUS-11): advisories, licences, bans and sources, as
+  # configured in deny.toml. Every ignored advisory there says why.
+  dependency-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          arguments: --all-features
