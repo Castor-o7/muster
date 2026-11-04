@@ -14,13 +14,14 @@ evidence from a real run by the person or team named.
 
 ## Status
 
-2026-11-03: 16 of 54 stories ticked, about 30%, not counting the 3 moved to Rally. Live on
-Murph since 2026-11-03 16:22: `5a19735`, which adds MUS-54 to what `c3dbd45` carried (MUS-4,
-MUS-5, MUS-6, MUS-29, MUS-33, MUS-34, MUS-35, MUS-40, MUS-44, MUS-50 and MUS-53). Sessions pick
-up a rebuilt shim when they restart, and no keyed send (MUS-29) has been seen live yet. Merged,
-live and not yet verified: MUS-4, MUS-34, MUS-35, MUS-50 and MUS-54. Merged and needing a live
-run: MUS-36 and MUS-37. Merged and waiting for the next daemon restart: MUS-46, MUS-48 (which
-also needs a rebuilt shim to be seen), and MUS-55's graceful stop.
+2026-11-04: 20 of 55 stories ticked, about 36%, not counting the 3 moved to Rally. Live on
+Murph since 2026-11-03 22:40:57: `e797fa3`, deployed with `rollout.sh` and confirmed by Lamplighter
+from the sha256 of the installed binaries against that stage's `SHA256SUMS`. It carries every code
+change on main, so MUS-46, MUS-48 and MUS-55's graceful stop, which were waiting for a restart, are
+live now. Sessions pick up a rebuilt shim when they restart, and no keyed send (MUS-29) has been
+seen live yet. Verified live on 2026-11-04: MUS-4, MUS-34, MUS-35 and MUS-54. Merged, live and
+not yet verified: MUS-46, MUS-48, MUS-50 (its live half needs a session that loses its binding)
+and MUS-55. Merged and needing a live run: MUS-36 and MUS-37.
 
 ## Decisions
 
@@ -60,8 +61,12 @@ also needs a rebuilt shim to be seen), and MUS-55's graceful stop.
   Needs a run: the Muster team, on both machines.
 - [ ] **MUS-3: Stable identity across restarts.** Done when: a session keeps its
   nickname through a restart, and the watchman can be reached by role.
-- [ ] **MUS-4: Show dead watchers.** Done when: the roster distinguishes a
+- [x] **MUS-4: Show dead watchers.** Done when: the roster distinguishes a
   session that can be woken from one that can't.
+  Verified live 2026-11-04 by gentle-pulsar against Murph's `e797fa3`: `muster-shim roster` showed
+  `waiting: true` with a `waiting_until` for idle sessions, `waiting: false` for busy ones, and
+  `bound_to_connection: false` for one whose process had exited. Only the daemon creates
+  watchers (`2faeaa8`), so this is the daemon's view.
 - [x] **MUS-25: Reach the daemon when `localhost` resolves to `::1` first.** Found
   during live-delivery testing. Done when: an unpaired Linux host's watcher wakes
   on a message with no explicit URL. Evidence: `090b2a9`, tested on Murph by
@@ -70,16 +75,26 @@ also needs a rebuilt shim to be seen), and MUS-55's graceful stop.
   a line at about 500 characters and an event at about 3,000. Done when: a message
   up to the daemon's 2,000-character limit reaches an idle session complete. Needs
   a run: the Muster team, with a peer sending.
-- [ ] **MUS-34: Don't lose mail between delivery and ack.** From the 2026-10-30 review.
+- [x] **MUS-34: Don't lose mail between delivery and ack.** From the 2026-10-30 review.
   A message is marked read once it reaches the gate's loopback socket, so a silent network
   drop loses it. A waiter whose session just closed can also take mail and drop it, a plain
   `watch` has no parent check, and a resumed session can lose its wake to the old waiter.
   Concurrent readers can deliver a message twice. Done when: delivery is acknowledged by
   the client, and a test covers a dropped path.
-- [ ] **MUS-35: Say why a watcher can't reach the daemon.** A 401 or 403 and a real outage
+  Verified live 2026-11-04 by gentle-pulsar on `e797fa3`: direct messages the Stop hook delivered
+  show as read on the daemon, and room messages read only through `muster://messages` stay unread,
+  so the ack follows delivery. The dropped path is covered by
+  `held_wait_returns_a_message_sent_during_it_and_acks_it` and
+  `abandoned_wait_does_not_ack_a_later_message` in `crates/daemon/tests/hook_wait_e2e.rs`.
+- [x] **MUS-35: Say why a watcher can't reach the daemon.** A 401 or 403 and a real outage
   print the same "can't reach" line, and a daemon whose hook port failed to bind keeps
   running with hooks dead. Done when: the message names the cause, and a failed hook bind
   stops the daemon or is plainly reported.
+  Verified 2026-11-04 by gentle-pulsar: a1's `refused-<session>` files from 23:03 on 2026-11-03
+  read "the daemon refused this machine's token (401); it may need pairing again", the notice those
+  sessions got; `muster-shim watch` against a dead port printed "can't reach the daemon (down, or no
+  network); retrying"; and a `muster-daemon` built at `61ee4c1` with its hook port already taken
+  exited 1 with "hook listener on 127.0.0.1:46256: Address already in use".
 - [ ] **MUS-50: Repair a roster row that has lost its client binding.** Found 2026-11-02: a
   session listed on the roster with `pid` 0 and no `client_id` got "no session on the roster"
   on every send, while its status looked fine. The event log shows a hook write landing just
@@ -87,6 +102,9 @@ also needs a rebuilt shim to be seen), and MUS-55's graceful stop.
   the binding; that race is inferred, not reproduced. Done when: the shim treats a row with no
   binding as unregistered and re-registers, shown by a test, and a live session's send recovers
   without a reconnect. Closing the race in the daemon is left open.
+  The test half is shown by `a_row_without_a_client_binding_is_not_registered` and
+  `roster_self_check_reregisters_only_after_the_full_window` in `crates/shim/src/main.rs`
+  (`1c9fedf`). The live half wasn't reproducible on 2026-11-04: no session lost its binding.
 - [x] **MUS-29: Make send timeouts trustworthy.** `send_message` reported "command
   timed out" for a message that did arrive, so a retry could send a duplicate. Done
   when: a test shows a timed-out send can be retried without delivering twice.
@@ -290,7 +308,7 @@ also needs a rebuilt shim to be seen), and MUS-55's graceful stop.
   on 2026-11-02: a reader following the notice to `muster://messages/<id>` gets a client error
   saying the server doesn't implement resource reads. Done when: the notice names a URI that
   returns the full message, shown on a real truncated message.
-- [ ] **MUS-54: Keep a working session reachable when its connection drops.** Board finding 59,
+- [x] **MUS-54: Keep a working session reachable when its connection drops.** Board finding 59,
   2026-11-03: desert-hawk's MCP WebSocket dropped at about 11:36:19 EST while its hooks kept
   reporting, and the daemon deleted its row at 11:37:25 under the 60 s grace. At 12:09 a message
   to it failed with "no session matches". A deletion therefore doesn't mean the session ended.
@@ -298,6 +316,10 @@ also needs a rebuilt shim to be seen), and MUS-55's graceful stop.
   repairs a row left without a client binding. Done when: a session whose connection drops but
   whose hooks are still active stays reachable, or its client reconnects and re-registers, shown
   by a test that drops the connection, and a message sent in that window reaches it.
+  Verified 2026-11-04 by gentle-pulsar on `e797fa3`: zesty-quail's row (connected 10:30:16 EST; the
+  watchman saw its process gone before 10:31) stayed on the roster unbound for over ten minutes
+  and was then reaped under `KEPT_STALE_AFTER`, where `c3dbd45` deleted such rows after 60 s.
+  Delivery into that window is shown by the e2e test in `74d35ed`.
 - [ ] **MUS-55: Make a daemon restart one command.** Requested by the operator on 2026-11-03.
   A restart already disrupts little: in the last three, sessions were back on the roster within
   about 2 s and no wake misfired. The cost is the operator's and the daemon-holder's time: about
