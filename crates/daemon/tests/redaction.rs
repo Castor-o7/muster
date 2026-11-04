@@ -4,13 +4,11 @@
 use std::sync::Arc;
 
 use hyphae::{Gettable, Materialize};
-use muster_entities::{
-    LivePushStatus, Message, SendMessage, SendMessageResult, Session, SessionId, WakeStatus,
-    WakeWatcher, WakeWatcherId,
-};
+use muster_entities::{Message, SendMessage, Session, SessionId};
 use myko::{
     command::{CommandContext, CommandHandler},
     core::item::Eventable,
+    entities::client::ClientId,
     request::RequestContext,
     server::{MykoServerContext, Persister},
     wire::{MEvent, MEventType},
