@@ -1,7 +1,10 @@
 # Keeping messages across restarts without Postgres (MUS-17)
 
-Status: **design for review**, no code yet. Written 2026-11-05 for the watchman and
-fiery-snapper. The Postgres path is out of scope and stays exactly as it is.
+Status: **approved, option A**. Written 2026-11-05 for the watchman and
+fiery-snapper. fiery-snapper approved option A the same day and added the rule for
+appends during compaction (below). Josh decided both defaults on 2026-11-05: opt-in
+for this release, and the Time Machine exclusion on (see "Decisions"). The Postgres
+path is out of scope and stays exactly as it is.
 
 ## The problem
 
@@ -79,9 +82,26 @@ already serializes.
   parse, or names an entity kind not in the list above, stops startup with the
   line number, rather than silently dropping mail.
 - **Compaction while running.** When the file is more than 4 times the size of
-  the last compaction and more than 1 MB, rewrite it from the in-memory store on
-  a background task, the same way as at boot. Also once a day, so deleted
-  bodies don't sit on disk for long (see the threat model).
+  the last compaction and more than 1 MB, and once a day so deleted bodies don't
+  sit on disk for long (see the threat model), a background task rewrites it.
+  It folds the **file**, not the in-memory store, so the result doesn't depend
+  on whether myko persists an event before or after applying it.
+- **Appends during a compaction** (fiery-snapper's rule). Every append holds the
+  file's append lock. The compaction:
+  1. takes the lock, notes the file's length `L`, and releases it;
+  2. folds bytes `[0, L)` into `store.jsonl.tmp`, while appends carry on into
+     the live file;
+  3. retakes the lock, copies bytes `[L, end)` of the live file onto the end of
+     the temporary file unchanged, and `fsync`s it;
+  4. `rename`s the temporary file over the live one and repoints the appender
+     at it, all still under the lock, then releases it.
+
+  Appends wait only for step 3's tail copy and the rename, never for the fold.
+  Every event either was before `L` and is folded, or came after and is copied
+  in order. A crash before the rename leaves the old file whole, and a stray
+  `.tmp` is deleted at the next boot. A test pauses a compaction between steps
+  2 and 3, appends to it (including a DEL of something folded), and checks the
+  result folds to the same state as never compacting.
 - **Cost.** No new dependency. Most of the code can be borrowed from the
   `DiskPersister` in c66db28 (replay, dedup, torn-line handling), minus its
   watcher and migration helpers.
@@ -111,16 +131,29 @@ would rather pay for a C dependency than own compaction code.
 
 ## Turning it on
 
-- `MYKO_POSTGRES_URL` set: Postgres, exactly as today. The file is not used.
-- Otherwise: the file, unless `MUSTER_PERSIST=off`, which gives today's ephemeral
-  mode. Tests that rely on starting empty set it.
+- `MYKO_POSTGRES_URL` set: Postgres, exactly as today. The file is not used,
+  even with `MUSTER_PERSIST=file` (the startup line says it's ignored).
+- Otherwise, `MUSTER_PERSIST=file`: the file.
+- Otherwise: ephemeral, as today (opt-in for this release; see "Decisions").
+  Any other `MUSTER_PERSIST` value stops startup, so a typo can't silently lose
+  mail.
 - The startup line names the mode: `persistence: file (…/store.jsonl, N
-  entities loaded)`, `postgres`, or `ephemeral (MUSTER_PERSIST=off)`.
+  entities loaded, excluded from Time Machine)`, `postgres`, or `ephemeral`.
 
-**Question for the reviewers:** should the file be the default (as above), or
-opt-in (`MUSTER_PERSIST=file`) for a release first? Defaulting to it is what
-makes the done-when true for everyone, but it changes what a plain `serve`
-leaves on disk.
+## Decisions
+
+Josh, 2026-11-05, through the watchman:
+
+- **Opt-in for this release.** Without Postgres, the daemon stays ephemeral
+  unless `MUSTER_PERSIST=file` is set. So "Turning it on" above becomes: Postgres
+  if `MYKO_POSTGRES_URL` is set, else the file if `MUSTER_PERSIST=file`, else
+  ephemeral. The startup line names which one. Making the file the default is a
+  later decision, once it has run for a release.
+- **Time Machine exclusion on by default.** On macOS the daemon runs `tmutil
+  addexclusion` on the store file when it creates it (a sticky exclusion that
+  travels with the file, not a fixed-path one). The startup line says
+  `excluded from Time Machine`, or why it couldn't be. Other backup and sync
+  tools are named in the install doc.
 
 ## Threat model changes
 
@@ -150,9 +183,9 @@ Today, without Postgres, nothing a session says touches the disk. With the file:
    reliable anyway.
 3. **Backups and sync carry mail off the machine.** `~/.local/state` is often in
    Time Machine and sometimes in a synced home folder. The install doc should
-   say the file is there, and `MUSTER_STATE_DIR` can move it. On macOS, the file
-   can be excluded from Time Machine with `tmutil addexclusion`; that's worth
-   doing by default, so a question for the reviewers.
+   say the file is there, and `MUSTER_STATE_DIR` can move it. On macOS the file
+   is excluded from Time Machine by default (`tmutil addexclusion`, decided by
+   Josh on 2026-11-05).
 4. **Replay bypasses the gate.** `apply_event_batch` trusts its input: lines in
    the file skip the frame filter, rate limits and ownership checks. Anyone who
    can write the file can plant mail "from" any session. That's the same
@@ -170,7 +203,8 @@ for (1) and (3) when the code lands.
 ## Tests (when the code is written)
 
 - Unit: fold and compaction (last SET wins, DEL removes, a DEL'd room takes its
-  messages), a second daemon on the same file is refused, a torn last line is skipped, a bad middle line stops startup, an
+  messages), appends during a compaction lose nothing (the pause between steps
+  2 and 3 above), `MUSTER_PERSIST` unset means no file is created, a second daemon on the same file is refused, a torn last line is skipped, a bad middle line stops startup, an
   unknown kind is refused, permissions are checked, and Postgres configured
   means no file is opened.
 - Conformance: cell 5b (`restart-keeps-unread-mail`) gains a no-Postgres

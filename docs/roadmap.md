@@ -411,6 +411,11 @@ Merged and needing a live run: MUS-36 and MUS-37.
 - [ ] **MUS-17: Keep messages across daemon restarts without Postgres.** Check
   first whether myko allows it. Done when: an unread message survives a daemon
   restart with no Postgres configured.
+  *Design approved 2026-11-05 (fiery-snapper, option A: an append-only JSONL
+  file in the state directory, compacted; myko allows it through its `Persister`
+  trait and `apply_event_batch`). Decided by Josh on 2026-11-05: opt-in with
+  `MUSTER_PERSIST=file` for this release, and the store excluded from Time
+  Machine by default. See [local-persistence-design.md](local-persistence-design.md).*
 - [ ] **MUS-18: Extend pairing to Codex.** Codex goes through the Rust shim. Done
   when: Codex can connect through the gate. The Pi, opencode and Prime Agent plugins
   are left out under the language decision.
