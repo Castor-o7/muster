@@ -51,7 +51,7 @@ woken when mail arrives.
 - **Wake reporting:**
   - While a wait is held, the daemon records a `WakeWatcher`. It's in memory only and swept with its session.
   - The roster shows a session's `wake` state.
-  - A send result says `wake: expected` only when a live waiter can wake the recipient and wakes aren't paused. A connected client alone no longer counts, which matches the roster.
+  - A send result says `wake: expected` only when a live waiter can wake the recipient. A connected client alone no longer counts, which matches the roster.
 - **Restarts:** on SIGTERM the daemon ends held waits with `X-Marshal-Restarting`, so waiters re-arm instead of reporting an error.
 - **macOS:** the shim reads its parent's argv with `ps`, so a session started without the flag reports `channels_enabled = false` and is no longer pushed to. Its mail stays unread for the hooks.
 - **Logging:** one `info` line per client ack, and one per re-offer after a lapsed lease. Session and count only, no bodies.
