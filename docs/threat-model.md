@@ -113,7 +113,12 @@ MUS-56 narrows the firewall to listed machines.
   session while any session holding it is live. The same goes for the
   inferred identity: a new session in a dead session's working directory takes
   over its nickname and its mail. Keys include the attested machine and
-  operator, so a paired machine can only take over its own sessions. A wrong
+  operator, so a paired machine can only take over its own sessions'
+  nicknames. Role *addressing* is wider: a send to a role name reaches the
+  one session claiming it, on any machine, so a session on a paired machine
+  that declares `watchman` takes mail addressed to `watchman` (and two claims
+  make the send fail as ambiguous). Nobody addresses a role yet; address the
+  watchman by nickname until roles are attested. A wrong
   takeover hands mail to the wrong session, so "dead" is strict (an observed
   client drop with no hook since, or a removal this daemon saw), Codex rows on
   the roster never count as dead until MUS-77, and every takeover leaves a

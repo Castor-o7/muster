@@ -207,3 +207,51 @@ fn a_successor_gets_its_predecessors_adhoc_rooms() {
         downcast_item::<RoomMember>(item).is_some_and(|m| m.session_id == new.id)
     }));
 }
+
+/// A nickname given up in a late takeover still reaches its session as an
+/// alias, so it isn't handed to a new session until the alias lapses:
+/// resolution tries live nicknames first, and the newcomer would get mail
+/// meant for the successor.
+#[test]
+fn a_live_alias_isnt_given_to_a_new_session() {
+    use muster_entities::{Succession, SuccessionId, nickname};
+    let ctx = setup();
+    let newcomer = session(&unique_cwd(), Some("none"), None);
+    // The name the newcomer would get on its own is held as a live alias.
+    let held = nickname(newcomer.id.0.as_ref());
+    let now = chrono::Utc::now().timestamp_millis();
+    ctx.set(&Succession {
+        id: SuccessionId(Arc::from(Uuid::new_v4().to_string().as_str())),
+        to_session_id: Uuid::new_v4().to_string(),
+        nickname: "someone-else".into(),
+        key: "cwd:claude|/elsewhere|op@example.com|a1".into(),
+        reason: "test".into(),
+        at: now,
+        alias: Some(held.clone()),
+        alias_until: Some(now + 600_000),
+        told: false,
+    })
+    .expect("succession SET");
+    assert_ne!(
+        start(&ctx, &newcomer),
+        held,
+        "a name still reaching another session as an alias isn't reused"
+    );
+
+    // Once the alias has lapsed, the name is free again.
+    let later = session(&unique_cwd(), Some("none"), None);
+    let free = nickname(later.id.0.as_ref());
+    ctx.set(&Succession {
+        id: SuccessionId(Arc::from(Uuid::new_v4().to_string().as_str())),
+        to_session_id: Uuid::new_v4().to_string(),
+        nickname: "another".into(),
+        key: "cwd:claude|/elsewhere2|op@example.com|a1".into(),
+        reason: "test".into(),
+        at: now,
+        alias: Some(free.clone()),
+        alias_until: Some(now - 1),
+        told: false,
+    })
+    .expect("succession SET");
+    assert_eq!(start(&ctx, &later), free);
+}
