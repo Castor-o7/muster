@@ -626,9 +626,13 @@ Rally.
   conformance suite's `pi`, `opencode` and `prime-agent` × `dropped-ack-redelivers` cells show it. Done when: a pushed message
   that the harness didn't take stays unread (the plugin acks after handing it over, or another
   design), and those cells pass.
-  Progress: the daemon half is in (#118, `acks_pushes`). Pi opts in and passes `dropped-ack-redelivers`
-  and the two new scenarios, `mail-waiting-at-reconnect` and `hung-handover-released`; opencode
-  and Prime Agent are next.
+  Progress: the daemon half is in (#118, `acks_pushes`). Pi opts in (#123) and passes
+  `dropped-ack-redelivers` and the two new scenarios, `mail-waiting-at-reconnect` and
+  `hung-handover-released`. opencode is done but shelved by the operator's change of priority on
+  2026-11-05 (Claude and Codex first): branch `fix/mus-81-opencode` at `2f746e8`, green then, no PR.
+  It passes all three cells, and also carries MUS-89's fix (opencode sets `channelsEnabled`, so
+  its row reads `wake: channel`, not `none`). It needs main merged in before a PR. Prime Agent is
+  after that.
 - [ ] **MUS-82: Resuming wakes doesn't wake a push session with held mail.** From MUS-69. While
   wakes are paused, the live push is skipped and the mail stays unread. On resume, Claude's waiter
   and the Codex bridge (MUS-74) wake for it, but nothing pushes it again, so a push session (a
