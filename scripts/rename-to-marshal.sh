@@ -17,11 +17,15 @@ find . -depth -name '*muster*' -not -path './.git/*' -not -path './target/*' \
   done
 
 # 2. Text. Order matters: specific forms before the generic ones.
-# NUL-separated, so paths with spaces survive.
+# NUL-separated, so paths with spaces survive. `--null`, not `-Z`: GNU grep
+# reads -Z as --null, but BSD grep (macOS) reads it as --decompress and ugrep
+# as --fuzzy, and then the whole list reached perl as one file name. The
+# pattern has no \b, which BSD's basic regex lacks; it only picks the files,
+# and perl's \b decides what changes.
 # Caution: the \b625[5-8]\b rewrite hits any bounded 6255-6258, not just ports
 # (e.g. a "-6255-" segment in a test UUID), so always read the resulting diff.
-grep -rIlZ --exclude-dir=.git --exclude-dir=target --exclude-dir=vendor \
-  -e muster -e Muster -e MUSTER -e '\b625[5-8]\b' . |
+grep -rIl --null --exclude-dir=.git --exclude-dir=target --exclude-dir=vendor \
+  -e muster -e Muster -e MUSTER -e '625[5-8]' . |
   xargs -0 -r perl -pi -e '
   s{github\.com/Castor-o7/muster}{github.com/ignition-is-go/marshal}g;
   s{Castor-o7/muster}{ignition-is-go/marshal}g;
