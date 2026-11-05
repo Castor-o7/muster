@@ -57,12 +57,9 @@ a Marshal user who doesn't run them sees no change.
   in `<project>/.mcp.json`, with the status line and the hooks in
   `settings.json`. The README also said sessions have no nickname; they do,
   and peers can be addressed by nickname or `session_id`.
-- **Internal tidy-up:** the shim's address lookup moves into one
-  `daemon_address()` that the three myko paths share (the MCP server, terminal
-  send and the roster), and `tools::await_command` becomes `pub(crate)`.
-  The statusline's reachability check keeps its own lookup in `channels.rs`,
-  which reads the environment first and has no default, so an unconfigured
-  machine isn't warned. Behaviour is unchanged.
+- **`--help`:** `marshal-shim --help` lists `tell`, `all` and `roster`. Both
+  new paths reach the daemon through the shim's existing `daemon_address()`, so
+  nothing else in the shim changes.
 
 ## What changes by default
 
