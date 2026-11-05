@@ -1422,7 +1422,10 @@ const SCENARIOS: &[(&str, Scenario)] = &[
     ("daemon-restart-mid-wait-pg", daemon_restart_mid_wait),
     ("restart-keeps-unread-mail", restart_keeps_unread_mail),
     ("restart-burst-shown-once-pg", restart_burst_shown_once),
-    ("restart-without-mail-stays-idle-pg", restart_without_mail_stays_idle),
+    (
+        "restart-without-mail-stays-idle-pg",
+        restart_without_mail_stays_idle,
+    ),
     ("operator-pause-stops-wakes", operator_pause_stops_wakes),
     ("resume-wakes-held-mail", resume_wakes_held_mail),
     ("broadcast-never-wakes", broadcast_never_wakes),
@@ -1636,7 +1639,10 @@ fn restart_burst_shown_once(c: &mut Cell) -> Result<(), String> {
         sent.push(t);
         thread::sleep(Duration::from_millis(350));
     }
-    let woke = c.harness.wait_for_wake(Duration::from_secs(25)).unwrap_or_default();
+    let woke = c
+        .harness
+        .wait_for_wake(Duration::from_secs(25))
+        .unwrap_or_default();
     thread::sleep(Duration::from_millis(500));
     let next = c.harness.busy_boundary().unwrap_or_default();
     // Past the hold lease, anything held but never acked would come back.
