@@ -104,18 +104,22 @@ async fn main() -> Result<()> {
     // myko's MCP listener is left untouched on its own port.
     //
     // Set on SIGTERM or Ctrl-C, so held waits end cleanly before the daemon exits.
+    // A listener that can't bind or stops is logged, and the daemon keeps
+    // running, as it always has: the hooks are opt-in, and fail quietly within
+    // their timeout when nothing answers.
     let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
-    let hooks = {
+    {
         let hook_ctx = Arc::new(server.ctx());
-        daemon::http_listener::run_until(hook_bind, hook_ctx, stop_rx)
-    };
+        tokio::spawn(async move {
+            if let Err(e) = daemon::http_listener::run_until(hook_bind, hook_ctx, stop_rx).await {
+                log::error!("[hook] listener exited: {e}");
+            }
+        });
+    }
 
     log::info!("marshal-daemon listening on ws://{bind_addr}, hooks on http://{hook_bind}");
-    // Without the hook listener no flagless session can be woken, so exit if it
-    // can't bind or stops, rather than keep running half-deaf.
     tokio::select! {
         r = server.run() => r.map_err(|e| anyhow::anyhow!(e))?,
-        r = hooks => exit_listener_stopped(&format!("hook listener on {hook_bind}"), r),
         signal = stop_signal() => {
             log::info!("marshal-daemon: {signal}; ending held waits, then stopping");
             let _ = stop_tx.send(true);
@@ -150,15 +154,6 @@ async fn stop_signal() -> &'static str {
         let _ = tokio::signal::ctrl_c().await;
         "Ctrl-C"
     }
-}
-
-/// Exit directly, so the cause is printed at once whatever myko's tasks are doing.
-fn exit_listener_stopped(what: &str, result: std::io::Result<()>) -> ! {
-    match result {
-        Ok(()) => eprintln!("marshal-daemon: {what} stopped"),
-        Err(e) => eprintln!("marshal-daemon: {what}: {e}"),
-    }
-    std::process::exit(1);
 }
 
 /// Resolve a bind spec from `env_var` (or `default`) via the system
