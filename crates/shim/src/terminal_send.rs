@@ -77,6 +77,10 @@ fn resolve_targets(
         .filter(|s| token.len() >= MIN_ID_PREFIX && s.id.0.starts_with(token.as_str()))
         .collect();
     match by_prefix.as_slice() {
+        [] if token.len() < MIN_ID_PREFIX => Err(format!(
+            "no team or session named `{token}` on the roster, and it's too short for an id \
+             prefix (at least {MIN_ID_PREFIX} characters)"
+        )),
         [] => Err(format!("no team or session named `{token}` on the roster")),
         [session] => Ok(vec![(***session).clone()]),
         _ => Err(format!(
@@ -105,6 +109,24 @@ fn outcome(result: &SendMessageResult) -> &'static str {
         (LivePushStatus::Delivered, _) => "delivered live",
         (_, WakeStatus::Expected) => "in inbox, wake expected but not observed",
         _ => "in inbox, wake not observed",
+    }
+}
+
+/// The line printed for one recipient: who it is, then what the send did.
+fn recipient_line(
+    nicknames: &[Arc<SessionNickname>],
+    session: &Session,
+    result: &Result<SendMessageResult, String>,
+) -> String {
+    let name = handle(nicknames, session);
+    let team = session.project.as_deref().unwrap_or("no team");
+    let host = session
+        .host
+        .as_ref()
+        .map_or("unknown host", |h| h.name.as_str());
+    match result {
+        Ok(sent) => format!("{name} ({team}, {host}): {}", outcome(sent)),
+        Err(e) => format!("{name} ({team}, {host}): NOT SENT: {e}"),
     }
 }
 
@@ -210,19 +232,10 @@ async fn send_all(
             as_session: Some(from.clone()),
         });
         let result = crate::tools::await_command(cell, SEND_TIMEOUT).await;
-        let name = handle(nicknames, session);
-        let team = session.project.as_deref().unwrap_or("no team");
-        let host = session
-            .host
-            .as_ref()
-            .map_or("unknown host", |h| h.name.as_str());
-        match result {
-            Ok(sent) => println!("{name} ({team}, {host}): {}", outcome(&sent)),
-            Err(e) => {
-                failed += 1;
-                println!("{name} ({team}, {host}): NOT SENT: {e}");
-            }
+        if result.is_err() {
+            failed += 1;
         }
+        println!("{}", recipient_line(nicknames, session, &result));
     }
     println!("--- {} sent, {failed} not sent", targets.len() - failed);
     if failed > 0 {
@@ -319,5 +332,80 @@ mod tests {
     #[test]
     fn a_terminal_cant_be_addressed() {
         assert!(resolve_targets(&roster(), &[], &named("cccccccc-1")).is_err());
+    }
+
+    #[test]
+    fn a_short_name_is_refused_as_too_short() {
+        let err = resolve_targets(&roster(), &[], &named("aaaa")).unwrap_err();
+        assert!(err.contains("too short"), "{err}");
+        let err = resolve_targets(&roster(), &[], &named("nobody-at-all")).unwrap_err();
+        assert!(!err.contains("too short"), "{err}");
+    }
+
+    #[test]
+    fn the_label_names_the_machine_and_keeps_the_body() {
+        assert_eq!(
+            labelled("host-a", "build is green"),
+            "[from a terminal on host-a; it can't receive replies] build is green"
+        );
+    }
+
+    fn sent(live_push: LivePushStatus, wake: WakeStatus) -> Result<SendMessageResult, String> {
+        Ok(SendMessageResult {
+            message_id: marshal_entities::MessageId(Arc::from("m")),
+            to_session_id: SessionId(Arc::from("aaaaaaaa-1")),
+            sent_at: 0,
+            live_push,
+            wake,
+            delivered_live: false,
+        })
+    }
+
+    #[test]
+    fn each_recipient_line_says_who_and_what_the_send_did() {
+        let mut s = (*session("aaaaaaaa-1", Some("marshal"), None)).clone();
+        s.host = Some(marshal_entities::HostInfo {
+            name: "host-a".into(),
+            os: String::new(),
+            arch: String::new(),
+        });
+        let nicks = [Arc::new(SessionNickname {
+            id: marshal_entities::SessionNicknameId(Arc::from("aaaaaaaa-1")),
+            nickname: "swift-chub".into(),
+        })];
+        let line = |r| recipient_line(&nicks, &s, &r);
+        assert_eq!(
+            line(sent(LivePushStatus::Delivered, WakeStatus::NotNeeded)),
+            "swift-chub (marshal, host-a): delivered live"
+        );
+        assert_eq!(
+            line(sent(LivePushStatus::Unavailable, WakeStatus::Expected)),
+            "swift-chub (marshal, host-a): in inbox, wake expected but not observed"
+        );
+        assert_eq!(
+            line(sent(LivePushStatus::Unavailable, WakeStatus::Unobserved)),
+            "swift-chub (marshal, host-a): in inbox, wake not observed"
+        );
+        assert_eq!(
+            line(Err("timed out".into())),
+            "swift-chub (marshal, host-a): NOT SENT: timed out"
+        );
+    }
+
+    #[test]
+    fn a_recipient_with_no_team_host_or_stored_nickname_still_gets_a_line() {
+        let s = session("bbbbbbbb-1", None, None);
+        let line = recipient_line(
+            &[],
+            &s,
+            &sent(LivePushStatus::Delivered, WakeStatus::NotNeeded),
+        );
+        assert_eq!(
+            line,
+            format!(
+                "{} (no team, unknown host): delivered live",
+                marshal_entities::nickname("bbbbbbbb-1")
+            )
+        );
     }
 }
