@@ -76,7 +76,7 @@ export interface NotifyChannelMeta {
   from_nickname?: string;
   to_session?: string;
   response_required?: boolean;
-  /** A preview capped by the daemon; see `body_truncated`. */
+  /** A preview capped at `CONTEXT_BODY_MAX_CHARS`; see `body_truncated`. */
   body?: string;
   /** Set when `body` was clipped. The durable message keeps the full body. */
   body_truncated?: boolean;

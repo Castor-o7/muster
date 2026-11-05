@@ -78,6 +78,14 @@ pub fn operator_relay_notice(operator: &str) -> String {
     )
 }
 
+/// Where to read the whole of a message whose preview was cut. Shared by the
+/// live pushes and the hook inbox so every surface says it the same way:
+/// without it, an agent that sees only the preview has no hint the rest
+/// exists.
+pub fn truncated_notice(message_id: &str) -> String {
+    format!("[truncated; full message {message_id} remains in muster://messages]")
+}
+
 /// A message in the bus. Polymorphic recipient — either a peer session
 /// (direct send) or a room (broadcast). Exactly one of `to_session_id`
 /// and `to_room_id` is set; serde defaults to `None` on the absent
@@ -99,21 +107,21 @@ pub struct Message {
     /// pull it. In the pull-via-hook model the recipient reads on its
     /// next turn — which can be after the sender's SessionEnd — so
     /// cascading on the sender would silently delete unread messages in
-    /// that window. Its lifetime is the 14-day sweep, and for room mail the
-    /// room's (the `to_room_id` cascade below).
+    /// that window. No recipient-session cascade either (see `to_session_id`).
     pub from_session_id: SessionId,
 
-    /// Direct recipient — set for 1:1 sends, `None` for broadcasts. Not a
-    /// `belongs_to(Session)`: mail to a reaped or ended session is kept, up to
-    /// the 14-day sweep, so it survives a restart and a returning session still
-    /// gets it (MUS-46).
+    /// Direct recipient — set for 1:1 sends, `None` for broadcasts.
+    /// NOT a `belongs_to(Session)` cascade: a recipient's session row is DEL'd
+    /// and re-SET under the same id on a reload, a resume or a reaped pull
+    /// session's next hook, and its direct messages must still be there. A
+    /// message lives until the daemon's TTL sweep prunes it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub to_session_id: Option<SessionId>,
 
     /// Broadcast recipient — set for room sends, `None` for direct
     /// sends. Cascade-DELs when the room is DEL'd. (Auto-rooms like
     /// `everyone` and `host:*` are never DEL'd, so broadcasts to them
-    /// effectively persist forever.)
+    /// persist until the daemon's TTL sweep prunes them.)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[belongs_to(Room)]
     pub to_room_id: Option<crate::room::RoomId>,

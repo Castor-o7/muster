@@ -19,18 +19,23 @@
 //!
 //! `muster-shim claude-hook <session-start|prompt-submit|post-tool-use>` runs
 //! the same bridge for Claude Code (see [`Harness`]), so Claude sessions get the
-//! inbox without the live-channel launch flag.
+//! inbox without the live-channel launch flag; `claude-hook wait` is the
+//! `asyncRewake` waiter that wakes an idle session when mail arrives.
 //!
 //! Best-effort by design: any failure prints nothing and returns, so muster
 //! can never block or break a Codex or Claude turn.
 
 use std::io::{Read, Write};
-use std::time::Duration;
+use std::net::{SocketAddr, ToSocketAddrs};
+use std::time::{Duration, Instant};
 
 use crate::link::{PostFailure, Reply};
+use muster_entities::pairing::Pairing;
 
 const HOOK_PORT: u16 = 6256;
-const TIMEOUT: Duration = Duration::from_secs(5);
+/// One deadline covers a whole hook request, so it fits Codex's shortest hook
+/// budget (`SessionEnd`, 3s).
+const TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Which agent harness invoked the hook. Both send the same hook JSON and read
 /// the same `hookSpecificOutput.additionalContext`; they differ in the
@@ -105,11 +110,7 @@ pub fn run_for(harness: Harness, ep: &str, base_override: Option<&str>) {
         "post-tool-use" => ("prompt-submit", "PostToolUse"),
         _ => ("prompt-submit", "UserPromptSubmit"),
     };
-    let body = format!(
-        "{{\"session_id\":{},\"cwd\":{}}}",
-        json_str(sid),
-        json_str(cwd)
-    );
+    let body = registration_body(sid, cwd, agent_id_from_env().as_deref());
     // `ack=client`: the daemon marks the mail read only when this hook says it
     // has printed it, so a reply lost on the way (a hook killed at its timeout,
     // a dropped tunnel hop) leaves the mail unread (MUS-75).
@@ -124,14 +125,14 @@ pub fn run_for(harness: Harness, ep: &str, base_override: Option<&str>) {
     // A paired machine reaches the hooks through the daemon's TLS gate,
     // unless an explicit base URL (argument or `MUSTER_BASE_URL`) says
     // otherwise.
-    let explicit = base_override.is_some_and(|b| !b.is_empty())
-        || std::env::var("MUSTER_BASE_URL").is_ok_and(|b| !b.is_empty());
-    let pairing = crate::link::load_pairing().filter(|_| !explicit);
-    let post = |path: &str, body: &str, timeout: Duration| match &pairing {
-        Some(pairing) => crate::link::https_post_why(pairing, path, body, timeout),
-        None => http_post_why(&base, path, body, timeout),
-    };
-    let Ok(reply) = post(&path, &body, harness.timeout()) else {
+    let pairing = hook_pairing(base_override);
+    let Ok(reply) = post_why(
+        pairing.as_ref(),
+        &base,
+        &path,
+        &body,
+        Instant::now() + harness.timeout(),
+    ) else {
         return;
     };
     let resp = reply.body.trim_end_matches(['\n', '\r', ' ']);
@@ -166,11 +167,48 @@ pub fn run_for(harness: Harness, ep: &str, base_override: Option<&str>) {
         }
     }
     // Only now has the mail been handed on. A lost ack means it comes again
-    // once the lease lapses, which beats losing it.
+    // once the lease lapses, which beats losing it. The ack gets a budget of
+    // its own, so a slow inbox reply doesn't leave it none, and the hook still
+    // finishes well inside the harness's hook timeout.
     if !reply.ack_ids.is_empty() {
         let ack =
             serde_json::json!({ "session_id": sid, "message_ids": reply.ack_ids }).to_string();
-        let _ = post("/hook/ack", &ack, ACK_TIMEOUT);
+        let _ = post_why(
+            pairing.as_ref(),
+            &base,
+            "/hook/ack",
+            &ack,
+            Instant::now() + harness.timeout(),
+        );
+    }
+}
+
+/// The pairing a hook posts through, unless an explicit base URL (argument or
+/// `MUSTER_BASE_URL`) sends it straight to a hook listener.
+fn hook_pairing(base_override: Option<&str>) -> Option<Pairing> {
+    let explicit = base_override.is_some_and(|b| !b.is_empty())
+        || std::env::var("MUSTER_BASE_URL").is_ok_and(|b| !b.is_empty());
+    crate::link::load_pairing().filter(|_| !explicit)
+}
+
+/// POST through the paired gate over TLS, or to the plain hook listener at
+/// `base`, finishing by `deadline` either way.
+fn post_why(
+    pairing: Option<&Pairing>,
+    base: &str,
+    path: &str,
+    body: &str,
+    deadline: Instant,
+) -> Result<Reply, PostFailure> {
+    match pairing {
+        Some(pairing) => {
+            let left = deadline
+                .checked_duration_since(Instant::now())
+                .filter(|left| !left.is_zero())
+                .ok_or(PostFailure::Unreachable)?;
+            crate::link::https_post_why(pairing, path, body, left)
+        }
+        None => http_post_why(base, path, body, deadline),
     }
 }
 
@@ -190,17 +228,14 @@ pub fn watch(session_id: &str, base_override: Option<&str>, once: bool) {
     let cwd = std::env::current_dir()
         .map(|p| p.display().to_string())
         .unwrap_or_default();
-    wait_for_mail(session_id, &cwd, base_override, once, |resp| {
-        let wrapped = wrap_long_lines(resp, WATCH_LINE_CHARS);
-        for (i, chunk) in event_chunks(&wrapped, WATCH_EVENT_CHARS).iter().enumerate() {
-            if i > 0 {
-                std::thread::sleep(WATCH_EVENT_GAP);
-            }
-            let mut out = std::io::stdout().lock();
-            let _ = writeln!(out, "{chunk}");
-            let _ = out.flush();
-        }
-    });
+    wait_for_mail(
+        session_id,
+        &cwd,
+        base_override,
+        once,
+        parent_pid(),
+        |resp| write_watch_events(&mut std::io::stdout().lock(), resp),
+    );
 }
 
 /// `muster-shim claude-hook wait` — the flag-free wake for Claude Code, run as
@@ -222,19 +257,39 @@ pub fn wait_hook(base_override: Option<&str>) {
     // A resumed session's old waiter holds the lock until its next poll notices
     // the parent is gone, so wait that out rather than leave the session without
     // a waiter. If that waiter's parent is alive, this just exits a bit later.
-    let deadline = std::time::Instant::now() + lock_wait();
-    let _lock = loop {
-        match waiter_lock(sid) {
-            Some(lock) => break lock,
-            None if std::time::Instant::now() >= deadline => return,
-            None => std::thread::sleep(LOCK_RETRY),
-        }
+    let parent = parent_pid();
+    let deadline = Instant::now() + lock_wait();
+    let Some(_lock) = acquire_waiter_lock(sid, deadline, parent) else {
+        return;
     };
-    let delivered = wait_for_mail(sid, cwd, base_override, true, |resp| {
-        eprintln!("{resp}");
+    let delivered = wait_for_mail(sid, cwd, base_override, true, parent, |resp| {
+        let mut out = std::io::stderr().lock();
+        writeln!(out, "{resp}").and_then(|()| out.flush())
     });
     if delivered {
         std::process::exit(2);
+    }
+}
+
+/// Wait until `deadline` for this session's waiter lock, giving up at once if
+/// our own parent goes away meanwhile.
+fn acquire_waiter_lock(
+    session_id: &str,
+    deadline: Instant,
+    parent: Option<u32>,
+) -> Option<std::fs::File> {
+    loop {
+        if parent_pid() != parent {
+            return None;
+        }
+        if let Some(lock) = waiter_lock(session_id) {
+            return Some(lock);
+        }
+        let remaining = deadline.checked_duration_since(Instant::now())?;
+        if remaining.is_zero() {
+            return None;
+        }
+        std::thread::sleep(LOCK_RETRY.min(remaining));
     }
 }
 
@@ -263,16 +318,13 @@ fn wait_for_mail(
     cwd: &str,
     base_override: Option<&str>,
     once: bool,
-    deliver: impl Fn(&str),
+    parent: Option<u32>,
+    mut deliver: impl FnMut(&str) -> std::io::Result<()>,
 ) -> bool {
     // A one-shot waiter only notices its parent is gone between polls, and until
     // then it could take mail for a closed session, so it polls more often.
     let wait = if once { ONCE_WAIT } else { WATCH_WAIT };
-    let body = format!(
-        "{{\"session_id\":{},\"cwd\":{}}}",
-        json_str(session_id),
-        json_str(cwd)
-    );
+    let body = registration_body(session_id, cwd, agent_id_from_env().as_deref());
     let path = format!(
         "/hook/wait?host={}&operator={}&harness=claude&ack=client&timeout={}{}",
         url_q(&short_host()),
@@ -281,27 +333,30 @@ fn wait_for_mail(
         identity_q()
     );
     let base = resolve_base(base_override);
-    let explicit = base_override.is_some_and(|b| !b.is_empty())
-        || std::env::var("MUSTER_BASE_URL").is_ok_and(|b| !b.is_empty());
     // The daemon answers within `WATCH_WAIT`; the read timeout only has to
     // outlast it, so a daemon that vanished mid-wait is noticed.
-    let timeout = wait + Duration::from_secs(30);
+    let timeout = poll_timeout(wait);
     // Report only a change of cause: stdout would wake the session, and
     // repeating it every retry would just bury the Monitor's output file.
     let mut failing = None;
     // After the daemon says it's stopping, stay quiet about it being unreachable
     // until this deadline, since that's expected while it restarts.
     let mut restart_quiet_until: Option<std::time::Instant> = None;
-    let parent = parent_pid();
     loop {
         if parent_pid() != parent {
             return false;
         }
-        let post = |path: &str, body: &str, timeout| match crate::link::load_pairing()
-            .filter(|_| !explicit)
-        {
-            Some(pairing) => crate::link::https_post_why(&pairing, path, body, timeout),
-            None => http_post_why(&base, path, body, timeout),
+        // Read the pairing each poll, so a machine paired or unpaired while a
+        // watcher runs follows it.
+        let pairing = hook_pairing(base_override);
+        let post = |path: &str, body: &str, timeout: Duration| {
+            post_why(
+                pairing.as_ref(),
+                &base,
+                path,
+                body,
+                Instant::now() + timeout,
+            )
         };
         match post(&path, &body, timeout) {
             Ok(reply) => {
@@ -319,7 +374,11 @@ fn wait_for_mail(
                     if parent_pid() != parent {
                         return false;
                     }
-                    deliver(resp);
+                    // Not handed on (the Monitor or hook pipe closed): leave it
+                    // unacked, to be offered again.
+                    if deliver(resp).is_err() {
+                        return false;
+                    }
                     // Only now has it been handed on. A lost ack means the mail
                     // comes again, which beats losing it.
                     if !reply.ack_ids.is_empty() {
@@ -345,9 +404,13 @@ fn wait_for_mail(
                 // A new waiter or re-armed watcher mustn't tell it again, or
                 // every Stop would wake it.
                 if failure.is_refusal() && refusal_is_new(session_id, failure) {
-                    deliver(&format!(
+                    if deliver(&format!(
                         "Muster can't deliver mail to this session: {failure}. Please tell your operator. This notice won't repeat."
-                    ));
+                    ))
+                    .is_err()
+                    {
+                        return false;
+                    }
                     if once {
                         return true;
                     }
@@ -425,13 +488,24 @@ const RESTART_BACKOFF: Duration = Duration::from_secs(2);
 const RESTART_QUIET: Duration = Duration::from_secs(30);
 const ACK_TIMEOUT: Duration = Duration::from_secs(10);
 const LOCK_RETRY: Duration = Duration::from_secs(1);
+const POLL_RESPONSE_GRACE: Duration = Duration::from_secs(30);
+const TAKEOVER_SLACK: Duration = Duration::from_secs(5);
 
-/// How long a waiter waits for another to let go: past one poll of `ONCE_WAIT`.
+fn poll_timeout(wait: Duration) -> Duration {
+    wait + POLL_RESPONSE_GRACE
+}
+
+fn default_lock_wait() -> Duration {
+    poll_timeout(ONCE_WAIT) + WATCH_RETRY + TAKEOVER_SLACK
+}
+
+/// How long a waiter waits for another to let go: the old waiter's full poll,
+/// its backoff, and coarse OS socket-timeout scheduling.
 fn lock_wait() -> Duration {
     std::env::var("MUSTER_WAITER_LOCK_WAIT_SECS")
         .ok()
         .and_then(|v| v.parse().ok())
-        .map_or(ONCE_WAIT + Duration::from_secs(5), Duration::from_secs)
+        .map_or_else(default_lock_wait, Duration::from_secs)
 }
 /// Longest line `watch` prints. Monitor cuts an event's line at about 500
 /// characters, so a longer one would reach the session with its end missing.
@@ -493,11 +567,7 @@ fn wrap_long_lines(text: &str, max: usize) -> String {
 /// first prompt; normal lifecycle hooks remain responsible for context
 /// injection and inbox acknowledgement.
 pub(crate) fn register_session(route: &HookRoute, session_id: &str, cwd: &str) -> Option<String> {
-    let body = format!(
-        "{{\"session_id\":{},\"cwd\":{}}}",
-        json_str(session_id),
-        json_str(cwd)
-    );
+    let body = registration_body(session_id, cwd, agent_id_from_env().as_deref());
     let path = format!(
         "/hook/session-register?host={}&operator={}&harness=codex{}",
         url_q(&short_host()),
@@ -577,13 +647,10 @@ fn resolve_base(base_override: Option<&str>) -> String {
     {
         return b.trim_end_matches('/').to_string();
     }
-    // Fall back to the same daemon address the shim's MCP path uses, remapped
-    // from the WS endpoint to the plain-HTTP hook port.
-    let ws = std::env::var(crate::ADDRESS_ENV)
-        .ok()
-        .or_else(crate::read_address_from_config_file)
-        .unwrap_or_default();
-    base_from_daemon(&ws)
+    // Fall back to the same daemon address an unpaired shim's MCP path uses
+    // (address file, then the env vars), remapped from the WS endpoint to the
+    // plain-HTTP hook port.
+    base_from_daemon(&crate::unpaired_daemon_address())
 }
 
 fn base_from_daemon(daemon: &str) -> String {
@@ -609,23 +676,28 @@ fn base_from_daemon(daemon: &str) -> String {
     format!("http://{host}:{HOOK_PORT}")
 }
 
-/// Minimal blocking HTTP/1.1 POST. The daemon replies `Content-Length` +
-/// `Connection: close`, so we read to EOF and return the body. `None` on any
-/// transport failure. `timeout` bounds the connect and each read/write.
+/// Blocking HTTP/1.1 POST with a complete Content-Length response.
+/// `timeout` covers resolution, connection, writes and framed reads.
 fn http_post(base: &str, path: &str, body: &str, timeout: Duration) -> Option<String> {
-    http_post_why(base, path, body, timeout)
+    http_post_why(base, path, body, Instant::now() + timeout)
         .ok()
         .map(|reply| reply.body)
 }
 
-/// [`http_post`], saying why it failed.
+/// [`http_post`], saying why it failed. One deadline covers the whole
+/// request, so a daemon that trickles its reply can't stretch a hook.
 fn http_post_why(
     base: &str,
     path: &str,
     body: &str,
-    timeout: Duration,
+    deadline: Instant,
 ) -> Result<Reply, PostFailure> {
-    let unreachable = |_| PostFailure::Unreachable;
+    let left = || {
+        deadline
+            .checked_duration_since(Instant::now())
+            .filter(|left| !left.is_zero())
+            .ok_or(PostFailure::Unreachable)
+    };
     let hostport = base
         .strip_prefix("http://")
         .ok_or(PostFailure::Unreachable)?
@@ -634,14 +706,10 @@ fn http_post_why(
         Some((h, p)) => (h, p.parse::<u16>().map_err(|_| PostFailure::Unreachable)?),
         None => (hostport, 80),
     };
-    let mut stream = crate::link::connect_any(format!("{host}:{port}"), timeout)
-        .ok_or(PostFailure::Unreachable)?;
-    stream
-        .set_read_timeout(Some(timeout))
-        .map_err(unreachable)?;
-    stream
-        .set_write_timeout(Some(timeout))
-        .map_err(unreachable)?;
+    let addrs =
+        resolve_within(format!("{host}:{port}"), left()?).ok_or(PostFailure::Unreachable)?;
+    let mut stream =
+        crate::link::connect_any(addrs.as_slice(), deadline).ok_or(PostFailure::Unreachable)?;
     // On the daemon's host the hook listener requires the local token (MUS-7).
     // A paired machine posts through its tunnel, which carries its own token,
     // and has no local token file.
@@ -653,10 +721,42 @@ fn http_post_why(
          Content-Length: {}\r\n{auth}Connection: close\r\n\r\n{body}",
         body.len()
     );
-    stream.write_all(req.as_bytes()).map_err(unreachable)?;
-    let mut buf = Vec::new();
-    stream.read_to_end(&mut buf).map_err(unreachable)?;
-    crate::link::parse_response(&buf)
+    let mut bytes = req.as_bytes();
+    while !bytes.is_empty() {
+        stream
+            .set_write_timeout(Some(left()?))
+            .map_err(|_| PostFailure::Unreachable)?;
+        let written = stream.write(bytes).map_err(|_| PostFailure::Unreachable)?;
+        if written == 0 {
+            return Err(PostFailure::Unreachable);
+        }
+        bytes = &bytes[written..];
+    }
+    crate::link::read_reply(&mut stream, deadline)
+}
+
+/// Resolve `hostport` within `limit`: a resolver that hangs mustn't hold a
+/// hook past its deadline.
+fn resolve_within(hostport: String, limit: Duration) -> Option<Vec<SocketAddr>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(hostport.to_socket_addrs().map(Iterator::collect));
+    });
+    rx.recv_timeout(limit).ok()?.ok()
+}
+
+/// Print a delivery as Monitor events, saying if any write or flush failed,
+/// so the caller leaves the mail unacked.
+fn write_watch_events(out: &mut impl Write, text: &str) -> std::io::Result<()> {
+    let wrapped = wrap_long_lines(text, WATCH_LINE_CHARS);
+    for (i, chunk) in event_chunks(&wrapped, WATCH_EVENT_CHARS).iter().enumerate() {
+        if i > 0 {
+            std::thread::sleep(WATCH_EVENT_GAP);
+        }
+        writeln!(out, "{chunk}")?;
+        out.flush()?;
+    }
+    Ok(())
 }
 
 fn short_host() -> String {
@@ -704,11 +804,6 @@ fn operator_identity_line(block: &str) -> Option<String> {
     Some(format!("muster: this session is {nick} ({short})"))
 }
 
-/// JSON-encode a string (quoted, escaped) for the request body.
-fn json_str(s: &str) -> String {
-    serde_json::Value::String(s.to_string()).to_string()
-}
-
 /// Minimal percent-encoding for a query-parameter value (host / operator).
 /// Emails (`@`) and hostnames are safe; we only need to neutralise the few
 /// characters that would break the query string.
@@ -725,9 +820,91 @@ fn url_q(s: &str) -> String {
     out
 }
 
+/// `MUSTER_AGENT_ID`, trimmed: an embedding agent's own id for this session,
+/// carried as metadata only (routing, acks and leases ignore it).
+pub(crate) fn agent_id_from_env() -> Option<String> {
+    std::env::var("MUSTER_AGENT_ID").ok().and_then(|value| {
+        let value = value.trim();
+        (!value.is_empty()).then(|| value.to_owned())
+    })
+}
+
+/// The JSON body every hook sends: the session, its cwd, and the embedding
+/// agent's id when there is one. Never in the query string.
+fn registration_body(session_id: &str, cwd: &str, agent_id: Option<&str>) -> String {
+    let mut body = serde_json::json!({ "session_id": session_id, "cwd": cwd });
+    if let Some(agent_id) = agent_id {
+        body["agent_id"] = agent_id.into();
+    }
+    body.to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn takeover_budget_outlasts_the_full_old_poll_and_error_backoff() {
+        assert!(default_lock_wait() > poll_timeout(ONCE_WAIT) + WATCH_RETRY);
+        assert_eq!(default_lock_wait(), Duration::from_secs(70));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_orphaned_lock_waiter_returns_without_waiting_for_the_deadline() {
+        let started = Instant::now();
+        assert!(
+            acquire_waiter_lock(
+                "orphaned-lock-test",
+                started + Duration::from_secs(10),
+                Some(u32::MAX)
+            )
+            .is_none()
+        );
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    struct FailingWriter {
+        writes_left: usize,
+        fail_flush: bool,
+    }
+
+    impl Write for FailingWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if self.writes_left == 0 {
+                return Err(std::io::ErrorKind::BrokenPipe.into());
+            }
+            self.writes_left -= 1;
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            if self.fail_flush {
+                Err(std::io::ErrorKind::BrokenPipe.into())
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    #[test]
+    fn watch_output_propagates_first_write_later_write_and_flush_failures() {
+        for mut out in [
+            FailingWriter {
+                writes_left: 0,
+                fail_flush: false,
+            },
+            FailingWriter {
+                writes_left: 1,
+                fail_flush: false,
+            },
+            FailingWriter {
+                writes_left: usize::MAX,
+                fail_flush: true,
+            },
+        ] {
+            assert!(write_watch_events(&mut out, &"word ".repeat(1000)).is_err());
+        }
+    }
 
     #[test]
     fn the_operator_sees_the_nickname_at_session_start() {

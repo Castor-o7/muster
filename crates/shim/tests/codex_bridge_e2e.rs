@@ -155,6 +155,8 @@ async fn handle_hook_request(mut stream: TcpStream, ctx: Arc<MykoServerContext>)
             .get("cwd")
             .and_then(Value::as_str)
             .unwrap_or("/wake-canary");
+        assert!(!target.contains("agent_id"));
+        assert_eq!(body["agent_id"], "bridge/\"agent\nopaque");
         internal_context(&ctx)
             .emit_set(&hook_session(session_id, cwd))
             .expect("register hook-owned session");
@@ -401,6 +403,7 @@ impl BridgeProcess {
             .arg(&ready_file)
             .env("MUSTER_BASE_URL", &hooks.base_url)
             .env("MUSTER_HOST", TEST_HOST)
+            .env("MUSTER_AGENT_ID", " bridge/\"agent\nopaque ")
             .env("RUST_LOG", "muster_shim=debug")
             .env("TMPDIR", temp.path())
             .env("TEMP", temp.path())
@@ -471,6 +474,7 @@ fn hook_session(id: &str, cwd: &str) -> Session {
     Session {
         id: SessionId(Arc::from(id)),
         client_id: None,
+        agent_id: None,
         pid: 0,
         cwd: cwd.to_string(),
         git_branch: None,

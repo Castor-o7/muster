@@ -131,6 +131,29 @@ describe("deliverLivePush", () => {
     expect(session.acked).toEqual(["m1"]);
   });
 
+  // From upstream's #132/#137 cases.
+  test("preserves a pushed reply requirement", async () => {
+    const session = fakeSession(["m1"]);
+    await deliverLivePush({ ...push("m1", "please answer"), response_required: true }, "alice", session.target);
+    expect(session.injected).toEqual(["new message from alice [response_required=true]: please answer"]);
+  });
+
+  test("keeps the truncation notice and still leaves the inbox alone", async () => {
+    const session = fakeSession(["waited", "m1"]);
+    await deliverLivePush({ ...push("m1", "the first part"), body_truncated: true }, "alice", session.target);
+    expect(session.injected).toEqual([
+      "new message from alice [response_required=false]: the first part\n[preview truncated; read the full message with muster_messages (message m1)]",
+    ]);
+    expect(session.acked).toEqual(["m1"]);
+    expect((await session.puller.pull("s"))?.text).toBe("waited");
+  });
+
+  test("injects nothing when the push has no body and the inbox is empty", async () => {
+    const session = fakeSession([]);
+    await deliverLivePush({}, "alice", session.target);
+    expect(session.injected).toEqual([]);
+  });
+
   test("a push that names no message is injected and acks nothing", async () => {
     const session = fakeSession([]);
     await deliverLivePush({ body: "hello" }, "alice", session.target);

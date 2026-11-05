@@ -29,7 +29,10 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use hyphae::{Gettable, Watchable};
 use mcp::ServerConfig;
-use muster_entities::{GetAllSessions, HostInfo, NotifyChannel, Session, SessionId};
+use muster_entities::{
+    AckMessages, AckMessagesResult, GetAllSessions, HostInfo, MessageId, NotifyChannel, Session,
+    SessionId,
+};
 use myko::{
     client::{ConnectionStatus, MykoClient},
     wire::{MEvent, MEventType},
@@ -90,6 +93,14 @@ fn main() -> Result<()> {
     // Code's status prefix from stdin.
     let mut argv = std::env::args().skip(1);
     match argv.next().as_deref() {
+        Some("-h" | "--help") => {
+            print!("{}", usage());
+            return Ok(());
+        }
+        Some("-V" | "--version") => {
+            println!("muster-shim {}", env!("CARGO_PKG_VERSION"));
+            return Ok(());
+        }
         Some("--check") if argv.next().is_none() => {
             println!("ok");
             return Ok(());
@@ -112,7 +123,8 @@ fn main() -> Result<()> {
         // `hooks/hooks.json` as `muster-shim claude-hook
         // session-start|prompt-submit|post-tool-use`. It pulls unread direct
         // messages into the turn, so a session launched without the channels
-        // flag still receives them.
+        // flag still receives them. `claude-hook wait` is the asyncRewake
+        // waiter that wakes an idle session when mail arrives.
         Some("claude-hook") => {
             let ep = argv.next().unwrap_or_else(|| "prompt-submit".to_string());
             let base = argv.next();
@@ -233,7 +245,7 @@ fn main() -> Result<()> {
                 .block_on(codex_bridge::run(&rest));
         }
         Some(other) => {
-            anyhow::bail!("unknown argument: {other}");
+            anyhow::bail!("unknown argument: {other} (try 'muster-shim --help')");
         }
         None => {}
     }
@@ -295,10 +307,7 @@ async fn daemon_address() -> Result<(String, refusal::Credential)> {
             )
         }
         None => {
-            let address = read_address_from_config_file()
-                .or_else(|| std::env::var(ADDRESS_ENV).ok())
-                .or_else(|| std::env::var(ADDRESS_ENV_LEGACY).ok())
-                .unwrap_or_else(|| DEFAULT_DAEMON_ADDRESS.to_string());
+            let address = unpaired_daemon_address();
             log::info!("[muster-shim] not paired: connecting to {address} without TLS");
             let file = muster_entities::pairing::config_dir()
                 .map(|d| d.join(muster_entities::pairing::LOCAL_TOKEN_FILE));
@@ -308,6 +317,53 @@ async fn daemon_address() -> Result<(String, refusal::Credential)> {
             )
         }
     })
+}
+
+/// The `--help` text: the subcommands dispatched in `main`, and how the
+/// default MCP-server mode finds the daemon.
+fn usage() -> String {
+    format!(
+        "muster-shim {version}
+Connects an agent session to the Muster daemon.
+
+Usage: muster-shim [COMMAND]
+
+With no command, serves MCP on stdio for the agent session that started it.
+
+Commands:
+  statusline    Render the Claude Code status line prefix from stdin
+  claude-hook   Forward a Claude hook, or wait for mail:
+                claude-hook <session-start|prompt-submit|post-tool-use|wait> [base-url]
+  watch         Print live mail: watch <session_id> [base-url] [--once]
+  codex-hook    Forward a Codex hook to the daemon:
+                codex-hook <session-start|session-end|prompt-submit|pre-tool-use|post-tool-use> [base-url]
+  tell          Message a team, nickname or session from a terminal:
+                tell <team, nickname or session id> <message>
+  all           Message every session from a terminal: all <message>
+  roster        Print the roster as JSON
+  doctor        Report what's wrong with this machine's setup
+  setup         Set this machine up as a client (setup --help for options)
+  pair          Store the code `muster-daemon pair` printed: pair [code]
+                (with no code, it is read from stdin)
+  pairing       Show this machine's pairing, with the token masked
+  unpair        Remove this machine's pairing
+  codex-setup   Wire Muster into a Codex install (codex-setup --help for options)
+  codex-run     Start Codex with Muster live delivery
+  codex-bridge  Run the Codex live-delivery bridge on its own (codex-run starts it)
+
+Options:
+  --check        Print \"ok\" and exit (install smoke test)
+  -h, --help     Print this help and exit
+  -V, --version  Print the version and exit
+
+Daemon address, first match wins: this machine's pairing (`muster-shim pair`),
+then the muster/{ADDRESS_FILE} file in the per-user config directory, then
+{ADDRESS_ENV}, then {ADDRESS_ENV_LEGACY}, then {DEFAULT_DAEMON_ADDRESS}.
+Hooks reach the daemon's hook port the same way, unless MUSTER_BASE_URL or a
+base-url argument names it.
+",
+        version = env!("CARGO_PKG_VERSION"),
+    )
 }
 
 async fn serve() -> Result<()> {
@@ -444,6 +500,7 @@ async fn serve() -> Result<()> {
     let session = Session {
         id: session_id.clone(),
         client_id: None,
+        agent_id: codex_hook::agent_id_from_env(),
         pid,
         cwd: cwd.clone(),
         git_branch: git_branch.clone(),
@@ -459,7 +516,9 @@ async fn serve() -> Result<()> {
         host: Some(host.clone()),
         project: project.clone(),
         channels_enabled,
-        acks_pushes: None,
+        // The drain task below acks each direct push once it is written to
+        // Claude, so the daemon can leave it unread until then.
+        acks_pushes: (!is_codex).then_some(true),
         // MUS-3: the same harness and identity the hooks report, since this
         // SET replaces the row the hooks wrote.
         harness: Some(if is_codex { "codex" } else { "claude" }.to_string()),
@@ -1025,6 +1084,7 @@ async fn serve() -> Result<()> {
     });
 
     let notify_rx = Mutex::new(Some(notify_rx));
+    let client_for_acks = Arc::clone(&client);
     let served = mcp::serve_stdio(config, handler, Arc::clone(&activity), move |notifier| {
         // Spawn a task that drains the NotifyChannel buffer and emits each
         // one onto stdout via the MCP writer. The buffer accumulated any
@@ -1032,7 +1092,7 @@ async fn serve() -> Result<()> {
         if let Some(mut rx) = notify_rx.lock().ok().and_then(|mut g| g.take()) {
             tokio::spawn(async move {
                 while let Some(cmd) = rx.recv().await {
-                    notifier.channel(cmd.content, cmd.meta);
+                    forward_push(&notifier, &client_for_acks, cmd);
                 }
             });
             log::info!("[muster-shim] notification drain task started");
@@ -1048,6 +1108,49 @@ async fn serve() -> Result<()> {
     }
     log::info!("[muster-shim] stdin closed; deregistering and exiting");
     deregister_and_exit(&client, &session, is_codex);
+}
+
+/// Hand a daemon push to Claude. A direct message or @mention ping is acked
+/// once it has been written and flushed to Claude's stdin: the daemon leaves
+/// a direct message unread until then (our Session sets `acks_pushes`), so
+/// one that never gets this far comes back in the next inbox pull. A failed
+/// write, or an ack that doesn't land, leaves it unread; showing it twice
+/// beats losing it. A flushed line is not proof Claude showed it (Claude may
+/// stop reading and die with it in the pipe), but MCP notifications have no
+/// ack, so this is as far as the shim can see. A mention ping is a direct message too, so acking it keeps
+/// the per-turn inbox from showing it again. Any other push is passed on
+/// without an ack.
+fn forward_push(notifier: &mcp::Notifier, client: &Arc<MykoClient>, cmd: NotifyChannel) {
+    let kind = cmd.meta.get("kind").and_then(serde_json::Value::as_str);
+    let acked_message_id = matches!(kind, Some("new_message" | "mention"))
+        .then(|| {
+            cmd.meta
+                .get("message_id")
+                .and_then(serde_json::Value::as_str)
+        })
+        .flatten()
+        .map(|id| MessageId(Arc::from(id)));
+    let Some(message_id) = acked_message_id else {
+        notifier.channel(cmd.content, cmd.meta);
+        return;
+    };
+    let written = notifier.channel_written(cmd.content, cmd.meta);
+    let client = Arc::clone(client);
+    tokio::spawn(async move {
+        if written.await.is_err() {
+            log::warn!(
+                "[muster-shim] push {} not written to Claude; left unread",
+                message_id.0
+            );
+            return;
+        }
+        // Fire-and-forget like the liveness setters: a lost ack leaves the
+        // message unread, which the next inbox pull repairs.
+        let _ = client.send_command::<AckMessages, AckMessagesResult>(&AckMessages {
+            message_ids: vec![message_id],
+            as_session: None,
+        });
+    });
 }
 
 /// Best-effort roster deregistration followed by a hard process exit.
@@ -1071,6 +1174,7 @@ fn deregister_and_exit(client: &MykoClient, session: &Arc<Mutex<Session>>, is_co
         }
         // One beat for the client's write thread to flush the DEL frame.
         std::thread::sleep(std::time::Duration::from_millis(300));
+        std::process::exit(0);
     }
     std::process::exit(0);
 }
@@ -1126,6 +1230,28 @@ fn emit_session_del(client: &MykoClient, session: &Session) -> Result<()> {
         .send_event(event)
         .map_err(|e| anyhow::anyhow!("send_event(DEL) failed: {e}"))?;
     Ok(())
+}
+
+/// The daemon an unpaired shim connects to, in the order described in `serve`:
+/// address file, then `MUSTER_DAEMON_ADDRESS`, then `MYKO_ADDRESS`, then
+/// localhost. The Claude/Codex hook bridge derives its hook URL from the same
+/// answer. A pairing outranks all of these; see [`daemon_address`].
+pub(crate) fn unpaired_daemon_address() -> String {
+    first_daemon_address(
+        read_address_from_config_file(),
+        std::env::var(ADDRESS_ENV).ok(),
+        std::env::var(ADDRESS_ENV_LEGACY).ok(),
+    )
+}
+
+fn first_daemon_address(
+    file: Option<String>,
+    env: Option<String>,
+    legacy_env: Option<String>,
+) -> String {
+    file.or(env)
+        .or(legacy_env)
+        .unwrap_or_else(|| DEFAULT_DAEMON_ADDRESS.to_string())
 }
 
 /// Try each well-known per-user config path in order; return the first
@@ -1555,9 +1681,35 @@ fn detect_host() -> HostInfo {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn the_address_file_outranks_the_env_vars() {
+        let some = |s: &str| Some(s.to_string());
+        assert_eq!(
+            first_daemon_address(
+                some("ws://file:6255"),
+                some("ws://env:6255"),
+                some("ws://old:6255")
+            ),
+            "ws://file:6255"
+        );
+        assert_eq!(
+            first_daemon_address(None, some("ws://env:6255"), some("ws://old:6255")),
+            "ws://env:6255"
+        );
+        assert_eq!(
+            first_daemon_address(None, None, some("ws://old:6255")),
+            "ws://old:6255"
+        );
+        assert_eq!(
+            first_daemon_address(None, None, None),
+            DEFAULT_DAEMON_ADDRESS
+        );
+    }
     use super::{
-        ROSTER_MISS_TICKS, default_current_task, detect_git_branch, followed_current_task,
-        registered_on_roster, resolve_git_head_dir, roster_miss_step,
+        DEFAULT_DAEMON_ADDRESS, ROSTER_MISS_TICKS, default_current_task, detect_git_branch,
+        first_daemon_address, followed_current_task, registered_on_roster, resolve_git_head_dir,
+        roster_miss_step,
     };
     use muster_entities::{Session, SessionId};
     use std::process::Command;
@@ -1682,6 +1834,7 @@ mod tests {
             Arc::new(Session {
                 id: SessionId(Arc::from(id)),
                 client_id: client.map(|c| myko::entities::client::ClientId(Arc::from(c))),
+                agent_id: None,
                 pid: 0,
                 cwd: String::new(),
                 git_branch: None,

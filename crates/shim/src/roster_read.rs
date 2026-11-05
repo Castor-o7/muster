@@ -163,6 +163,7 @@ mod tests {
             project: None,
             channels_enabled: None,
             acks_pushes: None,
+            agent_id: None,
             harness: None,
             identity: None,
         })

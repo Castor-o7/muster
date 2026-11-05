@@ -170,10 +170,33 @@ fn service(args: &[String]) -> Result<()> {
 }
 
 fn main() -> Result<()> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    // `args_os`, so an argument that isn't UTF-8 is refused, not a panic.
+    let raw: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    let mut args: Vec<String> = Vec::with_capacity(raw.len());
+    for arg in &raw {
+        match arg.to_str() {
+            Some(a) => args.push(a.to_string()),
+            None => refuse_argument(arg),
+        }
+    }
+    // The daemon always runs in the foreground. `--foreground` stays accepted
+    // ahead of a daemon run (bare or `--tls`), because earlier docs told people
+    // to pass it, so a unit file written from them keeps working.
+    if args.first().map(String::as_str) == Some("--foreground") {
+        match args.get(1).map(String::as_str) {
+            None | Some("--tls") if args.len() <= 2 => {
+                args.remove(0);
+            }
+            _ => refuse_argument(std::ffi::OsStr::new(&args[1])),
+        }
+    }
     match args.first().map(String::as_str) {
         None => run_daemon(false),
         Some("--tls") if args.len() == 1 => run_daemon(true),
+        Some("-V" | "--version") if args.len() == 1 => {
+            println!("muster-daemon {}", env!("CARGO_PKG_VERSION"));
+            Ok(())
+        }
         Some("pair") => pair(&args[1..]),
         Some("unpair") => unpair(&args[1..]),
         Some("link") if args.len() == 2 => link(&args[1]),
@@ -249,10 +272,10 @@ fn main() -> Result<()> {
             Ok(())
         }
         Some("-h" | "--help") => {
-            println!("{USAGE}");
+            print!("{}", usage());
             Ok(())
         }
-        Some(other) => anyhow::bail!("unknown argument: {other}\n{USAGE}"),
+        Some(other) => refuse_argument(std::ffi::OsStr::new(other)),
     }
 }
 
@@ -736,6 +759,45 @@ async fn serve_until_stopped(
         }
     }
     Ok(())
+}
+
+/// The `--help` text: Muster's commands (`USAGE`), the flags and the
+/// environment the daemon reads (upstream Marshal #135).
+fn usage() -> String {
+    format!(
+        "muster-daemon {version}
+Muster coordination daemon: serves the session roster, rooms and messages
+to muster-shim, muster-tui and the agent plugins.
+
+Usage: muster-daemon [--tls] | muster-daemon COMMAND ...
+
+Commands:
+{commands}
+
+Options:
+  -h, --help     Print this help and exit
+  -V, --version  Print the version and exit
+  --foreground   Accepted and ignored: the daemon always runs in the foreground
+
+Environment:
+  MUSTER_BIND        Public listen address (default {DEFAULT_BIND})
+  MUSTER_HOOK_BIND   HTTP hook listen address (default {DEFAULT_HOOK_BIND})
+  MUSTER_TLS         1 turns on the gate, as --tls does
+  MYKO_POSTGRES_URL  Postgres URL for durable state; without it the daemon
+                     runs ephemeral and keeps nothing across a restart
+  RUST_LOG           Log filter (default info)
+",
+        version = env!("CARGO_PKG_VERSION"),
+        commands = USAGE.strip_prefix("usage:\n").unwrap_or(USAGE),
+    )
+}
+
+/// Refuse an argument the daemon doesn't know, as a usage error (exit 2),
+/// instead of starting or ignoring it (upstream Marshal #135).
+fn refuse_argument(arg: &std::ffi::OsStr) -> ! {
+    eprintln!("muster-daemon: unknown argument: {}", arg.to_string_lossy());
+    eprintln!("Try 'muster-daemon --help'.");
+    std::process::exit(2);
 }
 
 /// How often the sweeper checks, before it starts, whether myko has caught up.

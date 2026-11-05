@@ -50,6 +50,7 @@ fn session(id: &str, client_id: Option<&str>) -> Session {
     Session {
         id: SessionId(Arc::from(id)),
         client_id: client_id.map(|c| ClientId(Arc::from(c))),
+        agent_id: None,
         pid: 0,
         cwd: "/repo".into(),
         git_branch: None,
@@ -272,6 +273,24 @@ fn a_pull_recipient_with_a_waiter_expects_a_wake() {
     assert_eq!(result.live_push, LivePushStatus::Unavailable);
     assert_eq!(result.wake, WakeStatus::Expected);
     assert_eq!(message_count(&ctx), 1);
+}
+
+#[test]
+fn a_recipient_with_a_waiter_expects_a_wake() {
+    // Connected without channels, or a pull row: either way a waiter holding
+    // `/hook/wait` will hand it the message.
+    let _unpaused = pause_state(false);
+    for client in [Some("c-recipient"), None] {
+        let ctx = setup();
+        set_session(&ctx, &session("sender", Some("c-sender")));
+        let mut recipient = session("recipient", client);
+        recipient.channels_enabled = Some(false);
+        set_session(&ctx, &recipient);
+        set_waiter(&ctx, "recipient");
+
+        let result = send_to_recipient(&ctx);
+        assert_eq!(result.wake, WakeStatus::Expected, "client {client:?}");
+    }
 }
 
 #[test]

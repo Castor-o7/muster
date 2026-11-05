@@ -217,15 +217,14 @@ async fn handle_conn(
     match hooks::dispatch(path, query, &body, &ctx) {
         Some(outcome) => {
             // A caller that says it will ack (`ack=client`) gets the ids in
-            // `X-Muster-Ack` and acks once it has printed the mail; until then a
-            // lease keeps the mail from being offered twice, and it's offered
+            // `X-Muster-Ack-V1` and acks once it has printed the mail; until then
+            // a lease keeps the mail from being offered twice, and it's offered
             // again if the ack never comes (MUS-75). Flushing the reply here
             // doesn't prove it arrived: the hook may be killed at its timeout,
             // or a tunnel hop may drop it.
             let client_acks = query.split('&').any(|kv| kv == "ack=client");
             if client_acks && let Some((_, ids)) = &outcome.deferred_ack {
-                let ids: Vec<&str> = ids.iter().map(|id| id.0.as_ref()).collect();
-                let header = format!("X-Muster-Ack: {}\r\n", ids.join(","));
+                let header = ack_header(ids);
                 return write_response_with(&mut stream, 200, &header, &outcome.body).await;
             }
             write_response(&mut stream, 200, &outcome.body).await?;
@@ -337,8 +336,7 @@ async fn handle_wait(
             // mail on, which the gate's loopback socket can't tell us.
             if client_acks {
                 let ids = outcome.deferred_ack.map(|(_, ids)| ids).unwrap_or_default();
-                let ids: Vec<&str> = ids.iter().map(|id| id.0.as_ref()).collect();
-                let header = format!("X-Muster-Ack: {}\r\n", ids.join(","));
+                let header = ack_header(&ids);
                 return write_response_with(&mut stream, 200, &header, &outcome.body).await;
             }
             write_response(&mut stream, 200, &outcome.body).await?;
@@ -361,6 +359,32 @@ async fn handle_wait(
     }
 }
 
+/// The ack header(s) for mail a client acks itself (MUS-75).
+///
+/// `X-Muster-Ack-V1` carries the ids as a JSON string list, with DEL escaped
+/// as well, so an id can't end the header or carry a comma that splits it
+/// (upstream Marshal #164). The older comma-separated `X-Muster-Ack` is also
+/// sent while every id is plain (letters, digits, `-`, `_`, `.`, `:`), so a
+/// hook client from before V1 still acks; with any other id it's left out
+/// and that client sees the mail again after its lease.
+pub(crate) fn ack_header(ids: &[muster_entities::MessageId]) -> String {
+    let ids: Vec<&str> = ids.iter().map(|id| id.0.as_ref()).collect();
+    let encoded = serde_json::to_string(&ids)
+        .expect("string list serializes")
+        .replace('\u{7f}', "\\u007f");
+    let mut header = format!("X-Muster-Ack-V1: {encoded}\r\n");
+    let plain = |id: &str| {
+        !id.is_empty()
+            && id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b':'))
+    };
+    if ids.iter().all(|id| plain(id)) {
+        header.push_str(&format!("X-Muster-Ack: {}\r\n", ids.join(",")));
+    }
+    header
+}
+
 async fn write_response(stream: &mut TcpStream, status: u16, body: &str) -> std::io::Result<()> {
     write_response_with(stream, status, "", body).await
 }
@@ -373,10 +397,12 @@ async fn write_response_with(
 ) -> std::io::Result<()> {
     let reason = match status {
         200 => "OK",
+        401 => "Unauthorized",
         403 => "Forbidden",
         404 => "Not Found",
         405 => "Method Not Allowed",
         413 => "Payload Too Large",
+        503 => "Service Unavailable",
         _ => "OK",
     };
     let head = format!(

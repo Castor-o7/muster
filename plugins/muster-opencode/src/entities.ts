@@ -50,6 +50,7 @@ export interface HostInfo {
 /** The `Session` item payload SET onto the roster. `clientId` is omitted —
  *  the server populates it from the live WS connection. */
 export interface SessionItem {
+  agentId?: string;
   id: string;
   pid: number;
   cwd: string;
@@ -236,6 +237,8 @@ export interface NotifyChannelMeta {
   to_session?: string;
   response_required?: boolean;
   body?: string;
+  /** True when `body` is a preview the daemon cut short. */
+  body_truncated?: boolean;
   sent_at?: number;
 }
 

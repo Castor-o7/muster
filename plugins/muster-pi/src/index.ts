@@ -250,9 +250,15 @@ async function init(pi: ExtensionAPI) {
   // ── Agent state → muster status ───────────────────────────────────────
 
   pi.on("before_agent_start", async (event, _ctx) => {
+    // pi 1.2.0 also fires this for a run started by pi.sendMessage(...,
+    // { triggerTurn: true }), such as a live push. That event has messageType
+    // "custom" and no prompt. The run continues the last prompt's work, so it
+    // keeps that prompt's activity and status.
+    const prompt = (event as { prompt?: unknown }).prompt;
+    if (typeof prompt !== "string") return;
     resetActivity();
-    lastPrompt = event.prompt;
-    pushMusterStatus(`🤔 "${truncate(event.prompt, 80)}"`);
+    lastPrompt = prompt;
+    pushMusterStatus(`🤔 "${truncate(prompt, 80)}"`);
   });
 
   pi.on("agent_start", async (_event, _ctx) => {
@@ -340,6 +346,7 @@ async function init(pi: ExtensionAPI) {
           "",
           `nickname:  ${nick}`,
           `operator:  ${identity.operator}`,
+          `agent_id:  ${JSON.stringify(identity.agentId ?? null)}`,
           `host:      ${host}`,
           `project:   ${identity.project ?? "(none)"}`,
           `branch:    ${identity.gitBranch ?? "(none)"}`,
@@ -369,7 +376,7 @@ async function init(pi: ExtensionAPI) {
         const branch = s.gitBranch ? ` @${s.gitBranch}` : "";
         const op = s.operator ? ` (${s.operator})` : "";
         const task = s.currentTask ? ` — ${s.currentTask}` : "";
-        return `- ${host}:${dir}${branch}${op} [${s.id}]${task}`;
+        return `- ${host}:${dir}${branch}${op} [${s.id}]${s.agentId ? ` agent_id=${JSON.stringify(s.agentId)}` : ""}${task}`;
       });
       return { content: [{ type: "text", text: rows.join("\n") }], details: {} };
     },

@@ -66,7 +66,16 @@ fn fake_hook_listener(reply: &'static str) -> (String, mpsc::Receiver<Seen>) {
 
 /// Run `muster-shim <args>` with the hook JSON on stdin; return stdout.
 fn run_hook(args: &[&str], base: &str) -> String {
-    let mut child = Command::new(SHIM)
+    run_hook_with_agent(args, base, None)
+}
+
+fn run_hook_with_agent(args: &[&str], base: &str, agent: Option<&str>) -> String {
+    let mut command = Command::new(SHIM);
+    command.env_remove("MUSTER_AGENT_ID");
+    if let Some(agent) = agent {
+        command.env("MUSTER_AGENT_ID", agent);
+    }
+    let mut child = command
         .args(args)
         .env("MUSTER_BASE_URL", base)
         .stdin(Stdio::piped())
@@ -213,8 +222,10 @@ fn temp_config(name: &str) -> std::path::PathBuf {
 fn spawn_waiter(base: &str, config: &std::path::Path) -> std::process::Child {
     let mut child = Command::new(SHIM)
         .args(["claude-hook", "wait"])
+        .env("MUSTER_AGENT_ID", " waiter/\"agent\nopaque ")
         .env("MUSTER_BASE_URL", base)
         .env("XDG_CONFIG_HOME", config)
+        .env("APPDATA", config)
         .env("MUSTER_WAITER_LOCK_WAIT_SECS", "0")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -243,6 +254,9 @@ fn waiter_prints_mail_to_stderr_and_exits_2() {
         "{}",
         seen.request_line
     );
+    let body: serde_json::Value = serde_json::from_str(&seen.body).unwrap();
+    assert_eq!(body["agent_id"], "waiter/\"agent\nopaque");
+    assert!(!seen.request_line.contains("agent_id"));
     assert_eq!(out.status.code(), Some(2));
     assert_eq!(
         String::from_utf8(out.stderr).unwrap().trim_end(),
@@ -289,7 +303,8 @@ fn a_refused_watch_says_so_on_stdout_where_monitor_sees_it() {
     let config = temp_config("watch-refused");
     let mut child = Command::new(SHIM)
         .args(["watch", "11111111-1111-4111-8111-111111111111", &base])
-        .env("XDG_CONFIG_HOME", config)
+        .env("XDG_CONFIG_HOME", &config)
+        .env("APPDATA", &config)
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
@@ -319,4 +334,150 @@ fn second_waiter_for_a_session_exits_quietly() {
     let _ = first.wait();
     assert_eq!(second.status.code(), Some(0));
     assert!(second.stderr.is_empty());
+}
+
+fn boundary_listener(response: Vec<u8>, delay: Duration) -> (String, mpsc::Receiver<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = [0; 4096];
+        let _ = stream.read(&mut request);
+        for byte in response {
+            if stream.write_all(&[byte]).is_err() {
+                break;
+            }
+            if !delay.is_zero() {
+                thread::sleep(delay);
+            }
+        }
+        drop(stream);
+        listener.set_nonblocking(true).unwrap();
+        let deadline = Instant::now() + Duration::from_millis(300);
+        while Instant::now() < deadline {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let n = stream.read(&mut request).unwrap_or(0);
+                let _ = tx.send(String::from_utf8_lossy(&request[..n]).into_owned());
+                let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+    });
+    (base, rx)
+}
+
+#[test]
+fn an_incomplete_reply_never_surfaces_or_acknowledges_mail() {
+    let raw = b"HTTP/1.1 200 OK\r\nContent-Length: 1000\r\nX-Muster-Ack-V1: [\"m1\",\"m2\"]\r\n\r\npartial";
+    let (base, requests) = boundary_listener(raw.to_vec(), Duration::ZERO);
+    assert_eq!(run_hook(&["claude-hook", "prompt-submit"], &base), "");
+    assert!(requests.recv_timeout(Duration::from_millis(500)).is_err());
+}
+
+#[test]
+fn a_trickled_reply_cannot_extend_the_whole_hook_deadline() {
+    let raw =
+        b"HTTP/1.1 200 OK\r\nContent-Length: 1000\r\nX-Muster-Ack-V1: [\"m1\"]\r\n\r\npartial";
+    let (base, requests) = boundary_listener(raw.to_vec(), Duration::from_millis(80));
+    let started = Instant::now();
+    assert_eq!(run_hook(&["claude-hook", "prompt-submit"], &base), "");
+    assert!(started.elapsed() < Duration::from_secs(4));
+    assert!(requests.recv_timeout(Duration::from_millis(500)).is_err());
+}
+
+#[test]
+fn a_closed_monitor_pipe_leaves_delivered_mail_unacknowledged() {
+    let raw = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nX-Muster-Ack-V1: [\"m1\"]\r\n\r\nhello";
+    let (base, requests) = boundary_listener(raw.to_vec(), Duration::ZERO);
+    let mut child = Command::new(SHIM)
+        .args(["watch", "boundary-test", &base, "--once"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    drop(child.stdout.take());
+    assert!(child.wait().unwrap().success());
+    assert!(requests.recv_timeout(Duration::from_millis(500)).is_err());
+}
+
+#[test]
+fn an_oversized_response_is_rejected_before_reading_its_body() {
+    let raw = b"HTTP/1.1 200 OK\r\nContent-Length: 262145\r\nX-Muster-Ack-V1: [\"m1\"]\r\n\r\n";
+    let (base, requests) = boundary_listener(raw.to_vec(), Duration::ZERO);
+    assert_eq!(run_hook(&["claude-hook", "prompt-submit"], &base), "");
+    assert!(requests.recv_timeout(Duration::from_millis(500)).is_err());
+}
+
+#[test]
+fn a_replacement_waiter_takes_over_after_the_old_process_releases_its_lock() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let config = temp_config("waiter-takeover");
+    let mut old = spawn_waiter(&base, &config);
+    let (held, _) = listener.accept().unwrap();
+    let mut replacement = Command::new(SHIM)
+        .args(["claude-hook", "wait"])
+        .env("MUSTER_BASE_URL", &base)
+        .env("XDG_CONFIG_HOME", &config)
+        .env("APPDATA", &config)
+        .env("MUSTER_WAITER_LOCK_WAIT_SECS", "3")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    replacement
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(HOOK_INPUT.as_bytes())
+        .unwrap();
+    thread::sleep(Duration::from_millis(200));
+    assert!(replacement.try_wait().unwrap().is_none());
+    old.kill().unwrap();
+    old.wait().unwrap();
+    drop(held);
+    listener.set_nonblocking(true).unwrap();
+    let until = Instant::now() + Duration::from_secs(3);
+    let (mut stream, _) = loop {
+        if let Ok(pair) = listener.accept() {
+            break pair;
+        }
+        assert!(
+            Instant::now() < until,
+            "replacement never acquired the released waiter lock"
+        );
+        thread::sleep(Duration::from_millis(10));
+    };
+    let mut request = [0; 4096];
+    assert!(stream.read(&mut request).unwrap() > 0);
+    let reply = "<muster_inbox/>";
+    write!(
+        stream,
+        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{reply}",
+        reply.len()
+    )
+    .unwrap();
+    let out = replacement.wait_with_output().unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(String::from_utf8(out.stderr).unwrap().trim(), reply);
+}
+
+#[test]
+fn both_harness_hooks_transport_normalized_metadata_only_in_json_body() {
+    for harness in ["codex-hook", "claude-hook"] {
+        for value in [None, Some(""), Some(" \t "), Some(" agent/\"x\nopaque ")] {
+            let (base, seen) = fake_hook_listener("");
+            run_hook_with_agent(&[harness, "session-start"], &base, value);
+            let seen = seen.recv_timeout(Duration::from_secs(5)).unwrap();
+            let body: serde_json::Value = serde_json::from_str(&seen.body).unwrap();
+            let expected = value.map(str::trim).filter(|s| !s.is_empty());
+            assert_eq!(body["agent_id"].as_str(), expected);
+            assert_eq!(body["session_id"], "itest-claude");
+            assert_eq!(body["cwd"], "/tmp/proj");
+            assert!(!seen.request_line.contains("agent_id"));
+            assert!(!seen.request_line.contains("opaque"));
+        }
+    }
 }

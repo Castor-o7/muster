@@ -518,7 +518,11 @@ context. Batch related details and reserve direct delivery for action, a
 blocker, or a needed reply. Use an unmentioned room broadcast for FYI/progress.
 Automatic body previews are bounded (2,000 characters per message and an
 8,000-character hook-batch budget); the complete durable message remains
-available through `muster://messages`. Codex wakes coalesce for 30 seconds so
+available through `muster://messages`. A hook's inbox block stays under
+Claude Code's 10,000-character context limit: messages that don't fit stay
+unread for the next turn, counted in `remaining`. Message text in the block is
+escaped (`&lt;`, `&gt;`, `&amp;`, continuation lines indented), so a message
+can't close the block or pose as a sender line. Codex wakes coalesce for 30 seconds so
 a burst can join the active turn.
 
 ## Architecture
@@ -582,7 +586,13 @@ on a clean machine, and Windows beyond a cross-compile.
 
 MIT OR Apache-2.0, at your option (`LICENSE-MIT`, `LICENSE-APACHE`). Muster is a fork of [Marshal](https://github.com/ignition-is-go/marshal), under the same licence.
 
-That covers Muster's own source code. Muster depends on myko, myko-macros and autosocket
-(and myko-server for `muster-daemon`), which declare the AGPL-3.0-or-later licence. Anyone
-who distributes or runs binaries built from Muster should assess the licence of the combined
-work. This isn't legal advice.
+That covers Muster's own source code. These dependencies declare the AGPL-3.0-or-later
+licence, at the versions pinned here:
+
+- myko, used by every crate, and myko-macros, used by `muster-entities`
+- autosocket, through myko
+- myko-server, used by `muster-daemon`
+- myko-leptos, used by `muster-ui`
+
+Anyone who distributes or runs binaries built from Muster should assess the licence of the
+combined work. This isn't legal advice.

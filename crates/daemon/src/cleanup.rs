@@ -29,7 +29,9 @@ use std::{
 
 use chrono::Utc;
 use hyphae::{Gettable, Materialize};
-use muster_entities::{AutoSource, Message, Room, RoomKind, RoomMember, Session, WakeWatcher};
+use muster_entities::{
+    AutoSource, Message, MessageRead, Room, RoomKind, RoomMember, Session, WakeWatcher,
+};
 use myko::{core::item::Eventable, server::MykoServerContext, utils::downcast_item};
 
 /// How long a WS-shim session must be without a live client before DEL. Sized
@@ -52,8 +54,8 @@ pub const STALE_AFTER: Duration = Duration::from_secs(60);
 /// Safe by construction: every prompt-submit hook idempotently re-registers
 /// the session (see `hooks::register_hook_session`), so a live TUI idle past
 /// the backstop gets its row repaired on its next prompt. The cost of a
-/// false-positive reap is bounded — unread direct messages older than the
-/// backstop cascade away with the row — while the cost of no backstop is
+/// false-positive reap is small — the row comes back on the next hook, and
+/// its direct messages and read marks survive the DEL — while the cost of no backstop is
 /// unbounded store growth. Sized generously above any plausible think-time
 /// gap of a live session.
 pub const PULL_STALE_AFTER: Duration = Duration::from_secs(24 * 60 * 60);
@@ -67,10 +69,12 @@ pub const PULL_STALE_AFTER: Duration = Duration::from_secs(24 * 60 * 60);
 pub const KEPT_STALE_AFTER: Duration = Duration::from_secs(10 * 60);
 
 /// Messages older than this are pruned by `sweep_messages`, regardless of
-/// recipient. It's what bounds direct mail to a reaped session, which no longer
-/// cascades on its recipient and so survives a restart (MUS-46), and broadcasts
-/// to the never-DEL'd `everyone`/`op:`/`project:` rooms (review R6/D). A pruned
-/// message's `MessageRead` rows go at the next boot.
+/// recipient. A direct message outlives a DEL'd recipient (it comes back
+/// under the same id, and mail survives a restart: MUS-46), so this is the only
+/// thing that removes it. A broadcast goes with its room, but broadcasts to the
+/// never-DEL'd `everyone`/`op:`/`project:` rooms would otherwise accumulate
+/// forever (review R6/D). The prune doesn't cascade, so the same sweep drops
+/// the pruned messages' `MessageRead` rows (`sweep_orphan_reads`).
 pub const MESSAGE_TTL: Duration = Duration::from_secs(14 * 24 * 60 * 60);
 
 /// Run the message-retention sweep every N session-sweeper ticks. The scan is
@@ -206,12 +210,17 @@ fn sweep_wake_watchers(ctx: &MykoServerContext) {
     }
 }
 
-/// Prune messages older than `MESSAGE_TTL`. Bounds direct mail to reaped
-/// sessions (MUS-46) and broadcasts to rooms that are never DEL'd, which would
-/// otherwise grow the store without limit. Read-state goes at the next boot:
-/// `del_by_id` doesn't cascade, so `MessageRead` rows wait for orphan cleanup
-/// on `belongs_to(Message)` (MUS-31).
+/// Prune messages older than `MESSAGE_TTL`. Direct messages don't cascade
+/// with their recipient and the auto-rooms are never DEL'd, so this is what
+/// keeps the store from growing without limit. `del_by_id` skips
+/// relationship cascades, so the pruned messages' `MessageRead` rows are
+/// swept separately (`sweep_orphan_reads`).
 fn sweep_messages(ctx: &MykoServerContext) {
+    prune_old_messages(ctx);
+    sweep_orphan_reads(ctx);
+}
+
+fn prune_old_messages(ctx: &MykoServerContext) {
     let Some(store) = ctx.registry.get(Message::ENTITY_NAME_STATIC) else {
         return;
     };
@@ -235,6 +244,52 @@ fn sweep_messages(ctx: &MykoServerContext) {
     for id in to_delete {
         if let Err(e) = ctx.del_by_id(Message::ENTITY_NAME_STATIC, &id) {
             log::warn!("[cleanup] prune message {} failed: {}", id, e);
+        }
+    }
+}
+
+/// DEL every `MessageRead` whose message no longer exists: the ones a prune
+/// left behind, and any orphaned another way. Read-state no longer cascades
+/// on a session DEL, so this is what bounds it.
+fn sweep_orphan_reads(ctx: &MykoServerContext) {
+    let Some(read_store) = ctx.registry.get(MessageRead::ENTITY_NAME_STATIC) else {
+        return;
+    };
+    // Reads first, then messages: a read is written after its message, so
+    // every read in this snapshot has its message in the next one, and a
+    // send landing mid-sweep never loses its read.
+    let reads = read_store.entries().materialize().get();
+    let messages: HashSet<Arc<str>> = ctx
+        .registry
+        .get(Message::ENTITY_NAME_STATIC)
+        .map(|store| {
+            store
+                .entries()
+                .materialize()
+                .get()
+                .into_iter()
+                .map(|(id, _)| id)
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut to_delete: Vec<Arc<str>> = Vec::new();
+    for (id, item) in reads {
+        if let Some(read) = downcast_item::<MessageRead>(&item)
+            && !messages.contains(&read.message_id.0)
+        {
+            to_delete.push(id);
+        }
+    }
+    if to_delete.is_empty() {
+        return;
+    }
+    log::info!(
+        "[cleanup] dropping {} read mark(s) whose message is gone",
+        to_delete.len()
+    );
+    for id in to_delete {
+        if let Err(e) = ctx.del_by_id(MessageRead::ENTITY_NAME_STATIC, &id) {
+            log::warn!("[cleanup] drop read mark {} failed: {}", id, e);
         }
     }
 }
@@ -481,7 +536,9 @@ fn sweep_once(ctx: &MykoServerContext, state: &mut SweepState) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use muster_entities::{Message, MessageId, RoomId, RoomMemberId, SessionId};
+    use muster_entities::{
+        Message, MessageId, MessageRead, MessageReadId, RoomId, RoomMemberId, SessionId,
+    };
     use myko::{
         server::Persister,
         wire::{MEvent, MEventType},
@@ -506,6 +563,7 @@ mod tests {
         let session = Session {
             id: SessionId(Arc::from(id)),
             client_id: None,
+            agent_id: None,
             pid: 0,
             cwd: "/repo".into(),
             git_branch: None,
@@ -575,6 +633,7 @@ mod tests {
         let session = Session {
             id: SessionId(Arc::from(id)),
             client_id: Some(myko::entities::client::ClientId(Arc::from(client))),
+            agent_id: None,
             pid: 1,
             cwd: "/repo".into(),
             git_branch: None,
@@ -847,6 +906,52 @@ mod tests {
             .unwrap_or_default()
     }
 
+    fn set_read(ctx: &MykoServerContext, message_id: &str, session_id: &str) {
+        let read = MessageRead {
+            id: MessageReadId(Arc::from(MessageRead::make_id(message_id, session_id))),
+            message_id: MessageId(Arc::from(message_id)),
+            session_id: SessionId(Arc::from(session_id)),
+            read_at: 1,
+        };
+        let ev = MEvent::from_item(&read, MEventType::SET, &Uuid::new_v4().to_string());
+        ctx.apply_event_batch(vec![ev])
+            .expect("apply MessageRead SET");
+    }
+
+    fn read_ids(ctx: &MykoServerContext) -> HashSet<String> {
+        ctx.registry
+            .get(MessageRead::ENTITY_NAME_STATIC)
+            .map(|s| {
+                s.entries()
+                    .materialize()
+                    .get()
+                    .into_iter()
+                    .map(|(id, _)| id.to_string())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// `del_by_id` skips relationship cascades, so a pruned message's reads,
+    /// and reads whose message is gone some other way, must be swept here.
+    #[test]
+    fn sweep_messages_drops_reads_whose_message_is_gone() {
+        let ctx = setup();
+        let now = chrono::Utc::now().timestamp_millis();
+        set_message(&ctx, "old", now - MESSAGE_TTL.as_millis() as i64 - 1);
+        set_message(&ctx, "recent", now - 1_000);
+        set_read(&ctx, "old", "recipient");
+        set_read(&ctx, "recent", "recipient");
+        set_read(&ctx, "never-existed", "recipient");
+
+        sweep_messages(&ctx);
+
+        assert_eq!(
+            read_ids(&ctx),
+            HashSet::from(["recent::recipient".to_string()])
+        );
+    }
+
     #[test]
     fn sweep_messages_prunes_old_and_keeps_recent() {
         let ctx = setup();
@@ -1017,34 +1122,6 @@ mod tests {
         let ctx = server.ctx();
         set_client(&ctx, "ws-client");
         (server, ctx)
-    }
-
-    fn set_read(ctx: &MykoServerContext, message: &str, session: &str) {
-        let read = muster_entities::MessageRead {
-            id: muster_entities::MessageReadId(Arc::from(
-                muster_entities::MessageRead::make_id(message, session).as_str(),
-            )),
-            message_id: MessageId(Arc::from(message)),
-            session_id: SessionId(Arc::from(session)),
-            read_at: Utc::now().timestamp_millis(),
-        };
-        let ev = MEvent::from_item(&read, MEventType::SET, &Uuid::new_v4().to_string());
-        ctx.apply_event_batch(vec![ev])
-            .expect("apply MessageRead SET");
-    }
-
-    fn read_ids(ctx: &MykoServerContext) -> HashSet<String> {
-        ctx.registry
-            .get(muster_entities::MessageRead::ENTITY_NAME_STATIC)
-            .map(|s| {
-                s.entries()
-                    .materialize()
-                    .get()
-                    .into_iter()
-                    .map(|(id, _)| id.to_string())
-                    .collect()
-            })
-            .unwrap_or_default()
     }
 
     #[test]

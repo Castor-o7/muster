@@ -198,6 +198,7 @@ fn read_whoami(
                             "pid": s.pid,
                             "cwd": s.cwd,
                             "operator": s.operator,
+                            "agent_id": s.agent_id,
                             "host": s.host,
                             "harness": "codex",
                         }),
@@ -226,6 +227,13 @@ fn read_whoami(
         };
     }
     let snapshot = host.session.lock().unwrap().clone();
+    let agent_id = host
+        .sessions_cell
+        .get()
+        .iter()
+        .find(|s| s.id == snapshot.id)
+        .and_then(|s| s.agent_id.clone())
+        .or(snapshot.agent_id);
     json_resource(
         uri,
         json!({
@@ -237,6 +245,7 @@ fn read_whoami(
             "pid": host.pid,
             "cwd": host.cwd,
             "operator": snapshot.operator,
+            "agent_id": agent_id,
             "host": snapshot.host,
         }),
     )
@@ -268,6 +277,7 @@ fn read_roster(host: &ToolHost, uri: &str) -> ResourceContent {
                 "activity": s.activity,
                 "kind": s.kind,
                 "operator": s.operator,
+                "agent_id": s.agent_id,
                 "host": s.host,
                 "project": s.project,
                 "connected_at": s.connected_at,
@@ -1176,6 +1186,38 @@ mod tests {
     use super::*;
 
     #[test]
+    fn codex_identity_metadata_comes_only_from_the_authoritative_row() {
+        let mut row = (*session("canonical")).clone();
+        row.agent_id = Some("agent/\"x\nopaque".into());
+        let mut local = (*session("placeholder")).clone();
+        local.agent_id = Some("unrelated-process".into());
+        let host = ToolHost {
+            client: Arc::new(MykoClient::new()),
+            pid: 1,
+            cwd: "/repo".into(),
+            is_codex: true,
+            session: Arc::new(Mutex::new(local)),
+            sessions_cell: Cell::new(vec![Arc::new(row)]).lock(),
+            rooms_cell: Cell::new(vec![]).lock(),
+            members_cell: Cell::new(vec![]).lock(),
+            nicknames_cell: Cell::new(vec![]).lock(),
+            wake_watchers_cell: Cell::new(vec![]).lock(),
+            wake_pause_cell: Cell::new(vec![]).lock(),
+            remote_sessions_cell: Cell::new(vec![]).lock(),
+        };
+        for (query, expected) in [
+            ("asSession=canonical", Some("agent/\"x\nopaque")),
+            ("asSession=missing", None),
+            ("", None),
+        ] {
+            let parsed = ParsedUri::parse(&format!("muster://whoami?{query}")).unwrap();
+            let resource = read_whoami(&host, "muster://whoami", &parsed.query);
+            let content: Value = serde_json::from_str(&resource.text).unwrap();
+            assert_eq!(content["agent_id"].as_str(), expected);
+        }
+    }
+
+    #[test]
     fn response_requirement_defaults_and_rejects_non_booleans() {
         assert!(!response_required(&json!({})).unwrap());
         assert!(response_required(&json!({"response_required": true})).unwrap());
@@ -1192,6 +1234,7 @@ mod tests {
         Arc::new(Session {
             id: SessionId(Arc::from(id)),
             client_id: None,
+            agent_id: None,
             pid: 0,
             cwd: "/repo".into(),
             git_branch: None,

@@ -159,6 +159,7 @@ pub async fn run(target: Target, body: String) -> Result<()> {
         project: None,
         channels_enabled: None,
         acks_pushes: None,
+        agent_id: None,
         harness: None,
         identity: None,
     };
@@ -263,6 +264,7 @@ mod tests {
             project: project.map(str::to_string),
             channels_enabled: None,
             acks_pushes: None,
+            agent_id: None,
             harness: None,
             identity: None,
         })

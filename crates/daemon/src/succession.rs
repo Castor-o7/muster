@@ -763,6 +763,7 @@ mod tests {
         Session {
             id: SessionId(Arc::from("pred")),
             client_id: client.map(|c| myko::entities::client::ClientId(Arc::from(c))),
+            agent_id: None,
             pid: 1,
             cwd: "/work".into(),
             git_branch: None,

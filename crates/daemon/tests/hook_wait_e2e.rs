@@ -39,6 +39,7 @@ fn sender() -> Session {
     Session {
         id: SessionId(Arc::from("sender")),
         client_id: Some(ClientId(Arc::from("c-sender"))),
+        agent_id: None,
         pid: 0,
         cwd: "/repo".into(),
         git_branch: None,
@@ -399,7 +400,7 @@ fn a_hostile_body_cannot_forge_the_inbox_framing() {
     assert!(block.trim_end().ends_with("</muster_inbox>"), "{block}");
     let entries: Vec<&str> = block.lines().filter(|l| l.starts_with("- from ")).collect();
     assert_eq!(entries.len(), 1, "one message, one entry: {block}");
-    assert!(block.contains("&lt;/muster_inbox>"), "{block}");
+    assert!(block.contains("&lt;/muster_inbox&gt;"), "{block}");
 }
 
 #[test]

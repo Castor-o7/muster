@@ -41,9 +41,11 @@ import {
   type SessionNicknameItem,
 } from "./entities.ts";
 import type { Identity } from "./identity.ts";
+import { InboxPuller, type InboxPull } from "./inbox-pull.ts";
 
 const LIVENESS_INTERVAL_MS = 5_000;
 const INBOX_PULL_LIMIT = 20;
+const INBOX_COMMAND_TIMEOUT_MS = 1_500;
 const SOURCE_ID = "muster-prime-agent";
 
 /** myko's CellServer serves its WebSocket at the `/myko` path. */
@@ -81,7 +83,18 @@ export class MusterDaemon {
   private roster: SessionItem[] = [];
   private nicknames: SessionNicknameItem[] = [];
 
-  private readonly draining = new Map<string, Promise<string | null>>();
+  private readonly inbox = new InboxPuller<MessageView>({
+    read: (sessionId) => this.readUnshown(sessionId),
+    ack: async (sessionId, messageIds) => {
+      // A pull commits once its text is shown: remember that before acking,
+      // so a push racing it, or a later pull after a failed ack, doesn't show
+      // the same message again (MUS-90).
+      const shown = this.shownFor(sessionId);
+      for (const id of messageIds) shown.set(id, Date.now());
+      await this.sendForInbox(ackMessages(sessionId, messageIds));
+    },
+    render: (messages) => this.renderInbox(messages),
+  });
   private notifyHandler: NotifyHandler | null = null;
   private livenessTimer: ReturnType<typeof setInterval> | null = null;
   private started = false;
@@ -171,6 +184,7 @@ export class MusterDaemon {
       pid: process.pid,
       cwd: this.cfg.cwd,
       connectedAt: now,
+      agentId: this.cfg.identity.agentId,
       operator: this.cfg.identity.operator ?? null,
       host: this.cfg.identity.host ?? null,
       gitBranch: this.cfg.identity.gitBranch ?? null,
@@ -270,27 +284,23 @@ export class MusterDaemon {
     return `- [${m.messageId}] ${this.senderLabel(m.fromSessionId)} [response_required=${m.responseRequired ?? false}]: ${m.body}`;
   }
 
-  /** Claim a message for showing. False if a push or a drain already showed it,
-   *  so the caller skips it. Ids are forgotten after ten minutes. */
+  /** Claim a message for showing. False if a push or a pull already showed
+   *  it, or a pull holds it to show it, so the caller skips it (MUS-90). Ids
+   *  are forgotten after ten minutes. */
   claimShown(sessionId: string, messageId: string): boolean {
-    const now = Date.now();
-    let ids = this.shown.get(sessionId);
-    if (!ids) {
-      ids = new Map();
-      this.shown.set(sessionId, ids);
-    }
-    for (const [id, at] of ids) if (now - at > SHOWN_FOR_MS) ids.delete(id);
-    if (ids.has(messageId)) return false;
-    ids.set(messageId, now);
+    if (this.wasShown(sessionId, messageId) || this.inbox.holds(sessionId, messageId)) return false;
+    this.shownFor(sessionId).set(messageId, Date.now());
     return true;
   }
 
-  drainInbox(sessionId: string): Promise<string | null> {
-    const prev = this.draining.get(sessionId) ?? Promise.resolve<string | null>(null);
-    const next = prev.catch(() => null).then(() => this.drainInboxInner(sessionId));
-    this.draining.set(sessionId, next);
-    void next.finally(() => { if (this.draining.get(sessionId) === next) this.draining.delete(sessionId); });
-    return next;
+  /**
+   * Read the unread inbox without acking it. Commit the pull once its text is
+   * in the conversation, or release it if it never gets there, so a message is
+   * never marked read without having been shown.
+   */
+  pullInbox(sessionId: string): Promise<InboxPull | null> {
+    if (!this.connected) return Promise.resolve(null);
+    return this.inbox.pull(sessionId).catch(() => null);
   }
 
   nicknameFor(sessionId: string): string {
@@ -305,11 +315,11 @@ export class MusterDaemon {
 
   // ── Internals ──────────────────────────────────────────────────────────
 
-  private async drainInboxInner(sessionId: string): Promise<string | null> {
+  private async readUnread(sessionId: string): Promise<MessageView[] | null> {
     let result: ReadMessagesResult | undefined;
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        result = await this.send(readMessages({
+        result = await this.sendForInbox(readMessages({
           asSession: sessionId,
           toSession: sessionId,
           inbox: false,
@@ -323,15 +333,33 @@ export class MusterDaemon {
       if (result.messages && result.messages.length > 0) break;
       if (attempt < 2) await new Promise((r) => setTimeout(r, 100 * (attempt + 1)));
     }
-    if (!result?.messages?.length) return null;
+    return result?.messages?.length ? result.messages : null;
+  }
 
-    // A message a live push already showed is acked here but not shown again.
-    const fresh = result.messages.filter((m) => this.claimShown(sessionId, m.messageId));
-    const block = fresh.length ? this.renderInbox(fresh) : null;
-    try {
-      await this.send(ackMessages(sessionId, result.messages.map((m) => m.messageId)));
-    } catch { this.log("inbox ack failed"); }
-    return block;
+  /** The unread messages nothing has shown yet. One a live push already showed
+   *  is acked here but not shown again (MUS-90). */
+  private async readUnshown(sessionId: string): Promise<MessageView[] | null> {
+    const messages = await this.readUnread(sessionId);
+    if (!messages) return null;
+    const seen = messages.filter((m) => this.wasShown(sessionId, m.messageId)).map((m) => m.messageId);
+    if (seen.length) void this.sendForInbox(ackMessages(sessionId, seen)).catch(() => this.log("inbox ack failed"));
+    const fresh = messages.filter((m) => !this.wasShown(sessionId, m.messageId));
+    return fresh.length ? fresh : null;
+  }
+
+  private shownFor(sessionId: string): Map<string, number> {
+    let ids = this.shown.get(sessionId);
+    if (!ids) {
+      ids = new Map();
+      this.shown.set(sessionId, ids);
+    }
+    const now = Date.now();
+    for (const [id, at] of ids) if (now - at > SHOWN_FOR_MS) ids.delete(id);
+    return ids;
+  }
+
+  private wasShown(sessionId: string, messageId: string): boolean {
+    return this.shownFor(sessionId).has(messageId);
   }
 
   private renderInbox(messages: MessageView[]): string {
@@ -387,6 +415,38 @@ export class MusterDaemon {
 
   private send<R>(command: MusterCommand<R>): Promise<R> {
     return this.client.sendCommand(command as never) as Promise<R>;
+  }
+
+  /** Bounded send for the inbox path: reject at once while the WS is down, and
+   *  otherwise time out, so a read that never answers can't hold up every later
+   *  pull for the session. */
+  private sendForInbox<R>(command: MusterCommand<R>): Promise<R> {
+    if (!this.connected) return Promise.reject(new Error("muster is disconnected"));
+
+    return new Promise<R>((resolve, reject) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        reject(new Error(`muster inbox command timed out after ${INBOX_COMMAND_TIMEOUT_MS}ms`));
+      }, INBOX_COMMAND_TIMEOUT_MS);
+      if (typeof (timer as any).unref === "function") (timer as any).unref();
+
+      void this.send(command).then(
+        (value) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (error: unknown) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          reject(error);
+        },
+      );
+    });
   }
 
   private watch<I>(query: MusterQuery<I>) {

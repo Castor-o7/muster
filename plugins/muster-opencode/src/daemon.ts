@@ -230,6 +230,7 @@ export class MusterDaemon {
       pid: process.pid,
       cwd: this.cfg.cwd,
       connectedAt: now,
+      agentId: this.cfg.identity.agentId,
       operator: this.cfg.identity.operator,
       host: this.cfg.identity.host,
       gitBranch: this.cfg.identity.gitBranch,

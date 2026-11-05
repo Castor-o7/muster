@@ -24,6 +24,7 @@ import type { Event } from "@opencode-ai/sdk";
 
 import { MusterDaemon } from "./daemon.js";
 import { resolveIdentity } from "./identity.js";
+import { pushText } from "./push.js";
 
 const DEFAULT_ADDRESS = "ws://localhost:6255";
 
@@ -78,8 +79,7 @@ export const MusterPlugin: Plugin = async (input) => {
   // way Claude Code's channel push does: surface the message and run a turn
   // immediately, rather than waiting for the next user prompt. A toast gives an
   // out-of-band cue; `session.prompt` injects the clean `new message from …`
-  // notification as a turn so the agent processes it now. drainInbox acks the
-  // message, so the chat.message fallback below won't re-deliver it.
+  // notification as a turn so the agent processes it now.
   daemon.onNotify(async (meta) => {
     const who = meta.from_nickname ?? meta.from_session ?? "a sibling session";
     daemon.recordCommunication(meta.to_session ?? "", meta.from_session);
@@ -91,10 +91,14 @@ export const MusterPlugin: Plugin = async (input) => {
     // A reconnect's drain may already have shown this message (MUS-90).
     if (meta.body && meta.message_id && !daemon.claimShown(sid, meta.message_id)) return;
     log(`muster: inbound push for session ${sid}`);
-    // NotifyChannel already carries the body. Inject it immediately instead of
-    // racing the daemon's eventually-consistent inbox projection. Drain after
-    // the prompt only to acknowledge the persisted message.
-    const text = meta.body ? `new message from ${who} [response_required=${meta.response_required ?? false}]: ${meta.body}` : await daemon.drainInbox(sid);
+    // NotifyChannel already carries the body. The daemon marks a delivered
+    // direct push read; anything else unread (an @mention push, a message whose
+    // push failed) is surfaced by chat.message, which also runs for this
+    // prompt, and claimShown keeps that drain from showing this one again.
+    // Don't drain after the prompt: by then the drain can only find messages
+    // that turned unread during the turn, and it would ack them without
+    // showing them (upstream #137).
+    const text = meta.body ? pushText(who, meta) : await daemon.drainInbox(sid);
     if (!text) {
       log(`muster: inbound push for ${sid} had no body and inbox was empty`);
       return;
@@ -102,10 +106,7 @@ export const MusterPlugin: Plugin = async (input) => {
     log(`muster: auto-advancing ${sid} (${text.length} chars)`);
     await client.session
       .prompt({ path: { id: sid }, body: { parts: [{ type: "text", text }] } })
-      .then(async () => {
-        await daemon.drainInbox(sid);
-        log(`muster: auto-advanced session ${sid}`);
-      })
+      .then(() => log(`muster: auto-advanced session ${sid}`))
       .catch((e: unknown) => log(`muster: auto-advance prompt failed: ${String(e)}`));
   });
   daemon.onRosterChanged(() => ui?.invalidate({ surface: "sidebar" }));
@@ -158,8 +159,8 @@ export const MusterPlugin: Plugin = async (input) => {
     // Offline fallback: messages that arrived while this session had no live
     // connection (delivered_live=false) aren't auto-advanced by the push above,
     // so we drain them on the next user turn and append the clean notification
-    // as a VISIBLE text part. Live messages are already acked by the push
-    // handler, so this only fires for genuinely-missed ones.
+    // as a VISIBLE text part. The daemon marks a delivered direct push read,
+    // so this only picks up messages that weren't pushed, and @mentions.
     "chat.message": async (input, output) => {
       const sid = input.sessionID ?? output.message.sessionID ?? lastActiveSession;
       if (!sid) return;
@@ -260,6 +261,7 @@ export const MusterPlugin: Plugin = async (input) => {
             "",
             `nickname:  ${nick}`,
             `operator:  ${identity.operator}`,
+            `agent_id:  ${JSON.stringify(identity.agentId ?? null)}`,
             `host:      ${host}`,
             `project:   ${identity.project ?? "(none)"}`,
             `branch:    ${identity.gitBranch ?? "(none)"}`,
@@ -284,7 +286,7 @@ export const MusterPlugin: Plugin = async (input) => {
             const branch = s.gitBranch ? ` @${s.gitBranch}` : "";
             const op = s.operator ? ` (${s.operator})` : "";
             const task = s.currentTask ? ` — ${s.currentTask}` : "";
-            return `- ${host}:${dir}${branch}${op} [${s.id}]${task}`;
+            return `- ${host}:${dir}${branch}${op} [${s.id}]${s.agentId ? ` agent_id=${JSON.stringify(s.agentId)}` : ""}${task}`;
           });
           return rows.join("\n");
         },

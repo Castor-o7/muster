@@ -49,7 +49,7 @@ const ADDRESS_ENV: &str = "MUSTER_DAEMON_ADDRESS";
 const ADDRESS_ENV_LEGACY: &str = "MYKO_ADDRESS";
 
 #[derive(Parser, Debug)]
-#[command(name = "muster-tui")]
+#[command(name = "muster-tui", version)]
 struct Args {
     /// Override the daemon WebSocket URL. Defaults to
     /// MUSTER_DAEMON_ADDRESS env var (then MYKO_ADDRESS for back-compat),

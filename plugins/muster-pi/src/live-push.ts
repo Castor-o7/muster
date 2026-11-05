@@ -3,6 +3,7 @@
 // daemon imports so it can be tested with a fake inbox.
 
 import type { NotifyChannelMeta } from "./entities.ts";
+import { livePushText } from "./inbound.ts";
 import type { InboxPull, PushHold } from "./inbox-pull.ts";
 
 export interface LivePushTarget {
@@ -15,17 +16,8 @@ export interface LivePushTarget {
   pull(): Promise<InboxPull | null>;
 }
 
-/** The steer message for a live push, or `undefined` when the push carries no
- *  body (older daemons), in which case the caller pulls the inbox instead.
- *  The daemon caps `body` and says so with `body_truncated`; the full message
- *  stays in the durable store, so name it for `muster_messages`. */
-export function livePushText(meta: NotifyChannelMeta, who: string): string | undefined {
-  if (!meta.body) return undefined;
-  const text = `new message from ${who} [response_required=${meta.response_required ?? false}]: ${meta.body}`;
-  if (!meta.body_truncated) return text;
-  const id = meta.message_id ? ` (message ${meta.message_id})` : "";
-  return `${text}\n[preview truncated; read the full message with muster_messages${id}]`;
-}
+// The text itself lives in inbound.ts, as upstream has it.
+export { livePushText };
 
 export async function deliverLivePush(meta: NotifyChannelMeta, who: string, target: LivePushTarget): Promise<void> {
   const text = livePushText(meta, who);

@@ -36,6 +36,7 @@ fn session(cwd: &str, identity: Option<&str>, client: Option<&str>) -> Session {
     Session {
         id: SessionId(Arc::from(Uuid::new_v4().to_string().as_str())),
         client_id: client.map(|c| ClientId(Arc::from(c))),
+        agent_id: None,
         pid: 1,
         cwd: cwd.into(),
         git_branch: None,

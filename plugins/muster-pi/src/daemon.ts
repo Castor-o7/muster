@@ -176,6 +176,7 @@ export class MusterDaemon {
       pid: process.pid,
       cwd: this.cfg.cwd,
       connectedAt: now,
+      agentId: this.cfg.identity.agentId,
       operator: this.cfg.identity.operator ?? null,
       host: this.cfg.identity.host ?? null,
       gitBranch: this.cfg.identity.gitBranch ?? null,

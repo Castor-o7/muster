@@ -32,6 +32,7 @@ fn session(id: &str, client: &str) -> Session {
     Session {
         id: SessionId(Arc::from(id)),
         client_id: Some(ClientId(Arc::from(client))),
+        agent_id: None,
         pid: 0,
         cwd: "/repo".into(),
         git_branch: None,

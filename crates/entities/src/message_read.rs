@@ -16,11 +16,20 @@ use crate::message::Message;
 
 #[myko_item]
 pub struct MessageRead {
-    /// Goes with its message. Not a `belongs_to(Session)`, so a session that
-    /// returns under its old id still has its mail marked read (MUS-46).
+    /// Cascade on the *message*: an ack is meaningless once its message is gone,
+    /// so it dies with the message. This is the ack's primary lifetime owner.
+    /// The TTL prune deletes messages without cascading, so the daemon's
+    /// cleanup also sweeps acks whose message is gone (`sweep_orphan_reads`).
     #[belongs_to(Message)]
     pub message_id: crate::message::MessageId,
 
+    /// NOT a `belongs_to(Session)` cascade: an ack is a fact about (message,
+    /// reader) and outlives the reader's session row. Harnesses re-register
+    /// under the same session id after a reload or resume (muster-pi across
+    /// `/reload`, the Claude shim on `--resume`, a pull session repaired after
+    /// the reap backstop), so a session DEL is often a reconnect. Cascading
+    /// here made every re-registration see the direct messages it had already
+    /// read as unread, and the inbox handed them over again.
     pub session_id: crate::session::SessionId,
 
     /// Wall-clock millis when this session marked the message read.
