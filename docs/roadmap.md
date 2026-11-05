@@ -195,6 +195,8 @@ Merged and needing a live run: MUS-36 and MUS-37.
   approval with a valid signed token is accepted for exactly its action; a forged, expired,
   reused or mismatched one is refused; and a session on the operator's account can't produce a
   valid one. Each is shown by a test.
+  Design, with options for the operator: [operator-approvals.md](operator-approvals.md)
+  (sienna-mullet, 2026-11-05). MUS-51 builds on it.
 - [x] **MUS-7: Protect the local ports.** The first step of MUS-39. 6256 and 6257 have no
   authentication, and the hook listener doesn't check `Origin`, so any process on the daemon's
   host, or a web page in its browser, can reach them. Done when: a test shows a cross-origin web
