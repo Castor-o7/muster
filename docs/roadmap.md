@@ -555,6 +555,12 @@ Rally.
   session, and the bridge writes no `WakeWatcher`. Done when: the bridge refreshes a
   `WakeWatcher` for each thread it can wake, so the roster says `waiting` and a send says
   `expected` for it, and stops when it can't (paused per MUS-74, or the app-server is gone).
+- [ ] **MUS-89: Have the OpenCode plugin declare its channel.** Found in MUS-77's conformance
+  scenario `armed-shows-its-wake-path`: the plugin never sets `channelsEnabled` on its session
+  (Pi's and Prime Agent's do), so the roster says `wake: none` for an OpenCode session though it
+  wakes by the live push. Done when: the plugin declares its channel, the roster says `channel`
+  for a connected OpenCode session, and the scenario's opencode cell passes and leaves
+  `KNOWN_FAILURES`.
 - [ ] **MUS-74: The Codex bridge ignores the operator's pause.** From MUS-69. `muster-daemon
   pause` stops Claude's waiter (`/hook/wait` hands out nothing) and the live push, but
   `codex_bridge.rs` sends `turn/start` for any unread direct message without checking it, so a

@@ -1760,7 +1760,7 @@ where
         }
         let session_ids: Vec<String> = pending.keys().cloned().collect();
         for session_id in session_ids {
-            try_pending_registration(
+            let registered = try_pending_registration(
                 websocket,
                 hook_base,
                 pending,
@@ -1768,9 +1768,9 @@ where
                 &session_id,
                 &mut request_id,
                 launcher,
-                wakeable,
             )
             .await;
+            track_wakeable(wakeable, registered);
         }
     }
 
@@ -1805,7 +1805,7 @@ where
                 if let Some(registration) = thread_registration(&message) {
                     let session_id = registration.session_id.clone();
                     pending.insert(session_id.clone(), registration);
-                    try_pending_registration(
+                    let registered = try_pending_registration(
                         websocket,
                         hook_base,
                         pending,
@@ -1813,9 +1813,9 @@ where
                         &session_id,
                         &mut request_id,
                         launcher,
-                        wakeable,
                     )
                     .await;
+                    track_wakeable(wakeable, registered);
                 } else if let Some(thread_id) = closed_thread_id(&message) {
                     pending.retain(|_, registration| registration.thread_id != thread_id);
                     decorations.remove(thread_id);
@@ -1869,7 +1869,7 @@ where
                 }
                 let session_ids: Vec<String> = pending.keys().cloned().collect();
                 for session_id in session_ids {
-                    try_pending_registration(
+                    let registered = try_pending_registration(
                         websocket,
                         hook_base,
                         pending,
@@ -1877,9 +1877,9 @@ where
                         &session_id,
                         &mut request_id,
                         launcher,
-                        wakeable,
                     )
                     .await;
+                    track_wakeable(wakeable, registered);
                 }
                 if let Some(thread_id) = selected
                     && let Some(mut decoration) = decorations.get(&thread_id).cloned()
@@ -2068,13 +2068,11 @@ async fn try_pending_registration<S>(
     session_id: &str,
     request_id: &mut i64,
     launcher: &Option<SharedLauncherState>,
-    wakeable: &Wakeable,
-) where
+) -> Option<(String, String)>
+where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
-    let Some(registration) = pending.get(session_id).cloned() else {
-        return;
-    };
+    let registration = pending.get(session_id).cloned()?;
     let base = hook_base.to_string();
     let nickname = tokio::task::spawn_blocking(move || {
         crate::codex_hook::register_session(&base, &registration.session_id, &registration.cwd)
@@ -2103,14 +2101,22 @@ async fn try_pending_registration<S>(
             decoration.name_hydrated = true;
         }
         decorations.insert(registration.thread_id.clone(), decoration);
+        log::info!("[codex-bridge] registered thread={session_id} before first prompt");
+        pending.remove(session_id);
+        Some((registration.thread_id, session_id.to_string()))
+    } else {
+        log::debug!("[codex-bridge] eager registration for thread={session_id} failed; will retry");
+        None
+    }
+}
+
+/// Note a thread [`try_pending_registration`] registered as one this bridge can wake (MUS-77).
+fn track_wakeable(wakeable: &Wakeable, registered: Option<(String, String)>) {
+    if let Some((thread_id, session_id)) = registered {
         wakeable
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .insert(registration.thread_id.clone(), session_id.to_string());
-        log::info!("[codex-bridge] registered thread={session_id} before first prompt");
-        pending.remove(session_id);
-    } else {
-        log::debug!("[codex-bridge] eager registration for thread={session_id} failed; will retry");
+            .insert(thread_id, session_id);
     }
 }
 
