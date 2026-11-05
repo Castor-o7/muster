@@ -38,26 +38,39 @@ plan on 2026-11-05. It supersedes the landing order below wherever the two disag
    of #141, or disappear. Durability is cut down to what #140, #131 and #136 leave
    uncovered. Record each decision in [upstream-inventory.md](upstream-inventory.md).
 
-### The new order
+### The new order: additive first (operator, 2026-11-05)
 
-Marshal still gets one PR at a time, smallest first, each opened only after the one
-before it has merged:
+**Marshal: additive changes only for now.** That means new code nothing existing
+calls, or code that runs only when someone opts in, so a Marshal user who changes
+nothing sees no difference. Default changes aren't sent as PRs. They're listed for
+upstream to choose (below). Which part is which comes from "Additive features vs
+conflicts" in [muster-vs-marshal.md](muster-vs-marshal.md). Still one PR at a time,
+each opened after the one before it has merged:
 
-1. **M2, the terminal commands** (`port/terminal-cmds`,
-   [upstream-pr-m2.md](upstream-pr-m2.md)). Additive, about 660 lines, with its
-   description written. It needs a rebase onto `8362227` and a recheck.
-2. **Inbox quoting**, if anything of it survives #141.
-3. **Durability**, cut down as above.
-4. **Other** (`port/other-v3`).
-5. **Gate**, split into two or three PRs: TLS, then pairing, then the myko listener.
-   About 5,800 lines plus about 12,000 vendored is too much for one review at
-   upstream's standard. Ask before sending any vendored myko-server code.
+1. **M2, the terminal commands** (`marshal-shim tell`/`all`/`roster`;
+   [upstream-pr-m2.md](upstream-pr-m2.md); the live cut is `port/terminal-cmds-v2`).
+   New subcommands that nothing calls.
+2. **Durability, the additive part only:** the optional `idempotency_key` on send,
+   and read state for senders. It leaves out keeping mail for a reaped session and
+   keeping a waiting session through a dropped connection, since both change
+   defaults.
+3. **Other, the additive part only:** the `cargo-deny` dependency audit, plus
+   whatever of `marshal-shim send`/`roster` M2 doesn't already cover. It leaves out
+   refusing an empty `to` and the 5 s first-write wait.
+4. **Gate**, in two or three PRs: TLS, then pairing, then the myko listener. It's
+   additive while `--tls` isn't given, and plain mode stays the default. Ask about
+   the vendored myko-server code before sending it.
+5. **Later, still additive:** daemon links (TLS only) and the conformance suite
+   (test only).
 
-Levi runs in parallel, since it's a separate repository and doesn't queue behind
-Marshal. L1, L2 and L3 are already open upstream as ignition-is-go/levi **#43**
-(the review gate), **#44** (`levi check-events`) and **#45** (`levi session-start`),
-all opened 2026-11-05. The next step there is review. Nothing more goes to Levi
-until those get feedback.
+**Not sent as PRs: the default changes.** Inbox quoting (#141 already escapes the
+same bodies), durability's retention and keep-alive, Other's empty-`to` refusal and
+first-write wait, and MUS-76's Codex re-register. They're written up for lucid-max
+as proposals, one issue each or one list, so upstream decides whether it wants them.
+
+**Levi: on hold.** L1, L2 and L3 are already open upstream as ignition-is-go/levi
+**#43** (the review gate), **#44** (`levi check-events`) and **#45**
+(`levi session-start`). Nothing more goes to Levi until those have merged.
 
 ### The check before each PR, modelled on upstream's review
 
