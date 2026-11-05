@@ -72,6 +72,10 @@ jobs:
         run: cargo build --workspace && ./scripts/test-gate-e2e.sh
       - name: Links between daemons end-to-end (MUS-66)
         run: ./scripts/test-links-e2e.sh
+      # MUS-95: install-codex.sh runs the shim only when it matches the release's SHA256SUMS.
+      # A fake curl serves a local fixture, so nothing is downloaded.
+      - name: Installer checks its download (MUS-95)
+        run: sh scripts/test-install-codex.sh
       # MUS-58: the sweeper starts only once myko has replayed Postgres, so an
       # ad-hoc room membership survives a restart. Uses the job's Postgres
       # service, in a table of its own.
