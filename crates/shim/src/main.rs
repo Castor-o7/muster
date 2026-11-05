@@ -20,6 +20,7 @@ mod mcp;
 mod refusal;
 mod roster_read;
 mod session_discovery;
+mod setup;
 mod statusline;
 mod terminal_send;
 mod tools;
@@ -166,6 +167,15 @@ fn main() -> Result<()> {
                 .build()
                 .context("building tokio runtime")?
                 .block_on(doctor::run());
+        }
+        // Set this machine up as a client in one command (MUS-15).
+        Some("setup") => {
+            let args: Vec<String> = argv.collect();
+            return tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .context("building tokio runtime")?
+                .block_on(setup::run(&args));
         }
         // Store the code `muster-daemon pair` printed, so this machine reaches
         // the daemon through its TLS gate. See `link`.
