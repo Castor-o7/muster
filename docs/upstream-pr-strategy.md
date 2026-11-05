@@ -41,7 +41,7 @@ These come from Phase 5 of [roadmap.md](roadmap.md) and hold for every PR:
 
 This matters more than the state of our branches:
 
-- **Every PR merged upstream since October is lucid-max's own.**
+- **Every PR merged upstream since October is lucid-max's own, but one:** #144 by trevorsargent (2026-10-14), a dependency bump to Myko 6.8.0. No outside feature PR has been reviewed.
 - **No outside PR has been reviewed yet.** lobo235's eleven open PRs (#131–#147) date from 2026-10-05 to 10-19.
   - Each was rebased onto v0.54.0 on 2026-11-04.
   - None has a maintainer comment.
@@ -104,6 +104,37 @@ can't pose as instructions or as another inbox line. It's first because it's
 small, it stands alone, and it shows how the series is built.
 
 ### 2. Hooks: delivery and wake without the channels flag (`port/hooks-v3`)
+
+**This is the operator's first priority: the live-communication features, sent
+so they don't change upstream's workflow.** "Additive features vs conflicts"
+in [muster-vs-marshal.md](muster-vs-marshal.md) goes through it part by part.
+Everything in the layer is additive except two things:
+- `hooks.json` turned on inside the plugin, so every plugin user gets the
+  hooks;
+- the macOS flag detection, a bug fix that only touches sessions already
+  losing mail.
+
+So it goes as two PRs:
+
+- **2a, opt-in (no workflow change).**
+  - **Contents:** the daemon endpoints, the `claude-hook` subcommands, the
+    wake watcher, the SIGTERM reply, the tests, and the docs.
+  - **Opt-in:** the hooks ship as a file a user chooses to install. The
+    plugin README says how: add the hook block to `.claude/settings.json`, or
+    install an optional companion plugin. Nothing runs for a user who doesn't.
+  - **For peppy-skate:** the one change to `port/hooks-v3` is to stop
+    enabling `plugins/marshal-shim/hooks/hooks.json` by default.
+  - **The macOS detection:** it rides here only if upstream accepts the
+    default change. Otherwise it waits for 2b.
+- **2b, on by default (upstream's choice).** One small PR that enables the
+  hooks for every plugin user, and the macOS detection if it waited. It fixes
+  issue #139 for everyone. It opens only if upstream wants it after living
+  with 2a.
+
+**If live communication should go first:** `port/hooks-v3` is stacked on
+`port/inbox-quoting`, which changes what agents read. For 2a to be the very
+first PR, peppy-skate would rebase it straight onto upstream main and move
+inbox quoting after it. That's one rebase, and the operator's call.
 
 | | |
 |---|---|
@@ -215,7 +246,7 @@ If the gate is too large for one review, it can go as two PRs:
 - **5b:** limits, pause and the sender allow-list (#74–#76).
 
 The evidence:
-- `scripts/test-gate-e2e.sh`, at 104/104 on Murph;
+- the port's own `scripts/test-gate-e2e.sh` run on `port/gate-v2` (`a5de77c`): 99/99, per peppy-skate. Muster main's 104 includes checks for features that aren't in the port;
 - the threat model;
 - the conformance grid's plain-mode cells, which show the default is unchanged.
 
@@ -281,8 +312,13 @@ ledger of the newer entries. This table summarizes the fixes that matter:
    - approval of fork-PR Actions;
    - a reviewer;
    - the overlaps: #154 to be superseded, #141 against Hooks, and #131 and #148 against Durability.
-2. **When to send PR 1**, the 54-line inbox quoting, once its Zoo run exists or
-   the operator waives it.
+2. **The first PR: live communication (2a, opt-in) or inbox quoting.**
+   - **2a first** puts the priority feature in front, with no workflow change
+     for upstream. It costs one rebase of `port/hooks-v3` onto upstream main.
+   - **Inbox quoting first** is smaller (54 lines), but it changes the text
+     agents read.
+
+   Either way, its Zoo run must exist, or the operator waives it.
 3. **Zoo (G8).** Install Codex on a1 so the runs can happen, and approve the
    spend for layers 1–3 and 5.
 4. **myko first, or vendored?** Offer the request-filter hook to

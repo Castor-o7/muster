@@ -15,6 +15,61 @@ Muster forked Marshal at `9b71fd6` to run on a small set of the operator's
 own machines (Linux and macOS, Claude Code and Codex) and to fix what broke
 there. The changes below are the ones that are not specific to that setup.
 
+## Additive features vs conflicts
+
+What each change does to a Marshal user who changes nothing:
+- **Additive:** new code that nothing existing calls, or that runs only when
+  someone opts in. Their workflow is unchanged.
+- **Default change:** what happens without opting in is different. Each one
+  is listed, with why it's safe.
+- **Conflicts:** where the change edits the same code as upstream's main or
+  its open PRs.
+
+The aim, from the operator: **no PR of ours should change how upstream works
+today** unless upstream chooses it.
+
+### Live communication (the Hooks layer): the first priority
+
+| Part | Additive? | Effect on a user who changes nothing |
+|---|---|---|
+| `marshal-shim claude-hook session-start/prompt-submit/post-tool-use/wait` subcommands | additive | none: nothing runs them unless hooks are installed |
+| Daemon `/hook/wait` long-poll, `ack=client`, `/hook/ack`, the 60 s lease | additive | none: only the new hooks call them. A caller without `ack=client` keeps today's ack |
+| `WakeWatcher` entity and its sweep, the roster's wake field | additive | a new field on the roster, which existing readers ignore |
+| SIGTERM "restarting" reply for held waits | additive | none: there are no held waits without the hooks |
+| Send result: `wake: expected` also when a waiter is held | additive | only differs for sessions running the waiter |
+| `plugins/marshal-shim/hooks/hooks.json`, **enabled in the plugin** | **default change** | every Claude Code user of the plugin gets the hooks: one local HTTP request per tool call (2 s timeout, silent on failure), and one waiter process per idle session that starts a turn when mail arrives |
+| macOS: read the parent's command line, so a session without the flag reports `channels_enabled = false` | **default change** (a bug fix) | only for macOS sessions started *without* the flag. Their pushes were dropped by Claude Code and marked read (issue #139); now the mail stays unread. Flagged sessions are unchanged |
+
+**So the live-communication PR can land with no workflow change.** It carries
+everything above except turning `hooks.json` on: the hooks ship as an opt-in
+that a user adds, so nothing runs for anyone who doesn't add it. Turning them
+on for every plugin user is then a separate one-file PR, for upstream to take
+when it wants to. The macOS fix only changes what was already losing mail;
+it can ride with the opt-in, or wait for that second PR if upstream wants
+zero default change. The strategy is in
+[upstream-pr-strategy.md](upstream-pr-strategy.md) ("2. Hooks").
+
+**Conflicts.**
+- **Upstream main:** U-RR (the `[response_required=…]` inbox line) and U-CG
+  (shared guidance text) touch the same `hooks.rs` and `shim/src/main.rs`
+  lines. The catch-up merge (#84) already resolved them, and the port reuses
+  that resolution.
+- **Upstream's open PRs:**
+  - our own #154, which this supersedes;
+  - lobo235's #141, which pulls the inbox into Claude turns with plugin hooks
+    and escapes bodies: the same goal and files;
+  - #140, which keeps a Claude push unread until written.
+
+### The other layers
+
+| Layer | Additive | Default changes | Conflicts with upstream |
+|---|---|---|---|
+| Inbox quoting | — | peer bodies in the hook inbox are quoted as untrusted text, so what an agent reads changes. Only bodies, not the line format | #141 escapes the same bodies; U-CG's `PEER_MESSAGE_NOTICE` is built on, not replaced |
+| Durability | `idempotency_key` on send (optional field); read state for senders | mail to a reaped session is kept until the 14-day sweep instead of going at restart; a waiting session is kept through a dropped connection | lucid-max's #148 and lobo235's #131, in the same `cleanup.rs`, `message.rs` and `message_read.rs`; U-RR on `send_message.rs` |
+| Other | `marshal-shim send` and `roster`; the `cargo-deny` audit; the AGPL notice | an empty `to` is refused instead of delivered to the sender; a first write waits up to 5 s for registration instead of failing | #135 (`--help`/`--version`) and #143 (room validation) near the same code |
+| Gate | **everything, while `--tls` isn't given**: plain is the default, and Marshal runs as today | none in plain mode. With paired machines and neither flag, the daemon refuses to start, which only affects someone who has paired machines | #135 in `daemon/src/main.rs`'s argument handling; the vendored myko-server against ignition-is-go/myko |
+| Later: links, the conformance suite, Codex bridge fixes | links (TLS-only) and the suite (test-only) are additive; the bridge's pause check (MUS-74) acts only while the operator has paused wake-ups | Codex threads re-register after a restart (MUS-76), so an idle Codex session reappears on the roster sooner | lobo235's plugin PRs (#132, #134, #136, #137) for MUS-81 |
+
 ## Hooks: delivery without the channels flag
 
 **What it adds.** Claude Code receives direct messages, and an idle session
