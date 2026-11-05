@@ -202,6 +202,10 @@ upstream main on their own:
   5 s for its row; and MUS-78 (#102), so that wait re-sends the session once
   after 1 s. Each has a unit or daemon test of its own. Their links and gate
   e2e changes, the `.gitignore` line and the roadmap aren't ported.
+- Then MUS-79 (#104, main `4199d2e`): a write the daemon refuses as unbound
+  (the row is still bound to an earlier, dead shim) re-sends the session and
+  is retried once. It has a daemon-free test of the single retry. Its gate and
+  links e2e changes and the roadmap aren't ported.
 
 The #16 mention-banner fix isn't on this branch.
 
