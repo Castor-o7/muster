@@ -94,8 +94,15 @@ else. Two ways to know:
   for a paired machine, alongside the machine header. The filter accepts
   `X-Muster-Machine` only with a matching secret, compared in constant time. Because the
   gate and myko run in the same process, nothing else can read the secret, except by
-  reading the daemon's memory. That's out of scope on macOS's hardened runtime, and on
-  Linux it's limited by `ptrace_scope`; on a default Ubuntu it needs root.
+  reading the daemon's memory.
+  - **Linux:** Yama's `ptrace_scope` of 1, Ubuntu's default, lets only a process's
+    ancestors or root attach to it. A session isn't the daemon's ancestor, since systemd
+    starts the daemon. Murph's actual setting should be checked.
+  - **macOS:** **to check.** cargo's ad-hoc-signed binary has no hardened runtime, so
+    whether a same-user process can read its memory depends on `task_for_pid`'s rules for
+    such a binary.
+  - **Either way:** reading memory is a stronger attack than reading a file, so this is no
+    weaker than today's local token. The internal listener below doesn't depend on it.
 - **A separate internal listener.** The gate forwards paired machines' connections to a
   listener only it dials, for example a Unix socket in a root- or daemon-only directory,
   and the filter takes the header only from there. That's stronger, but a bigger change.
