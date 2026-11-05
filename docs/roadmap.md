@@ -469,12 +469,21 @@ Rally.
   tool call only reported "command timed out after 10000 ms (daemon unresponsive?)". Done
   when: a shim whose connection is refused for its token says so, and names the token file,
   and a test covers it.
+  Built: while disconnected, the shim repeats the handshake once (`refusal.rs`); a `401` is
+  recorded with the file it came from (the local token, or the pairing), and writes fail at once
+  with that reason instead of waiting out the timeout. Covered by `crates/shim/tests/token_refused.rs`.
+  Still needs a live run once a session runs the rebuilt shim.
 - [ ] **MUS-84: Keep `unpair` from revoking a machine and a link together.** Found by
   tangerine-wombat cleaning up after the MUS-66 run: on Murph, `unpair a1` removes both a1's
   machine pairing (which every a1 session uses) and the link token `link:a1`, and `unlink a1`
   on the dialed side does nothing, because it edits only the dialer's `links` file. Done when:
   `unpair` takes `--machine` or `--link`, a bare name that matches both is refused with both
   forms named, `unlink` on the dialed side removes `link:<name>`, and an e2e covers each case.
+- [ ] **MUS-86: Log client acks and lease re-offers.** Found by tangerine-wombat verifying
+  MUS-75 live: the daemon writes nothing at `info` when a hook acks its mail (`/hook/ack`) or when
+  a lapsed lease offers un-acked mail again, so the event log's `MessageRead` rows were the only
+  evidence. Done when: the daemon logs one `info` line per client ack (session, message count) and
+  one per re-offer after a lease lapses, with no bodies, and a test checks both lines.
 - [x] **MUS-72: Hold a session's first writes until it's registered.** Found by tangerine-wombat
   in the G5 run on Murph: a tool call right after `initialize` reached the daemon before the
   shim's Session SET and failed "caller has no session on the roster". A real agent's first

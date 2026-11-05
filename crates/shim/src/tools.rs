@@ -454,9 +454,12 @@ async fn wait_until_registered(host: &ToolHost) {
     if host.is_codex {
         return;
     }
+    // A daemon that refused this shim's credential will never register it
+    // (MUS-83): stop holding, so the write fails at once with the reason.
     let registered = || {
         let me = host.session.lock().unwrap().id.clone();
         crate::registered_on_roster(&host.sessions_cell.get(), &me)
+            || crate::refusal::current().is_some()
     };
     let resend = || {
         let snapshot = host.session.lock().unwrap().clone();
@@ -1018,6 +1021,10 @@ where
     if let Some(result) = cell.get() {
         return result;
     }
+    // The daemon refused this shim's credential, so no answer will come (MUS-83).
+    if let Some(refused) = crate::refusal::current() {
+        return Err(refused);
+    }
     let (tx, rx) = tokio::sync::oneshot::channel::<Result<R, String>>();
     let tx_slot = Arc::new(Mutex::new(Some(tx)));
     let tx_for_sub = Arc::clone(&tx_slot);
@@ -1034,10 +1041,13 @@ where
     match tokio::time::timeout(timeout, rx).await {
         Ok(Ok(result)) => result,
         Ok(Err(_)) => Err("command response handler dropped".to_string()),
-        Err(_) => Err(format!(
-            "command timed out after {} ms (daemon unresponsive?)",
-            timeout.as_millis()
-        )),
+        // A refusal found while this command waited says why it got no answer.
+        Err(_) => Err(crate::refusal::current().unwrap_or_else(|| {
+            format!(
+                "command timed out after {} ms (daemon unresponsive?)",
+                timeout.as_millis()
+            )
+        })),
     }
 }
 
