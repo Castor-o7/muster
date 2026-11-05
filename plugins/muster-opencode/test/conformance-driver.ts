@@ -94,7 +94,12 @@ async function handle(cmd: Record<string, unknown>): Promise<unknown> {
     case "wait_for_wake": {
       const deadline = Date.now() + Number(cmd.ms ?? 0);
       while (wokeWith === null && Date.now() < deadline) await sleep(50);
-      const text = wokeWith;
+      if (wokeWith === null) return { text: null };
+      // The plugin's session.prompt is a user turn, so opencode runs
+      // chat.message for it, where muster-opencode drains the inbox. The model
+      // sees both the prompt and whatever that drain adds.
+      const drained = await userTurn();
+      const text = [wokeWith, drained].filter((t) => t).join("\n");
       wokeWith = null;
       return { text };
     }
