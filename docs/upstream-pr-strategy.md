@@ -141,6 +141,13 @@ each opened after the one before it has merged:
      request-head filter on top of #129, or an `Origin` check (or the request head) made
      available to #129's gateway. Then build on #129 rather than race it. The Gate is
      several PRs away, so waiting costs nothing now.
+   - **Decided (operator, 2026-11-05): trevorsargent leads.** We don't open our own
+     filter PR. We follow #129: watch it, and when it merges, build the Gate on its
+     `with_auth_provider`/`Authenticator` for the token check. If the browser-`Origin`
+     check still needs the request head after #129 lands, that's a small follow-up
+     built on #129, and only if trevorsargent and the myko maintainers want it. Any
+     comment on #129 comes from the operator. Until #129 merges, the Gate waits, and
+     the steps before it (M2, durability, Other) don't depend on it.
    - **Prerequisites.** A **Castor-o7/myko fork**, which doesn't exist yet. Creating it is
      the operator's action. A reference clone is at `~/src/myko`, where the `pr-129` branch
      is fetched. myko's rules (`AGENTS.md`): run checks with `cargo flux run`, run tests with
