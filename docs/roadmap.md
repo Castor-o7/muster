@@ -395,6 +395,10 @@ Merged and needing a live run: MUS-36 and MUS-37.
 - [ ] **MUS-14: Publish prebuilt binaries.** There are no releases yet, so
   `scripts/install-codex.sh` can't work and the plugins aren't on npm. Done when: macOS and Linux can
   install without a Rust toolchain.
+  `.github/workflows/release.yml` now builds muster-shim and muster-daemon for macOS arm64 and
+  Linux x86_64 under the names install-codex.sh asks for, with one SHA256SUMS. workflow_dispatch
+  is a dry run that only uploads artifacts; a `v*` tag also makes a draft release, which stays
+  unpublished until Josh publishes it. Left: a tag and a published release, on Josh's word.
 - [ ] **MUS-91: Keep `windows-cross-check` from timing out.** It hit its 20-minute limit on #110,
   #113 and #124, and a re-run passed each time. Every time it was the apt step: `mingw-w64` pulls
   278 MB (the i686 and x86_64 toolchains, C and C++), which normally takes 7 s, but the Azure
