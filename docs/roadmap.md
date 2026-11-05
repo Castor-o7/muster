@@ -69,6 +69,13 @@ Merged and needing a live run: MUS-36 and MUS-37.
   declared with `MUSTER_IDENTITY`; `MUSTER_IDENTITY=none` opts out. A Codex row still on the
   roster never counts as dead until MUS-77 (`CODEX_PRESENT_ROWS_CAN_BE_DEAD`). The plugins
   don't report a harness yet.
+  Merged in #131 (88ab365); open, checked against its done-when on 2026-11-05. Keeping a
+  nickname through a restart is shown by `identity_succession.rs` and the conformance cell
+  `restart-keeps-identity` for `claude` and `codex`, but `claude-tls` × `restart-keeps-identity`
+  is on `FLAKY` under MUS-93. Reaching the watchman by role is done: `resolve_succeeded` in
+  `send_message.rs` sends to the one session claiming a role, shown by `send_message_command.rs`'s
+  `a_role_claimed_by_one_session_reaches_it`, and refuses a role two sessions claim
+  (`a_role_claimed_by_two_sessions_is_refused`). Still to do: MUS-93, for `claude-tls`.
 - [x] **MUS-4: Show dead watchers.** Done when: the roster distinguishes a
   session that can be woken from one that can't.
   Verified live 2026-11-04 by gentle-pulsar against Murph's `e797fa3`: `muster-shim roster` showed
@@ -157,12 +164,15 @@ Merged and needing a live run: MUS-36 and MUS-37.
   the daemon's `[identity]` and `[hook]` lines and its warnings, with succession at debug, and
   `CONFORMANCE_DAEMON_LOG=1` prints them for a passing cell. Still to do: the cause, from the
   first CI run that fails with that log.
-- [ ] **MUS-47: Hand unread mail to a successor.** From MUS-31. Retained mail reaches
+- [x] **MUS-47: Hand unread mail to a successor.** From MUS-31. Retained mail reaches
   nobody without this. Depends on MUS-3. Done when: a session taking over an identity
   receives its predecessor's unread mail, shown by a test.
   Built on MUS-3; not yet run live. At a takeover the predecessor's unread direct mail is
   readdressed to the successor and listed on the `Succession` record. The conformance cell
   `unread-mail-follows-a-restart` (claude, claude-tls, codex) shows it once and not again.
+  Done in #134 (081e389): shown by `identity_succession.rs`'s
+  `unread_mail_is_handed_to_the_successor` and that cell for `claude` and `codex`. Its
+  `claude-tls` cell is on `FLAKY` under MUS-93, a missed takeover rather than lost mail.
 - [x] **MUS-48: Tell a sender about mail unread at reap.** From MUS-31. Done when: a
   sender can see that a message went unread when its recipient was reaped.
 - [x] **MUS-49: Report what a restart will remove.** From MUS-31: one restart is now
@@ -389,6 +399,10 @@ Merged and needing a live run: MUS-36 and MUS-37.
 - [ ] **MUS-14: Publish prebuilt binaries.** There are no releases yet, so
   `scripts/install-codex.sh` can't work and the plugins aren't on npm. Done when: macOS and Linux can
   install without a Rust toolchain.
+  `.github/workflows/release.yml` now builds muster-shim and muster-daemon for macOS arm64 and
+  Linux x86_64 under the names install-codex.sh asks for, with one SHA256SUMS. workflow_dispatch
+  is a dry run that only uploads artifacts; a `v*` tag also makes a draft release, which stays
+  unpublished until Josh publishes it. Left: a tag and a published release, on Josh's word.
 - [ ] **MUS-91: Keep `windows-cross-check` from timing out.** It hit its 20-minute limit on #110,
   #113 and #124, and a re-run passed each time. Every time it was the apt step: `mingw-w64` pulls
   278 MB (the i686 and x86_64 toolchains, C and C++), which normally takes 7 s, but the Azure
@@ -421,7 +435,7 @@ Merged and needing a live run: MUS-36 and MUS-37.
   Josh on 2026-11-05: opt-in with `MUSTER_PERSIST=file` for this release, and the
   store excluded from Time Machine by default. See
   [local-persistence-design.md](local-persistence-design.md).* *Built 2026-11-05:
-  `crates/daemon/src/file_persister.rs`. Conformance cell 5c
+  `crates/daemon/src/file_persister.rs`. Conformance cell 5e
   (`restart-keeps-unread-mail-file`) passes for claude, claude-tls, codex and
   codex-tls with no Postgres, and `scripts/test-restart-file-e2e.sh` (in CI) checks
   unread mail, read state and an ad hoc membership across a restart, which the
@@ -431,6 +445,12 @@ Merged and needing a live run: MUS-36 and MUS-37.
   when: Codex can connect through the gate. The Pi, opencode and Prime Agent plugins
   are left out under the language decision.
 - [ ] **MUS-19: Fix stale docs.** Most were corrected on 2026-10-30. Done when: following the README on a clean machine works. Needs a run: the Muster team, on a clean machine.
+  Progress 2026-11-05 (sienna-mullet): followed the README literally in two isolated HOMEs on
+  a1 (a TLS daemon on spare ports, and a client): `cargo install --git`, then `muster-daemon
+  pair`, `muster-shim setup --pair-file`, and `muster-shim doctor` (all ok). A real Claude
+  session registered through the plugin's hooks. Fixed `--locked`, the patch warning, the
+  pairing hint and the statusLine. Not ticked: the run was on a1 with isolated HOMEs, not a
+  clean machine.
 
 ## Phase 4: Coordination
 
@@ -545,12 +565,17 @@ Rally.
   restart. Done when: no machine's config names 6257 (a1's and Murph's `.mcp.json`, the TUI,
   the TS plugins), and the alias, its variable and its rollout check are removed. The upstream
   Gate PR ships without it.
-- [ ] **MUS-80: Give the unregistered refusal a stable code.** From the watchman's review of
+- [x] **MUS-80: Give the unregistered refusal a stable code.** From the watchman's review of
   MUS-79: the shim retries a write refused as unregistered by matching the daemon's text ("has
   no session on the roster"), so a change of wording would quietly stop the retry. Done when:
   `resolve_caller`'s refusal carries a stable code or data field, the shim matches that rather
   than the text, and a test pins both ends to the same value.
-- [ ] **MUS-83: Say when the local token is refused.** Found in the MUS-66 run: a shim without
+  Done in #115 (d17448f). The daemon's refusal starts with `UNREGISTERED_CODE` (`[unregistered]`,
+  in `muster-entities`), and the shim matches it with the same crate's `is_unregistered_refusal`.
+  `send_message_command.rs`'s `an_unbound_caller_is_refused_with_the_stable_code` pins the
+  daemon's end, and `tools.rs`'s tests pin the shim's. The shim also accepts the old text from a
+  daemon built before MUS-80 (`LEGACY_UNREGISTERED_TEXT`), to be removed once none runs.
+- [x] **MUS-83: Say when the local token is refused.** Found in the MUS-66 run: a shim without
   the daemon's local token was rejected at the gate ("missing or wrong local token"), but the
   tool call only reported "command timed out after 10000 ms (daemon unresponsive?)". Done
   when: a shim whose connection is refused for its token says so, and names the token file,
@@ -559,6 +584,8 @@ Rally.
   recorded with the file it came from (the local token, or the pairing), and writes fail at once
   with that reason instead of waiting out the timeout. Covered by `crates/shim/tests/token_refused.rs`.
   Still needs a live run once a session runs the rebuilt shim.
+  Done in #117 (ff2252a): `token_refused.rs` covers a wrong and a missing local token, each
+  reported with its file within 5 s, not as a timeout. The live run isn't part of the done-when.
 - [x] **MUS-84: Keep `unpair` from revoking a machine and a link together.** Found by
   tangerine-wombat cleaning up after the MUS-66 run: on Murph, `unpair a1` removes both a1's
   machine pairing (which every a1 session uses) and the link token `link:a1`, and `unlink a1`
@@ -736,7 +763,7 @@ Rally.
   a test's daemon binds its own ports (port 0) and reports them, or the tests retry a bind that
   loses the race; the e2e scripts take free ports per run, so two can run at once on one host;
   and no test fails on a port another process took.
-- [ ] **MUS-90: Push plugins aren't woken after a restart with Postgres.** From MUS-76. In CI,
+- [x] **MUS-90: Push plugins aren't woken after a restart with Postgres.** From MUS-76. In CI,
   `pi`, `opencode` and `prime-agent` × `daemon-restart-mid-wait-pg` fail ("not woken after the
   restart; got None", about 26 s each), while the in-memory restart cell passes for all three.
   Hypothesis, unproven: with Postgres the plugin's Session row survives the restart, still bound
@@ -747,6 +774,16 @@ Rally.
   Measured on a1 on 2026-11-05: 3 runs each failed 3 of 3 for all three plugins, both on main
   (`1fe3c02`) and with MUS-58's sweeper gate (#126 at `e47c7e0`), so the startup sweep isn't the
   cause; pi's one 2.2 s pass in CI is flaky, and the cell is in the suite's `FLAKY` list.
+  Fixed 2026-11-05. The hypothesis was half right: the Session row does survive, still bound to the
+  dead client, but the plugin's reconnect does rebind it (the sweeper logs "back on live client"
+  about 3 s later). The mail was lost in between. The suite sends once the recipient's row is on the
+  roster, which with Postgres is at once, so the push went to the dead client, and nothing offered
+  the unread mail again on reconnect. In memory the row only reappears after the reconnect, so the
+  push found a live client. Now each push plugin treats a reconnect as a push with no body, after
+  re-SETting its sessions on the same socket: its existing fallback pulls the unread mail and shows
+  it, which wakes an idle session. The three cells pass (about 2 s), and so does
+  `opencode` × `mail-waiting-at-reconnect`: the waiting mail is now shown at the reconnect, before a
+  later push can drain it. MUS-81's other opencode and Prime Agent cells are unchanged.
 
 ## Moved to Rally
 

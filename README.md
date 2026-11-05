@@ -49,12 +49,25 @@ Muster isn't published to crates.io; install from the repository (or from a
 local checkout with `--path crates/shim` and so on):
 
 ```bash
-cargo install --git https://github.com/Castor-o7/muster muster-shim muster-daemon
+cargo install --locked --git https://github.com/Castor-o7/muster muster-shim muster-daemon
 # optional but recommended for visibility into the live roster
-cargo install --git https://github.com/Castor-o7/muster muster-tui
+cargo install --locked --git https://github.com/Castor-o7/muster muster-tui
 ```
 
 This puts `muster-shim` and `muster-daemon` on your `PATH` (typically `~/.cargo/bin`).
+`--locked` builds the dependency versions the repository was tested with. Without it,
+cargo picks the newest compatible ones. While installing both, cargo prints `patch
+myko-server … was not used in the crate graph`. That's expected: `muster-shim` doesn't use
+myko-server, and `muster-daemon` is still built with the patched copy.
+
+On a machine that only runs sessions (not the daemon), `muster-shim setup` does steps 2b
+and 3 in one go: it pairs, then installs the plugin through Claude Code's own `claude plugin`
+commands. Without `--apply` it only says what it would do. Save the pairing code to a file
+and pass it with `--pair-file PATH`, or pipe it in with `--pair-file -`, so it never lands in
+shell history or `ps`. The code is single-use, so delete the file afterwards. The plugin
+installs from Castor-o7/muster's current `main`, not from a pinned release. Wiring you've made
+by hand is left alone. `--apply` backs up `settings.json` first, and ends with the doctor's
+checks.
 
 Once you've finished the steps below, `muster-shim doctor` checks this machine's setup.
 It checks the binary on `PATH`, the pairing or local token, a handshake with the daemon,
@@ -74,6 +87,18 @@ muster-daemon &
 
 # or under your favorite supervisor (systemd user unit, launchd, tmux pane, ...)
 ```
+
+To keep it running across reboots, `muster-daemon service` prints the systemd user unit
+(Linux) or launchd agent (macOS) for the installed binary. Add `--tls` for a gated daemon.
+`--apply` writes the unit and prints the command to start it, and never starts anything
+itself. It refuses to replace a different unit that's already there, since that one may
+hold settings of its own such as `MYKO_POSTGRES_URL`. With `--force` it replaces it, after
+saving the old file next to it, and carries the old unit's environment over (`Environment=`,
+`EnvironmentFile=` and launchd's `EnvironmentVariables`), along with its ordering (`After=`,
+`Wants=`, `Requires=`). It lists each one it carries. Any other old setting it would lose, such
+as a different binary or `User=`, is named, and the replacement is refused unless
+`--drop-settings` is also given. systemd drop-ins (`muster-daemon.service.d/`) are separate
+files, and stay as they are.
 
 To stop it, send SIGTERM (what `systemctl stop` and `restart` do) or press Ctrl-C. Held waits end with an empty reply marked as a restart, so each session's waiter backs off quietly and reconnects when the daemon is back.
 
@@ -151,7 +176,7 @@ Pairing needs TLS on. Every machine other than the daemon's own host needs a pai
 muster-daemon pair --name a1 --address 192.0.2.10:6255
 ```
 
-It prints a `muster-shim pair muster-pair:v2:…` command. Run that on the machine you're pairing, within 15 minutes. The code holds the gate's address, the certificate fingerprint to pin, and a one-time invite. `muster-shim pair` exchanges the invite at the gate for that machine's access token and stores the token owner-only in `~/.config/muster/pairing`. The code then stops working, and it also stops working once it expires, so a code that ends up in a transcript or a log can't be used later. Then restart that machine's Claude Code sessions.
+It prints a `muster-shim pair muster-pair:v2:…` command. Run that on the machine you're pairing, within 15 minutes. To keep the code out of shell history, save it to a file and run `muster-shim pair < file` instead, then delete the file. The code holds the gate's address, the certificate fingerprint to pin, and a one-time invite. `muster-shim pair` exchanges the invite at the gate for that machine's access token and stores the token owner-only in `~/.config/muster/pairing`. The code then stops working, and it also stops working once it expires, so a code that ends up in a transcript or a log can't be used later. Then restart that machine's Claude Code sessions.
 
 - `--address` is how the paired machine should reach the gate. It can be left out when `MUSTER_BIND` is a specific address rather than `0.0.0.0`.
 - `--expires 30s`, `15m` or `2h` sets how long the code works. The default is 15 minutes. A used or expired code gets "the daemon refused this code"; ask for a new one.
@@ -250,6 +275,14 @@ If you wired the MCP server by hand (step 3) instead of installing the plugin, a
 }
 ```
 
+To see each session's nickname, the name peers address it by, in Claude Code's status line,
+add this too (`muster-shim setup` does it for you). If you already have a `statusLine`,
+`muster-shim setup` prints a command that runs yours and Muster's side by side:
+
+```json
+{ "statusLine": { "type": "command", "command": "muster-shim statusline" } }
+```
+
 The hooks find the daemon from this machine's pairing (step 2b), the same way the shim does. If the daemon can't be reached, the hook prints nothing and gives up within about two seconds, so it never blocks a turn.
 
 #### The channels flag
@@ -263,9 +296,9 @@ the hooks when you don't.
 
 Pi, Prime Agent and opencode connect over plain WebSocket, so they need to run on the daemon's own host, using `ws://localhost:6255`. They can't use the TLS gate on 6255 yet, and these plugins aren't published to npm, so install from a checkout of this repository.
 
-After starting a reachable daemon, install the published
+After starting a reachable daemon, install the
 [`muster-pi`](plugins/muster-pi)
-package:
+package from your checkout:
 
 ```bash
 pi install ./plugins/muster-pi

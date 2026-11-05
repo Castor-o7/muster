@@ -89,6 +89,8 @@ async function init(pi: ExtensionAPI) {
     if (!sid || !daemon) return;
     const who = meta.from_nickname ?? meta.from_session ?? "a sibling session";
     if (meta.to_session && meta.to_session !== sid) return;
+    // A reconnect's drain may already have shown this message (MUS-90).
+    if (meta.body && meta.message_id && !daemon.claimShown(sid, meta.message_id)) return;
     daemon.recordCommunication(meta.to_session ?? "", meta.from_session);
 
     if (sessionCtx?.hasUI) {

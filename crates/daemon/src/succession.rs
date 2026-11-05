@@ -643,7 +643,7 @@ pub fn recheck_pending(ctx: &CommandContext, now: i64) {
         // Recorded again, with the same deadline (it's measured from when the
         // session registered), if a predecessor may still die.
         done(&mut OBSERVED.lock().unwrap_or_else(|e| e.into_inner()));
-        let found = match find_predecessor(
+        let found = find_predecessor(
             ctx,
             row,
             &ident.key,
@@ -651,19 +651,43 @@ pub fn recheck_pending(ctx: &CommandContext, now: i64) {
             ident.assigned_at,
             now,
             &cfg,
-        ) {
-            Ok(Some(found)) => found,
-            Ok(None) => continue,
-            Err(e) => {
-                log::warn!("[identity] late check for {successor} failed: {e:?}");
-                continue;
-            }
+        );
+        let Some(found) = late_check_found(&successor, until, found) else {
+            continue;
         };
         let alias = Some((fresh.nickname.clone(), now + cfg.alias_ms));
         if let Err(e) = take_over(ctx, &successor, &found, &ident.key, ident.role, alias, now) {
-            log::warn!("[identity] late takeover for {successor} failed: {e:?}");
+            log::warn!("[identity] late takeover for {successor} failed, checking again: {e:?}");
+            keep_checking(&successor, until);
         }
     }
+}
+
+/// What a late check found. Its pending entry was removed before the check,
+/// and `find_predecessor` records it again only while a predecessor may still
+/// die. A check that failed (a query error) learned nothing, so it's kept until
+/// its deadline, not dropped for good (MUS-93).
+fn late_check_found(
+    successor: &Arc<str>,
+    until: i64,
+    found: Result<Option<Found>, CommandError>,
+) -> Option<Found> {
+    match found {
+        Ok(found) => found,
+        Err(e) => {
+            log::warn!("[identity] late check for {successor} failed, checking again: {e:?}");
+            keep_checking(successor, until);
+            None
+        }
+    }
+}
+
+/// Check `successor` again on the next tick, with the same deadline, unless a
+/// later record already has it.
+fn keep_checking(successor: &Arc<str>, until: i64) {
+    let mut o = OBSERVED.lock().unwrap_or_else(|e| e.into_inner());
+    let at = o.pending.entry(successor.clone()).or_insert(until);
+    *at = (*at).max(until);
 }
 
 /// A command context for the daemon's own writes, as the hook listener uses.
@@ -702,6 +726,28 @@ pub fn take_notice(ctx: &CommandContext, sid: &str) -> Option<String> {
 mod tests {
     use super::*;
     use muster_entities::HostInfo;
+
+    /// MUS-93: a late check whose queries failed keeps the session pending
+    /// until its deadline, instead of losing the takeover for good.
+    #[test]
+    fn a_failed_late_check_is_checked_again() {
+        let successor: Arc<str> = Arc::from("late-check-fails");
+        let until = 1_000_000;
+        // The sweeper removed the entry before checking.
+        OBSERVED.lock().unwrap().pending.remove(&successor);
+        let failed = Err(CommandError::new("tx", "succession", "query failed"));
+        assert!(late_check_found(&successor, until, failed).is_none());
+        assert_eq!(
+            OBSERVED.lock().unwrap().pending.get(&successor).copied(),
+            Some(until),
+            "a failed late check dropped the session's pending takeover"
+        );
+        // A check that ran and found no dead predecessor leaves it to
+        // find_predecessor, which records it again only while one may die.
+        OBSERVED.lock().unwrap().pending.remove(&successor);
+        assert!(late_check_found(&successor, until, Ok(None)).is_none());
+        assert!(!OBSERVED.lock().unwrap().pending.contains_key(&successor));
+    }
 
     fn cfg() -> Config {
         Config {
