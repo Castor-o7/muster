@@ -29,9 +29,10 @@ bypass. The 2026-10-30 adversarial review (`docs/session-binding.md`) found thre
 1. **A NUL-suffixed key.** `"id\u0000"` passed the filter as an unknown key. myko's
    `sanitize_null_bytes` then stripped the NUL, so it became `id` and replaced the id
    the filter had checked. The fix refuses NUL anywhere.
-2. **A tab in the request line.** The gate's HTTP parse lost the machine name on a
-   request myko's parser still accepted, so the request reached myko without the
-   verified identity. The fix: stricter request-head parsing in the gate.
+2. **A tab in the request line.** It lost the machine name: the gate's reading of the
+   request head and the identity it attaches came apart. The review records only that
+   much. The fix is in the gate, with a regression test, and the exact mechanism isn't
+   restated here.
 3. **A command body sent as a JSON array.** serde fills a struct from an array by
    position, so `asSession` arrived with no `asSession` key for the name-based check to
    see. The fix refuses non-object bodies.
