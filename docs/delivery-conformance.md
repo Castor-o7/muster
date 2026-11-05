@@ -46,8 +46,8 @@ passing, the suite fails until it's taken off the list.
 
 | Cells | Story | What fails |
 |---|---|---|
-| `pi` × 3 | MUS-81 | A pushed message is marked read when the push reaches the plugin's connection. If the harness then loses it, the next turn's inbox drain finds nothing unread, and the message is gone: the push-side twin of MUS-75. |
-| `pi` × 6b | MUS-82 | While wakes are paused, the push is skipped and the mail stays unread, but resuming pushes nothing again, so a push session isn't woken until its next turn. |
+| `pi`, `opencode` × 3 | MUS-81 | A pushed message is marked read when the push reaches the plugin's connection. If the harness then loses it, the next turn's inbox drain finds nothing unread, and the message is gone: the push-side twin of MUS-75. |
+| `pi`, `opencode` × 6b | MUS-82 | While wakes are paused, the push is skipped and the mail stays unread, but resuming pushes nothing again, so a push session isn't woken until its next turn. |
 | `codex` × 5 | MUS-76 | After a restart without Postgres, an idle Codex session is off the roster until its next hook: the bridge registers a thread only on `thread/started`. |
 
 ## The harnesses
@@ -57,7 +57,7 @@ passing, the suite fails until it's taken off the list.
 | `claude` | Claude Code | plain | built |
 | `claude-tls` | Claude Code | `MUSTER_TLS=1`, as Murph runs: the hooks carry the local token, and the shim connects through the gate's port | built |
 | `codex` | Codex, through `muster-shim codex-bridge` and the app-server | plain | built |
-| `opencode` | opencode plugin (`plugins/muster-opencode`) | plain | stage 3 |
+| `opencode` | opencode plugin (`plugins/muster-opencode`) | plain | built |
 | `pi` | Pi plugin (`plugins/muster-pi`) | plain | built |
 | `prime-agent` | Prime Agent plugin (`plugins/muster-prime-agent`) | plain | stage 3 |
 
@@ -136,12 +136,36 @@ Two scenarios are `n/a` for Pi. A plugin has no prompt hooks, so a hook reply
 can't be lost (3b). And a connected plugin renders pushes, so its roster row
 says `channel`, never `none` (8).
 
+### What the fake opencode assumes
+
+Pinned to **`@opencode-ai/plugin` and `@opencode-ai/sdk` 1.17.11**, the
+versions in `plugins/muster-opencode/package-lock.json`. The real
+muster-opencode plugin runs under bun, loaded by
+`plugins/muster-opencode/test/conformance-driver.ts` with a stand-in for
+opencode's plugin input: the SDK client (`session.prompt`, `tui.showToast`,
+`app.log`) and bun's own `$`. It connects to the daemon itself and takes the
+live push. It assumes these behaviours of opencode, which the suite can't
+check:
+
+- **`client.session.prompt` on an idle session starts a turn** with that
+  text. On a busy one, opencode queues it behind the running turn, so the model
+  sees it next. The fake records the first as the wake and the second as busy
+  delivery.
+- **A user turn runs the `chat.message` hook**, and parts the hook adds are
+  shown to the model. muster-opencode drains the inbox there, so the fake runs
+  it at each busy boundary.
+- **The `event` hook gets `session.created` and `session.idle`** with the
+  session id where `eventSessionId` looks for it.
+- **A lost delivery** means `session.prompt` rejects after the plugin has
+  received the push.
+
+Scenarios 3b and 8 are `n/a`, as for Pi.
+
 ## Gaps
 
 These are listed so nobody reads the grid as more than it is.
 
-- **opencode and Prime Agent have no fake yet** (stage 3). Their columns read
-  `not yet`.
+- **Prime Agent has no fake yet** (stage 3). Its column reads `not yet`.
 - **The plugin columns need bun and the plugin's `node_modules`.** CI downloads
   bun 1.3.14 from its GitHub release, checks it against a SHA-256 committed in
   the workflow, and runs `npm ci` in each plugin. Locally, put bun on `PATH` or
@@ -184,6 +208,10 @@ fixtures with recorded ones.
 4. Set `CLAUDE_CODE_VERSION` in `conformance.rs` to the new version, update the
    fixture README to say the files are recorded, and update the version above.
 5. Run the suite. If a cell changes, the change is a finding: report it.
+
+For Pi and opencode, the pinned thing is the plugin API, not recorded data.
+For opencode, when `@opencode-ai/plugin` changes in its lockfile, check the
+`Plugin` input and `Hooks` types against `conformance-driver.ts` the same way.
 
 For Pi, the pinned thing is the extension API, not recorded data. When
 `@earendil-works/pi-coding-agent` changes in `plugins/muster-pi/package-lock.json`,
