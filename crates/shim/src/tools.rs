@@ -113,6 +113,11 @@ impl Handler for CoordHandler {
         let args = args.clone();
         let name = name.to_string();
         Box::pin(async move {
+            // Every tool here writes as this session, which the daemon refuses
+            // until the session's row is on the roster. An agent's first call can
+            // come before the shim's registration lands (MUS-72), so hold it
+            // briefly rather than fail it.
+            wait_until_registered(&host).await;
             match name.as_str() {
                 "set_status" => set_status(&host, &args).await,
                 "send_message" => send_message(&host, &args).await,
@@ -397,6 +402,45 @@ async fn read_messages(
 // =============================================================================
 // Tool implementations (writes)
 // =============================================================================
+
+/// How long a write waits for this session to reach the roster (MUS-72).
+const REGISTER_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+const REGISTER_POLL: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Wait until this session is on the roster, or [`REGISTER_WAIT`] passes. Under
+/// Codex the caller is named by `asSession`, so there's nothing to wait for.
+async fn wait_until_registered(host: &ToolHost) {
+    if host.is_codex {
+        return;
+    }
+    wait_for(
+        || {
+            let me = host.session.lock().unwrap().id.clone();
+            crate::registered_on_roster(&host.sessions_cell.get(), &me)
+        },
+        REGISTER_WAIT,
+        REGISTER_POLL,
+    )
+    .await;
+}
+
+/// Poll `ready` until it's true or `limit` passes. Returns whether it became true.
+async fn wait_for(
+    ready: impl Fn() -> bool,
+    limit: std::time::Duration,
+    poll: std::time::Duration,
+) -> bool {
+    let deadline = std::time::Instant::now() + limit;
+    loop {
+        if ready() {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(poll).await;
+    }
+}
 
 /// The session a write command acts AS. Under Codex the shim holds no
 /// connection identity, so the agent names its own session explicitly via
@@ -925,6 +969,37 @@ where
 
 #[cfg(test)]
 mod tests {
+
+    #[tokio::test]
+    async fn an_early_write_waits_for_registration_then_goes_ahead() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let polls = AtomicUsize::new(0);
+        // Registered on the third look.
+        let ready = super::wait_for(
+            || polls.fetch_add(1, Ordering::SeqCst) >= 2,
+            std::time::Duration::from_secs(2),
+            std::time::Duration::from_millis(10),
+        )
+        .await;
+        assert!(ready);
+        assert_eq!(polls.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn an_early_write_waits_only_so_long() {
+        let started = std::time::Instant::now();
+        let ready = super::wait_for(
+            || false,
+            std::time::Duration::from_millis(150),
+            std::time::Duration::from_millis(10),
+        )
+        .await;
+        assert!(
+            !ready,
+            "it gives up, and the daemon's own error reaches the agent"
+        );
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    }
     use super::*;
 
     #[test]

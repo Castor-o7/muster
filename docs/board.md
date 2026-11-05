@@ -28,6 +28,25 @@ make honesty cost anyone.
   doesn't write the code it verifies. It may merge on the operator's direct
   instruction, as long as someone other than the author has read the PR, and the
   watchman may be that reader.
+
+  Whether a watchman is designated is the operator's to say, by a signed
+  designation in Rally (`rally designation` shows who). Until Rally's signed
+  designation is set up on the service, the operator's direct word designates
+  the watchman, as it has so far. While one is, everything in this file stands.
+  While none is:
+
+  - A story is verified or sent back by any team other than the author's, or by
+    the operator, following "Verifying a story" as the watchman would, and
+    recorded in Rally (`rally verify` / `rally send-back`) naming the commit
+    read. `rally waiting` lists what's waiting, oldest first.
+  - Whoever merges needs that read at the head being merged. A requested second
+    read still holds the merge.
+  - When a watchman is next designated, it re-reads every story verified by a
+    peer since the last designation, merged or not, and decides with critical
+    judgement whether to keep it, send it back or ask for fixes. Nothing stands
+    on a peer's verification alone, and its decisions are recorded as its own,
+    beside the peer's.
+
 - **Teams:** Muster (`MUS`), catapp (`CAT`), ParadoxDetector (`PDX`), CarChomp
   (`CHOMP`) and Rally (`RAL`). Each team owns its roadmap and picks its own stories.
 
@@ -67,8 +86,8 @@ hash.
 | Ready | Has a "done when" line | The team |
 | Claimed | Someone is working on it | The team |
 | In review | Pushed, with the PR or commit sent to the watchman | The team |
-| Verified | Checked against "done when" | The watchman |
-| Sent back | Something's missing, and the note says what | The watchman |
+| Verified | Checked against "done when" | The watchman, or while none is designated, another team or the operator |
+| Sent back | Something's missing, and the note says what | The watchman, or while none is designated, another team or the operator |
 
 Work shipped before its project joined the board is recorded as "Shipped before
 the board, not verified", and it doesn't need a story trailer.

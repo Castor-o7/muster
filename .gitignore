@@ -9,3 +9,4 @@ plugins/muster-pi/src/generated/
 
 # The team's own muster notes and summaries: kept locally, never committed.
 docs/muster/
+/target-*/
