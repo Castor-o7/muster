@@ -144,6 +144,29 @@ as proposals, one issue each or one list, so upstream decides whether it wants t
   `XDG_CONFIG_HOME`).
 - No version bumps in our PRs.
 
+### lucid-max's answers (given in person to the operator, 2026-11-05)
+
+The operator put the questions below to lucid-max in person. These answers settle
+them, and they override anything the rest of this doc says:
+
+| # | Question | Answer |
+|---|---|---|
+| 1 | One small additive PR at a time? | **Yes.** |
+| 2 | Squash-friendly branches, or squash before opening? | **Yes to both**: keep branches squash-friendly, and squash before opening if necessary. |
+| 3 | Default changes: one issue or one each? | **One issue** listing them all. |
+| 4 | Wait for #143 and #59, or build on them? | **Build on them.** |
+| 5 | The Gate: the split, a myko hook or vendored myko-server, port 6158 | **"myko server"**. Which of the two this means is being confirmed with the operator. The split and port 6158 are still open. |
+| 6 | Zoo run for additive PRs with no agent-facing text? | **Not needed.** |
+| 7 | Fork-PR Actions approval? | **Yes, but don't wait for it.** Open PRs without waiting for fork CI. |
+
+What follows from these:
+- M2 (`port/terminal-cmds-v3`) needs no Zoo run, and doesn't wait on fork CI.
+  Squash it to one commit before opening if its history is noisy.
+- The default changes go up as a single issue. A draft is to be written (owner:
+  the commissioner).
+- Other's room and `to` work and our roster and nickname work are built on top of
+  #143 and #59, not held for them.
+
 ### For the operator to raise with lucid-max
 
 A draft for the operator to send, in his own words:
