@@ -1410,6 +1410,10 @@ const SCENARIOS: &[(&str, Scenario)] = &[
     ("hung-handover-released", hung_handover_released),
     ("restart-keeps-identity", restart_keeps_identity),
     ("live-sibling-keeps-its-name", live_sibling_keeps_its_name),
+    (
+        "unread-mail-follows-a-restart",
+        unread_mail_follows_a_restart,
+    ),
 ];
 
 /// Scenario 1: An idle session wakes on a direct message.
@@ -1733,6 +1737,10 @@ fn mail_waiting_at_reconnect(c: &mut Cell) -> Result<(), String> {
     if c.harness.set_online(false) {
         return Err("the plugin's connection never dropped, so the scenario didn't run".into());
     }
+    // The plugin's side is closed; give the daemon a moment to handle the
+    // close too, or the send below can still be queued on the dying
+    // connection (seen once in a full grid run).
+    thread::sleep(Duration::from_secs(1));
     let waiting = token("waiting");
     let sent = c.sender.send(&to, &waiting, None)?;
     if sent["live_push"] == json!("delivered") {
@@ -1872,6 +1880,37 @@ fn restart_keeps_identity(c: &mut Cell) -> Result<(), String> {
     Ok(())
 }
 
+/// Scenario 13 (MUS-47): Mail the old session never saw is shown once by the
+/// session that takes over its nickname, and never again. It's sent before the
+/// restart, while no hook runs, so it's still unread when the old session ends.
+fn unread_mail_follows_a_restart(c: &mut Cell) -> Result<(), String> {
+    let old_id = c.recipient();
+    let old_nick = nickname_of(c, &old_id).ok_or("the first session never got a nickname")?;
+    let t = token("before-restart");
+    c.send(&t)?;
+    c.harness.restart(&c.daemon, &c.proxy);
+    let new_id = c.recipient();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while nickname_of(c, &new_id).as_deref() != Some(old_nick.as_str()) {
+        if Instant::now() >= deadline {
+            return Err(format!("the new session never took over {old_nick}"));
+        }
+        thread::sleep(Duration::from_millis(500));
+    }
+    let seen = c.harness.busy_boundary().unwrap_or_default();
+    let n = seen.matches(t.as_str()).count();
+    if n != 1 {
+        return Err(format!(
+            "the old session's unread mail was shown {n} times after the restart, not once; got {seen:?}"
+        ));
+    }
+    thread::sleep(Duration::from_secs(ACK_LEASE_SECS + 1));
+    if contains(&c.harness.busy_boundary(), &t) {
+        return Err("shown again at the next hook".into());
+    }
+    Ok(())
+}
+
 /// Scenario 12 (MUS-3): A second session in the same working directory,
 /// while the first is live, gets a nickname of its own, and the first keeps
 /// its nickname past the quiet time. For Codex the first is an idle thread
@@ -1969,6 +2008,10 @@ const PUSH_PLUGIN_NOT_APPLICABLE: &[(&str, &str)] = &[
     ),
     (
         "live-sibling-keeps-its-name",
+        "the plugins don't report a harness yet: MUS-3 covers Claude and Codex first",
+    ),
+    (
+        "unread-mail-follows-a-restart",
         "the plugins don't report a harness yet: MUS-3 covers Claude and Codex first",
     ),
     (
