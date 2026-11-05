@@ -119,10 +119,14 @@ each opened after the one before it has merged:
 3. **Other, the additive part only:** the `cargo-deny` dependency audit, plus
    whatever of `marshal-shim send`/`roster` M2 doesn't already cover. It leaves out
    refusing an empty `to` and the 5 s first-write wait.
-4. **Gate**, in two or three PRs: TLS, then pairing, then the myko listener. It's
-   additive while `--tls` isn't given, and plain mode stays the default. Ask about
-   the vendored myko-server code before sending it.
-5. **Later, still additive:** daemon links (TLS only) and the conformance suite
+4. **myko first: the `RequestFilter` hook**, a small additive PR to ignition-is-go/myko.
+   It's an optional filter that runs before myko handles a request, and nothing
+   changes when none is set. It replaces vendoring myko-server 6.11.5. The Gate
+   can't open until myko has released it.
+5. **Gate**, in two or three PRs: TLS, then pairing, then the myko listener. It's
+   additive while `--tls` isn't given, and plain mode stays the default. It depends
+   on the released myko with the `RequestFilter` hook, and vendors nothing.
+6. **Later, still additive:** daemon links (TLS only) and the conformance suite
    (test only).
 
 **Not sent as PRs: the default changes.** They go upstream as **one issue**
@@ -163,7 +167,7 @@ them, and they override anything the rest of this doc says:
 | 2 | Squash-friendly branches, or squash before opening? | **Yes to both**: keep branches squash-friendly, and squash before opening if necessary. |
 | 3 | Default changes: one issue or one each? | **One issue** listing them all. |
 | 4 | Wait for #143 and #59, or build on them? | **Build on them.** |
-| 5 | The Gate: the split, a myko hook or vendored myko-server, port 6158 | **Vendor myko-server** (the operator confirmed the meaning). The Gate goes with our vendored myko-server copy and its `RequestFilter` diff, not a hook upstream in ignition-is-go/myko. The split and port 6158 are still open, so the TLS → pairing → myko-listener split stands as our proposal. |
+| 5 | The Gate: the split, a myko hook or vendored myko-server, port 6158 | **Not vendored** (the operator's decision, 2026-11-05, replacing an earlier "vendor" reading). The `RequestFilter` change goes upstream to **ignition-is-go/myko** as its own small additive PR first. The Gate then depends on the myko release that includes it, through an ordinary version bump in `Cargo.toml`, with no copy of myko-server in Marshal. The split and port 6158 are still open, so the TLS → pairing → myko-listener split stands as our proposal. |
 | 6 | Zoo run for additive PRs with no agent-facing text? | **Not needed.** |
 | 7 | Fork-PR Actions approval? | **Yes, but don't wait for it.** Open PRs without waiting for fork CI. |
 
