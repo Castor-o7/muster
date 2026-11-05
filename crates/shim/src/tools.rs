@@ -406,6 +406,8 @@ async fn read_messages(
 /// How long a write waits for this session to reach the roster (MUS-72).
 const REGISTER_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 const REGISTER_POLL: std::time::Duration = std::time::Duration::from_millis(100);
+/// If the row hasn't landed by then, the session is sent again (MUS-78).
+const REGISTER_RESEND_AFTER: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// Wait until this session is on the roster, or [`REGISTER_WAIT`] passes. Under
 /// Codex the caller is named by `asSession`, so there's nothing to wait for.
@@ -413,12 +415,29 @@ async fn wait_until_registered(host: &ToolHost) {
     if host.is_codex {
         return;
     }
+    let registered = || {
+        let me = host.session.lock().unwrap().id.clone();
+        crate::registered_on_roster(&host.sessions_cell.get(), &me)
+    };
+    if wait_for(registered, REGISTER_RESEND_AFTER, REGISTER_POLL).await {
+        return;
+    }
+    // The registration sent on connect is fire-and-forget, and the background
+    // check only re-sends after missing the row on more than one 5 s tick. So a
+    // lost first SET (seen right after a daemon restart, MUS-78) would outlast
+    // this wait. Send it again now, once.
+    let snapshot = host.session.lock().unwrap().clone();
+    log::warn!(
+        "[muster-shim] session {} not on the roster {} s after a write began; sending it again",
+        snapshot.id.0,
+        REGISTER_RESEND_AFTER.as_secs()
+    );
+    if let Err(e) = crate::emit_session_set(&host.client, &snapshot) {
+        log::warn!("[muster-shim] re-SET before a write failed: {e}");
+    }
     wait_for(
-        || {
-            let me = host.session.lock().unwrap().id.clone();
-            crate::registered_on_roster(&host.sessions_cell.get(), &me)
-        },
-        REGISTER_WAIT,
+        registered,
+        REGISTER_WAIT - REGISTER_RESEND_AFTER,
         REGISTER_POLL,
     )
     .await;
