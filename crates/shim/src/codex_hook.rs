@@ -487,6 +487,21 @@ pub(crate) fn register_session(base: &str, session_id: &str, cwd: &str) -> Optio
     None
 }
 
+/// Tell the daemon whether the Codex bridge can wake `session_id` (MUS-77), so the roster shows
+/// its wake path. Returns whether the daemon now records it as watched.
+pub(crate) fn bridge_watch(base: &str, session_id: &str, watching: bool) -> bool {
+    let body = format!(
+        "{{\"session_id\":{},\"watching\":{watching}}}",
+        json_str(session_id)
+    );
+    let path = format!(
+        "/hook/bridge-watch?host={}&operator={}&harness=codex",
+        url_q(&short_host()),
+        url_q(&operator())
+    );
+    http_post(base, &path, &body, TIMEOUT).is_some_and(|reply| reply == "watching")
+}
+
 /// Resolve the hook listener used by a bridge that already resolved its daemon
 /// WebSocket address. `MUSTER_BASE_URL` remains the explicit override for
 /// non-standard hook ports.

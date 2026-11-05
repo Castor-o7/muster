@@ -1267,6 +1267,7 @@ const SCENARIOS: &[(&str, Scenario)] = &[
     ("resume-wakes-held-mail", resume_wakes_held_mail),
     ("broadcast-never-wakes", broadcast_never_wakes),
     ("wake-none-not-expected", wake_none_not_expected),
+    ("armed-shows-its-wake-path", armed_shows_its_wake_path),
 ];
 
 /// Scenario 1: An idle session wakes on a direct message.
@@ -1542,6 +1543,42 @@ fn wake_none_not_expected(c: &mut Cell) -> Result<(), String> {
     Ok(())
 }
 
+/// Scenario 9: An idle session that something can wake is shown so: the roster says `waiting`
+/// and a send says `expected` (MUS-77), and it does wake. For Claude that's its waiter; for Codex,
+/// the app-server bridge, which holds no wait.
+fn armed_shows_its_wake_path(c: &mut Cell) -> Result<(), String> {
+    c.harness.arm_idle();
+    let id = c.recipient();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let mut row = c.recipient_on_roster()?;
+    while row["wake"] != json!("waiting") {
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "the roster says wake {} for an armed idle session",
+                row["wake"]
+            ));
+        }
+        thread::sleep(Duration::from_millis(250));
+        row = c
+            .sender
+            .row(&id, Duration::from_secs(5))
+            .unwrap_or_default();
+    }
+    let t = token("armed");
+    let r = c.send(&t)?;
+    if r["wake"] != json!("expected") {
+        return Err(format!(
+            "send said wake {} for a session the roster says is waiting",
+            r["wake"]
+        ));
+    }
+    let woke = c.harness.wait_for_wake(WAKE_WITHIN);
+    if !contains(&woke, &t) {
+        return Err(format!("not woken with the message; woke with {woke:?}"));
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // The grid
 
@@ -1576,7 +1613,11 @@ const HARNESSES: &[Harness] = &[
         name: "codex",
         mode: Mode::Plain,
         make: || Box::new(FakeCodex::new()),
-        not_applicable: &[],
+        not_applicable: &[(
+            "wake-none-not-expected",
+            "its app-server bridge is a wake path from the start, so the roster never says none \
+             (MUS-77); armed-shows-its-wake-path covers it",
+        )],
         needs_bun: false,
     },
     Harness {
