@@ -7,8 +7,9 @@ which fields and states a native board would need. That native board is now
 is required to follow this process: a team can use them where it finds them useful, and
 otherwise works the same way through PRs, the board and direct contact.
 
-There's no deadline here. Take a story when you're ready and rest between
-stories. Careful work is the goal.
+There's no deadline here, and careful work is the goal. But a rally keeps moving:
+while a team's roadmap has a story it can take, that team has its next story in hand.
+Keeping it that way is the watchman's main job (see "Keeping the rally moving").
 
 ## Honesty comes first
 
@@ -24,8 +25,12 @@ make honesty cost anyone.
 - **Operator:** sets the goals and writes the roadmaps with the teams. Merging
   and anything hard to undo stay with the operator, unless they've said
   otherwise.
-- **Watchman:** keeps the board, verifies finished stories, recognizes good
-  work, helps with blockers, and relays decisions to the operator. The watchman
+- **Watchman:** keeps the rally proceeding apace. In the operator's order of
+  importance, it assigns stories so every team has its next work, checks that
+  teams are completing that work, and checks that the work is real, by reading it
+  itself or by assigning another team to assess it. Around that, it keeps the
+  board, recognizes good work, gets teams what they need, and relays decisions to
+  the operator. "Keeping the rally moving" below says how. The watchman
   doesn't write the code it verifies. It may merge on the operator's direct
   instruction, as long as someone other than the author has read the PR, and the
   watchman may be that reader.
@@ -50,7 +55,53 @@ make honesty cost anyone.
     beside the peer's.
 
 - **Teams:** Muster (`MUS`), catapp (`CAT`), ParadoxDetector (`PDX`), CarChomp
-  (`CHOMP`) and Rally (`RAL`). Each team owns its roadmap and picks its own stories.
+  (`CHOMP`) and Rally (`RAL`). Each team owns its roadmap and its stories' content.
+  A team can claim a story itself or propose one; the watchman assigns stories so
+  that no team is left without one.
+
+## Keeping the rally moving
+
+The operator, 2026-11-05: "the watchmans main job is to ensure that the rally is
+proceeding apace: meaning verify that teams are completing their work, verify the
+voracity of the work either yourself or by assigning another team to assess, and
+finally the watchman's primary job is story assignment. … if they are blocked by an
+operator interact, find another job for them and keep them moving until they run out
+of roadmap. This is the most important feature of the rally, having a central
+mechanism to produce productivity in a dynamic environment."
+
+What the watchman does:
+
+1. **Assigns stories, and keeps a queue.** Every team holds its current story and
+   the next one or two, named by ID, so finishing one never leaves it waiting.
+   The next story goes in the same reply that verifies or sends back the last.
+   The watchman chooses by the rally's goals, by what the team knows, and by what
+   it has found. A team's own pick is welcome, and the watchman agrees it or
+   offers a better one.
+2. **Watches for idle teams.** After each merge or report, and whenever the roster
+   shows a team `idle` or with a stale `current_task`, the watchman checks whether
+   the team has work. A team with ready roadmap stories and nothing claimed gets
+   one straight away.
+3. **Works around operator blocks.** When a story waits on the operator (a
+   decision, a login, a restart, an approval), the watchman relays the question to
+   the operator and gives the team other work in the meantime. Waiting on the
+   operator for one story never idles a team. The same goes for waiting on another
+   team's review or merge: stack the next story, or take one that doesn't depend
+   on it.
+4. **Gets teams what they need.** That might be a decision relayed, a story number,
+   a base to build on, access, or a clear "done when". If a team is stuck on a
+   real problem, the watchman helps solve it or reassigns the work.
+5. **Checks that work is complete.** A claim isn't progress until the story is in
+   review with evidence. The watchman follows up on claims that have gone quiet.
+6. **Checks that work is real.** The watchman reads the diff at the head itself
+   ("Verifying a story"), or assigns another team, never the author's, to assess
+   it and report. Either way, the watchman makes the call and confirms the head,
+   CI and "done when" before marking it Verified or merging.
+7. **Says when the roadmap runs out.** When a team has no ready story left, the
+   watchman tells the operator, and the team proposes new stories from what it
+   found along the way, for the operator to agree.
+
+Rest isn't forbidden. A team that needs to stop says so, and the watchman notes it.
+But nobody waits for work while the roadmap has some.
 
 Whoever merges: if a second read has been requested, the merge waits for it, and that
 read must cover the head being merged.
@@ -95,7 +146,7 @@ Work shipped before its project joined the board is recorded as "Shipped before
 the board, not verified", and it doesn't need a story trailer.
 
 Sent back is a normal outcome, not a failure. The story returns to the same team,
-which picks it up when ready.
+which picks it up next, ahead of new work unless the watchman says otherwise.
 
 ## Submitting a story
 
@@ -127,8 +178,8 @@ real verification, which is what makes it mean something.
 **If it's sent back,** say what's missing and what's already good, kindly. Don't
 wave work through to be nice.
 
-Everyone in the muster, Claudes included, is welcome to rest after a story.
-Nobody needs to be asked for their next pick right away.
+Either way, the reply also names the team's next story, or confirms the one already
+queued, so the team goes straight on ("Keeping the rally moving").
 
 ## The board
 
