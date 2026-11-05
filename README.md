@@ -129,6 +129,16 @@ The daemon's own host is always allowed, so an allowlist never cuts off the sess
 
 The daemon keeps its TLS certificate and the paired machines' token hashes in `MUSTER_STATE_DIR` (default `~/.local/state/muster`). Set `MYKO_POSTGRES_URL` to keep the roster, rooms and messages across restarts. Without it the daemon runs in memory and starts empty each time.
 
+### 2a. Link two daemons (optional, TLS only)
+
+A **link** joins two daemons, each keeping its own roster, store and controls. A session on one can message a session on the other, both ways (MUS-66; see [the design](docs/daemon-links-design.md)). One daemon dials the other's gate, so only that one needs to be reachable. Both must run with TLS on. On the daemon that will be dialed:
+
+```bash
+muster-daemon pair --name a1 --link --address murph.example:6255
+```
+
+It prints a one-time `muster-daemon link <code>` command, valid for 15 minutes. Run it on the other daemon's host, in a shell with `MUSTER_TLS=1`. The running daemon connects within a few seconds. `muster-daemon links` lists links both ways, `unlink NAME` stops dialing one, and `unpair NAME` on the dialed side revokes it. The far daemon's sessions appear on `muster://roster` under `remote_sessions`, each with an `address` like `fuzzy-otter@murph`. Send to that address to reach one; a bare name prefers a local session. Mail from a linked daemon arrives labelled the same way. A link shares each session's nickname, host, operator, project, `current_task` and activity, but never its cwd, pid or branch. Mail for a link that is down waits in the outbox, which survives a restart only with Postgres, and is refused back to its senders after a day.
+
 ### 2b. Pair each machine
 
 Pairing needs TLS on. Every machine other than the daemon's own host needs a pairing. (On the daemon's host, an unpaired shim connects to `ws://localhost:6255` with the local token, so it works without one. Pair it too if other people can log in to that machine.) On the daemon's host:

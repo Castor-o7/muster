@@ -22,6 +22,9 @@ const QUERIES: &[&str] = &[
     "GetAllSessionNicknames",
     "GetAllWakeWatchers",
     "GetAllWakePauses",
+    // Sessions on linked daemons, for the roster (MUS-66). Read-only: no
+    // client may write a `RemoteSession` or a `MessageLink`.
+    "GetAllRemoteSessions",
 ];
 
 /// Commands that act as the connection's session, or as `asSession` if named.

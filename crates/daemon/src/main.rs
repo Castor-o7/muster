@@ -41,7 +41,12 @@ usage:
                                       the gate: TLS, pairing, tokens and limits
   muster-daemon pair --name NAME [--address HOST:PORT] [--expires 15m]
                                       print a one-time pairing code for a machine
-  muster-daemon unpair NAME           revoke a machine's access
+  muster-daemon pair --name NAME --link [--address HOST:PORT] [--expires 15m]
+                                      print a one-time code for another daemon to link here
+  muster-daemon link CODE             link this daemon to the one that printed CODE
+  muster-daemon links                 list links, both ways
+  muster-daemon unlink NAME           stop dialing a linked daemon
+  muster-daemon unpair NAME           revoke a machine's access, or a daemon's link here
   muster-daemon pairs                 list paired machines
   muster-daemon pause | resume        stop or restart message wake-ups
   muster-daemon allow MACHINE         let only listed machines send (and this host)
@@ -57,15 +62,51 @@ fn main() -> Result<()> {
         Some("unpair") => match args.get(1) {
             Some(name) if args.len() == 2 => {
                 let dir = daemon::credentials::state_dir()?;
-                if daemon::credentials::remove_token(&dir, name)? {
+                let machine = daemon::credentials::remove_token(&dir, name)?;
+                let link = daemon::credentials::remove_token(
+                    &dir,
+                    &daemon::credentials::link_token_name(name),
+                )?;
+                if machine || link {
                     println!("unpaired {name}; its token stops working on its next connection");
                 } else {
-                    println!("no paired machine named {name}");
+                    println!("no paired machine or linked daemon named {name}");
                 }
                 Ok(())
             }
             _ => anyhow::bail!("{USAGE}"),
         },
+        Some("link") if args.len() == 2 => link(&args[1]),
+        Some("unlink") if args.len() == 2 => {
+            let dir = daemon::credentials::state_dir()?;
+            if daemon::links::remove_link(&dir, &args[1])? {
+                println!(
+                    "unlinked {}; the running daemon closes the link within a few seconds",
+                    args[1]
+                );
+            } else {
+                println!("no link named {}", args[1]);
+            }
+            Ok(())
+        }
+        Some("links") if args.len() == 1 => {
+            let dir = daemon::credentials::state_dir()?;
+            let dialed = daemon::links::read_links(&dir)?;
+            let accepted: Vec<String> = daemon::credentials::token_names(&dir)?
+                .into_iter()
+                .filter_map(|n| daemon::credentials::as_link(&n).map(str::to_string))
+                .collect();
+            if dialed.is_empty() && accepted.is_empty() {
+                println!("no links");
+            }
+            for l in dialed {
+                println!("{} (this daemon dials {})", l.name, l.address);
+            }
+            for name in accepted {
+                println!("{name} (dials this daemon)");
+            }
+            Ok(())
+        }
         Some("pairs") if args.len() == 1 => {
             let dir = daemon::credentials::state_dir()?;
             let names = daemon::credentials::token_names(&dir)?;
@@ -129,10 +170,12 @@ fn main() -> Result<()> {
 fn pair(args: &[String]) -> Result<()> {
     let (mut name, mut address) = (None, None);
     let mut ttl = DEFAULT_INVITE_TTL;
+    let mut as_link = false;
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--name" => name = it.next().cloned(),
+            "--link" => as_link = true,
             "--address" => address = it.next().cloned(),
             "--expires" => {
                 let spec = it
@@ -152,21 +195,84 @@ fn pair(args: &[String]) -> Result<()> {
 
     let dir = daemon::credentials::state_dir()?;
     let identity = daemon::credentials::load_or_create_identity(&dir)?;
-    let invite = daemon::credentials::add_invite(&dir, &name, ttl)?;
+    if as_link && !daemon::credentials::valid_name(&name) {
+        anyhow::bail!("names are 1-64 characters of letters, digits, '-', '_' or '.'");
+    }
+    let token_name = if as_link {
+        daemon::credentials::link_token_name(&name)
+    } else {
+        name.clone()
+    };
+    let invite = daemon::credentials::add_invite(&dir, &token_name, ttl)?;
     let code = muster_entities::pairing::Invite {
         address,
         fingerprint: identity.fingerprint(),
         invite,
         name: name.clone(),
+        link: as_link.then(daemon_name),
     }
     .to_code();
-    eprintln!("Invited {name}. On that machine, run:\n");
-    println!("muster-shim pair {code}");
+    if as_link {
+        eprintln!("Invited the daemon {name} to link. On its host, run:\n");
+        println!("muster-daemon link {code}");
+    } else {
+        eprintln!("Invited {name}. On that machine, run:\n");
+        println!("muster-shim pair {code}");
+    }
     eprintln!(
         "\nThe code works once and expires in {}. Until then, treat it like a password.",
         describe_duration(ttl)
     );
     tls_notice("pairing takes effect");
+    Ok(())
+}
+
+/// This daemon's name on a link: the host name, as the shim names hosts.
+fn daemon_name() -> String {
+    daemon::controls::this_host().unwrap_or_else(|| "daemon".to_string())
+}
+
+/// `link CODE`: redeem a link invite and store the link (MUS-66).
+fn link(code: &str) -> Result<()> {
+    let on = daemon::mode::parse_env(std::env::var(daemon::mode::ENV).ok().as_deref())
+        .ok()
+        .flatten()
+        == Some(true);
+    if !on {
+        anyhow::bail!(
+            "daemon links need TLS on both daemons: run this with MUSTER_TLS=1, as the daemon \
+             itself must run (--tls or MUSTER_TLS=1)"
+        );
+    }
+    let invite = match muster_entities::pairing::Code::parse(code) {
+        Ok(muster_entities::pairing::Code::Invite(invite)) if invite.link.is_some() => invite,
+        Ok(_) => anyhow::bail!(
+            "that's a machine's pairing code; run `muster-shim pair <code>` on the machine instead"
+        ),
+        Err(e) => anyhow::bail!("that isn't a link code: {e}"),
+    };
+    let far = invite.link.clone().unwrap_or_default();
+    if !daemon::credentials::valid_name(&far) {
+        anyhow::bail!("the code names the far daemon {far:?}, which isn't a usable name");
+    }
+    let token = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?
+        .block_on(daemon::links::redeem(&invite))?;
+    let dir = daemon::credentials::state_dir()?;
+    daemon::links::save_link(
+        &dir,
+        daemon::links::StoredLink {
+            name: far.clone(),
+            address: invite.address.clone(),
+            fingerprint: invite.fingerprint.clone(),
+            token,
+        },
+    )?;
+    println!(
+        "linked to {far} at {} (as {}); the running daemon connects within a few seconds",
+        invite.address, invite.name
+    );
     Ok(())
 }
 
@@ -273,6 +379,14 @@ async fn run_daemon(tls_flag: bool) -> Result<()> {
         // Parity with upstream Marshal (MUS-64): no message or connection limits.
         muster_entities::rate::set_enabled(false);
         daemon::limits::uncap();
+        let stored_links = daemon::links::read_links(&state_dir)
+            .map(|l| l.len())
+            .unwrap_or(0);
+        if stored_links > 0 {
+            log::warn!(
+                "muster-daemon: {stored_links} stored link(s) stay idle: links need TLS (MUS-66)"
+            );
+        }
         let server = build_server(public_bind, None);
         let stop_rx = start_background(&server, &state_dir, false);
         let hooks =
@@ -296,6 +410,14 @@ async fn run_daemon(tls_flag: bool) -> Result<()> {
         Some(daemon::gate::myko_request_filter(local_token.clone())),
     );
     let stop_rx = start_background(&server, &state_dir, true);
+    // Links to other daemons (MUS-66): dial the stored ones, accept on `/link`.
+    let links = Arc::new(daemon::links::Hub {
+        ctx: Arc::new(server.ctx()),
+        name: daemon_name(),
+        state_dir: state_dir.clone(),
+    });
+    tokio::spawn(daemon::links::run_dialers(links.clone()));
+    tokio::spawn(daemon::links::run_sweeper(links.clone()));
     let hooks = {
         let hook_ctx = Arc::new(server.ctx());
         let access = Arc::new(daemon::http_listener::Access {
@@ -315,6 +437,7 @@ async fn run_daemon(tls_flag: bool) -> Result<()> {
         hooks: hook_bind,
         state_dir: state_dir.clone(),
         local_token: local_token.clone(),
+        links: Some(links),
     });
     let local_gate = daemon::gate::run_local(daemon::gate::LocalGateConfig {
         bind: bind_addr,
@@ -359,6 +482,8 @@ fn build_server(
         .with_persister_override("WakeWatcher", blackhole.clone())
         // Rebuilt from the state directory at start (MUS-10).
         .with_persister_override("WakePause", blackhole.clone())
+        // Rebuilt from each link's roster when it connects (MUS-66).
+        .with_persister_override("RemoteSession", blackhole.clone())
         .with_persister_override("Session", session_filter.clone())
         .with_server_info(muster_server_info());
     if let Some(filter) = request_filter {

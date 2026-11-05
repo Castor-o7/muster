@@ -16,6 +16,7 @@ pub mod gate_filter;
 pub mod hooks;
 pub mod http_listener;
 pub mod limits;
+pub mod links;
 pub mod liveness_filter;
 pub mod mode;
 pub mod nickname_assign;

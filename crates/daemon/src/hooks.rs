@@ -578,9 +578,36 @@ fn surface_unread(cmd_ctx: &CommandContext, sid: &str) -> (String, Vec<MessageId
     // budget across this batch, never exceeding the per-message live-push cap.
     let per_message_chars = (AUTO_INBOX_BODY_BUDGET_CHARS / result.messages.len())
         .clamp(AUTO_INBOX_MIN_BODY_CHARS, CONTEXT_BODY_MAX_CHARS);
+    // Mail that came over a link names its sender as `nickname@link`, which is
+    // also how to answer it (MUS-66).
+    let message_links: Vec<Arc<muster_entities::MessageLink>> = cmd_ctx
+        .exec_query(muster_entities::GetAllMessageLinks {})
+        .unwrap_or_default();
+    let remotes: Vec<Arc<muster_entities::RemoteSession>> = if message_links.is_empty() {
+        Vec::new()
+    } else {
+        cmd_ctx
+            .exec_query(muster_entities::GetAllRemoteSessions {})
+            .unwrap_or_default()
+    };
     let render_line = |m: &MessageView| -> String {
-        let sender = nickname_for(cmd_ctx, m.from_session_id.0.as_ref())
-            .unwrap_or_else(|_| muster_entities::nickname(m.from_session_id.0.as_ref()));
+        let from = m.from_session_id.0.as_ref();
+        let via = message_links
+            .iter()
+            .find(|l| !l.outbound && l.id.0.as_ref() == m.message_id.0.as_ref())
+            .map(|l| l.link.as_str());
+        // A linked sender is stored as `sid@link` (MUS-66).
+        let sender = match via {
+            Some(link) => remotes
+                .iter()
+                .find(|r| r.link == link && r.id.0.as_ref() == from)
+                .map(|r| r.address())
+                .unwrap_or_else(|| {
+                    let bare = from.rsplit_once('@').map_or(from, |(sid, _)| sid);
+                    format!("{}@{link}", muster_entities::nickname(bare))
+                }),
+            None => nickname_for(cmd_ctx, from).unwrap_or_else(|_| muster_entities::nickname(from)),
+        };
         let (preview, truncated) = context_preview(&m.body, per_message_chars);
         let mut line = format!(
             "- from {sender} [response_required={}]: {}\n",

@@ -3075,6 +3075,7 @@ dependencies = [
  "notify-debouncer-mini",
  "rcgen",
  "rustls",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",

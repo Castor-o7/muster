@@ -42,6 +42,8 @@ jobs:
       - run: cargo test --workspace
       - name: Gate end-to-end (TLS, pairing, tokens)
         run: cargo build --workspace && ./scripts/test-gate-e2e.sh
+      - name: Links between daemons end-to-end (MUS-66)
+        run: ./scripts/test-links-e2e.sh
       - name: Test simulation fixture and scoring contracts
         run: python3 -m unittest discover -s scripts/sandbox -v
 

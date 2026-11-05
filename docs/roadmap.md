@@ -469,6 +469,11 @@ Rally.
   happens to messages in flight when either daemon restarts, and whether it needs the TLS mode.
   Done when: it's implemented with tests and a real a1↔Murph run. Needs a run: Lamplighter, with a
   second daemon on Murph (loopback ports 6265–6268, its own state dir, config dir and database).
+  Design merged as #90. Built: `pair --link` and `link`, the `/link` route and protocol, remote
+  sessions on the roster, `nickname@link` addressing, an outbox that survives a restart (with
+  Postgres), and the threat-model checks, all covered by `scripts/test-links-e2e.sh`. Still
+  needs the two runs: Lamplighter's two-daemon test on Murph, then the real a1↔Murph run with
+  the operator's OK.
 - [ ] **MUS-67: Write up Muster against Marshal (G7).** What Muster adds and changes, written
   for the eventual upstream PR descriptions. Draft in #81.
 - [ ] **MUS-68: Simulate each behaviour change in Zoo (G8).** Upstream requires a real-agent

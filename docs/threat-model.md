@@ -58,6 +58,17 @@ local path requires the local token, which a remote client doesn't have, and
 refuses any `Origin`, which a browser behind the proxy sends. The token is the
 boundary, not the address.
 
+**Links between daemons (MUS-66).** A linked daemon reaches only the gate's
+`/link` route, with a link token that opens nothing else. It speaks a small
+protocol of its own, never myko's frames. It may send mail only from sessions in
+its own last roster, only to local sessions, and never as a local session or
+another link's (colliding ids are refused). Its mail is rate-limited per link and
+per remote sender, with `deferred` answers. It's matched against the sender
+allowlist by the link's name. Nothing is forwarded on to a third daemon. What a
+link gives the far operator: every message sent to their sessions, and our
+sessions' nicknames, hosts, operators, projects, `current_task` text and
+activity. The full table is in [daemon-links-design.md](daemon-links-design.md).
+
 ## How each attacker is handled
 
 **A malicious website.** Every port on the daemon's host refuses a request
