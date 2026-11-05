@@ -7,6 +7,79 @@ stay in step with Muster. The per-commit decisions are in
 [upstream-inventory.md](upstream-inventory.md), and the text for each PR's
 description is in [muster-vs-marshal.md](muster-vs-marshal.md).
 
+## The next round, after #164 and #165 (2026-11-05)
+
+**#164 (Hooks, as `port/hooks-2a`) and #165 (the AGPL notice) are merged upstream**,
+by lucid-max, with a welcome from the ignition-is-go team. The operator approved this
+plan on 2026-11-05. It supersedes the landing order below wherever the two disagree.
+
+### What changed upstream
+
+- Marshal `main` is `8362227` (v0.57.0), 16 commits past `94ecc24`. Along with ours,
+  lucid-max merged lobo235's #131, #132, #134–#137, #140, #141 and #147.
+- Two of those overlap our layers. **#141** pulls the inbox into Claude turns with
+  plugin hooks, which sits next to `port/inbox-quoting`. **#140, #131 and #136**
+  cover keeping mail unread until it's shown, which is much of `port/durability-v2`.
+- **How the review ran.** lucid-max first requested changes at the receiving
+  boundary: `link::parse_response` accepted a body cut short of its Content-Length.
+  After that, each pushed head got an independent run of the 240 package tests, a
+  real-process takeover check, and native Windows CI on the exact head. A Windows
+  fixture fix, setting `APPDATA` as well as `XDG_CONFIG_HOME`, came out of that.
+  The version bumps are done upstream.
+- Levi `main` is still `aed6027` (v0.9.5), so L1–L3 are current. Castor-o7/levi now
+  exists as a fork of ignition-is-go/levi, which was what held L1.
+
+### Step 0: catch up and re-inventory (nothing goes upstream)
+
+1. Muster takes in v0.55–v0.57, the same way MUS-62 (#84) took in v0.54.
+2. Rebase every live `port/*` branch onto `8362227`.
+3. Check each remaining layer against what upstream merged, and drop, shrink or
+   rework what they now cover. Inbox quoting may turn into a small change on top
+   of #141, or disappear. Durability is cut down to what #140, #131 and #136 leave
+   uncovered. Record each decision in [upstream-inventory.md](upstream-inventory.md).
+
+### The new order
+
+Marshal still gets one PR at a time, smallest first, each opened only after the one
+before it has merged:
+
+1. **M2, the terminal commands** (`port/terminal-cmds`,
+   [upstream-pr-m2.md](upstream-pr-m2.md)). Additive, about 660 lines, with its
+   description written. It needs a rebase onto `8362227` and a recheck.
+2. **Inbox quoting**, if anything of it survives #141.
+3. **Durability**, cut down as above.
+4. **Other** (`port/other-v3`).
+5. **Gate**, split into two or three PRs: TLS, then pairing, then the myko listener.
+   About 5,800 lines plus about 12,000 vendored is too much for one review at
+   upstream's standard. Ask before sending any vendored myko-server code.
+
+Levi runs in parallel, since it's a separate repository and doesn't queue behind
+Marshal. **L2** (`levi check-events`) or **L3** (`levi session-start`) goes first,
+because each is small and stands alone. **L1** (the review gate) follows.
+
+### The check before each PR, modelled on upstream's review
+
+- Look for receiving-boundary gaps: short reads, Content-Length, framing, and acks
+  sent for mail that was never shown.
+- Rerun the tests on the exact head being sent, from a clean checkout, and keep the
+  raw log.
+- Windows CI green, with each fixture's config isolated (`APPDATA` as well as
+  `XDG_CONFIG_HOME`).
+- No version bumps in our PRs.
+
+### For the operator to raise with lucid-max
+
+- Thanks, and whether one PR per layer is still the shape they want.
+- How they'd like the Gate split, and whether they'll take vendored code.
+- Whether the Zoo run (G8) is still required. It was blocked on Codex on a1 when
+  #164 merged.
+- Whether to send M2 and Levi L2/L3 together, or one repository at a time.
+
+### Who does it
+
+The muster team takes Step 0 and the rebases. The lamplighter deploys each catch-up
+as it lands in Muster. The operator sends each PR, as before.
+
 ## Ground rules
 
 These come from Phase 5 of [roadmap.md](roadmap.md) and hold for every PR:
@@ -32,7 +105,7 @@ These come from Phase 5 of [roadmap.md](roadmap.md) and hold for every PR:
 
 | | |
 |---|---|
-| Upstream `main` | `94ecc24` (v0.54.1, 2026-11-04 22:30 UTC), not moved since |
+| Upstream `main` | was `94ecc24` (v0.54.1) when this table was written; now `8362227` (v0.57.0), see "The next round" above |
 | Muster `main` | `3fafe4a` (#124), caught up with `94ecc24` (MUS-62, #84) |
 | Port stack | Branches in Castor-o7/muster, all on `94ecc24`, each stacked on the one before |
 | Phase 5 goals | G1 (catch-up), G2 (inventory), G3 (optional TLS), G4 (hook delivery doc) and G5 (daemon links) are done. **G7** (MUS-67, the write-up) is this update. **G8** (MUS-68, the Zoo runs): the Hooks plan is written (`docs/zoo-plan-hooks.md`), but no run has happened. It is **blocked until Codex is installed on a1**, because the Zoo drives Codex agents only |
