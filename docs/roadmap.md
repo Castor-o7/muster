@@ -459,6 +459,11 @@ Rally.
   restart. Done when: no machine's config names 6257 (a1's and Murph's `.mcp.json`, the TUI,
   the TS plugins), and the alias, its variable and its rollout check are removed. The upstream
   Gate PR ships without it.
+- [ ] **MUS-80: Give the unregistered refusal a stable code.** From the watchman's review of
+  MUS-79: the shim retries a write refused as unregistered by matching the daemon's text ("has
+  no session on the roster"), so a change of wording would quietly stop the retry. Done when:
+  `resolve_caller`'s refusal carries a stable code or data field, the shim matches that rather
+  than the text, and a test pins both ends to the same value.
 - [x] **MUS-72: Hold a session's first writes until it's registered.** Found by tangerine-wombat
   in the G5 run on Murph: a tool call right after `initialize` reached the daemon before the
   shim's Session SET and failed "caller has no session on the roster". A real agent's first
