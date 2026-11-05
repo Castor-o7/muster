@@ -626,9 +626,13 @@ Rally.
   conformance suite's `pi`, `opencode` and `prime-agent` × `dropped-ack-redelivers` cells show it. Done when: a pushed message
   that the harness didn't take stays unread (the plugin acks after handing it over, or another
   design), and those cells pass.
-  Progress: the daemon half is in (#118, `acks_pushes`). Pi opts in and passes `dropped-ack-redelivers`
-  and the two new scenarios, `mail-waiting-at-reconnect` and `hung-handover-released`; opencode
-  and Prime Agent are next.
+  Progress: the daemon half is in (#118, `acks_pushes`). Pi opts in (#123) and passes
+  `dropped-ack-redelivers` and the two new scenarios, `mail-waiting-at-reconnect` and
+  `hung-handover-released`. opencode is done but shelved by the operator's change of priority on
+  2026-11-05 (Claude and Codex first): branch `fix/mus-81-opencode` at `2f746e8`, green then, no PR.
+  It passes all three cells, and also carries MUS-89's fix (opencode sets `channelsEnabled`, so
+  its row reads `wake: channel`, not `none`). It needs main merged in before a PR. Prime Agent is
+  after that.
 - [ ] **MUS-82: Resuming wakes doesn't wake a push session with held mail.** From MUS-69. While
   wakes are paused, the live push is skipped and the mail stays unread. On resume, Claude's waiter
   and the Codex bridge (MUS-74) wake for it, but nothing pushes it again, so a push session (a
@@ -648,6 +652,14 @@ Rally.
   a test's daemon binds its own ports (port 0) and reports them, or the tests retry a bind that
   loses the race; the e2e scripts take free ports per run, so two can run at once on one host;
   and no test fails on a port another process took.
+- [ ] **MUS-90: Push plugins aren't woken after a restart with Postgres.** From MUS-76. In CI,
+  `pi`, `opencode` and `prime-agent` × `daemon-restart-mid-wait-pg` fail ("not woken after the
+  restart; got None", about 26 s each), while the in-memory restart cell passes for all three.
+  Hypothesis, unproven: with Postgres the plugin's Session row survives the restart, still bound
+  to the old connection, and the plugin's reconnect doesn't rebind it, so the push finds no live
+  client. In memory the roster empties and the plugin registers fresh; the Claude shim re-SETs
+  its session on connect. Done when: a push plugin is woken by mail sent after a restart with
+  Postgres, and those cells pass.
 
 ## Moved to Rally
 

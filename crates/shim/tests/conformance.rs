@@ -16,6 +16,11 @@
 //! cargo test -p muster-shim --test conformance -- --ignored --nocapture
 //! ```
 //!
+//! The restart cells in `POSTGRES_SCENARIOS` need a Postgres database, given
+//! as `CONFORMANCE_POSTGRES_URL` (each daemon gets its own events table in it).
+//! Without one they show `no postgres`; CI sets `CONFORMANCE_REQUIRE_POSTGRES`,
+//! so there that's a failure.
+//!
 //! It prints a harness × scenario grid. A cell in `KNOWN_FAILURES` is expected
 //! to fail and is reported as such; if one starts passing, the suite fails so
 //! the list gets updated.
@@ -49,7 +54,6 @@ const QUIET_FOR: Duration = Duration::from_secs(4);
 /// Cells expected to fail today, each with the story that fixes it. The
 /// suite reports them as known failures, and fails if one passes.
 const KNOWN_FAILURES: &[(&str, &str, &str)] = &[
-    ("codex", "daemon-restart-mid-wait", "MUS-76"),
     ("pi", "resume-wakes-held-mail", "MUS-82"),
     ("opencode", "dropped-ack-redelivers", "MUS-81"),
     ("opencode", "resume-wakes-held-mail", "MUS-82"),
@@ -58,6 +62,9 @@ const KNOWN_FAILURES: &[(&str, &str, &str)] = &[
     ("prime-agent", "dropped-ack-redelivers", "MUS-81"),
     ("prime-agent", "resume-wakes-held-mail", "MUS-82"),
     ("prime-agent", "hung-handover-released", "MUS-81"),
+    ("pi", "daemon-restart-mid-wait-pg", "MUS-90"),
+    ("opencode", "daemon-restart-mid-wait-pg", "MUS-90"),
+    ("prime-agent", "daemon-restart-mid-wait-pg", "MUS-90"),
 ];
 
 /// Harnesses in the grid that have no fake yet, with the stage that adds one.
@@ -101,10 +108,13 @@ fn wait_until(within: Duration, mut ok: impl FnMut() -> bool) -> bool {
     ok()
 }
 
-/// A real `muster-daemon` in throwaway dirs on free loopback ports.
+/// A real `muster-daemon` in throwaway dirs on free loopback ports, in memory
+/// or, given a database, persisting to its own table there.
 struct Daemon {
     dir: TempDir,
     mode: Mode,
+    /// `MYKO_POSTGRES_URL`, and the events table this daemon alone uses.
+    postgres: Option<(String, String)>,
     bind: u16,
     hook: u16,
     myko: u16,
@@ -112,10 +122,15 @@ struct Daemon {
 }
 
 impl Daemon {
-    fn start(mode: Mode) -> Self {
+    fn start(mode: Mode, postgres: Option<&str>) -> Self {
+        let table = format!(
+            "conformance_{}",
+            &uuid::Uuid::new_v4().simple().to_string()[..16]
+        );
         let mut d = Self {
             dir: tempfile::tempdir().unwrap(),
             mode,
+            postgres: postgres.map(|url| (url.to_string(), table)),
             bind: free_port(),
             hook: free_port(),
             myko: free_port(),
@@ -146,6 +161,18 @@ impl Daemon {
             ("MUSTER_HOOK_BIND".into(), addr(self.hook)),
             ("MUSTER_MYKO_BIND".into(), addr(self.myko)),
         ]
+        .into_iter()
+        .chain(self.postgres.iter().flat_map(|(url, table)| {
+            [
+                ("MYKO_POSTGRES_URL".to_string(), url.clone()),
+                ("MYKO_POSTGRES_TABLE".to_string(), table.clone()),
+                (
+                    "MYKO_POSTGRES_CHANNEL".to_string(),
+                    format!("{table}_notify"),
+                ),
+            ]
+        }))
+        .collect()
     }
 
     fn command(&self) -> Command {
@@ -1212,8 +1239,8 @@ struct Cell {
 }
 
 impl Cell {
-    fn new(mode: Mode, mut harness: Box<dyn FakeHarness>) -> Self {
-        let daemon = Daemon::start(mode);
+    fn new(mode: Mode, mut harness: Box<dyn FakeHarness>, postgres: Option<&str>) -> Self {
+        let daemon = Daemon::start(mode, postgres);
         let proxy = HookProxy::start(daemon.hook_addr());
         harness.start(&daemon, &proxy);
         let sender_id = uuid::Uuid::new_v4().to_string();
@@ -1294,6 +1321,8 @@ const SCENARIOS: &[(&str, Scenario)] = &[
     ("duplicate-shown-at-most-once", duplicate_shown_at_most_once),
     ("burst-both-delivered", burst_both_delivered),
     ("daemon-restart-mid-wait", daemon_restart_mid_wait),
+    ("daemon-restart-mid-wait-pg", daemon_restart_mid_wait),
+    ("restart-keeps-unread-mail", restart_keeps_unread_mail),
     ("operator-pause-stops-wakes", operator_pause_stops_wakes),
     ("resume-wakes-held-mail", resume_wakes_held_mail),
     ("broadcast-never-wakes", broadcast_never_wakes),
@@ -1468,6 +1497,27 @@ fn daemon_restart_mid_wait(c: &mut Cell) -> Result<(), String> {
     if !contains(&woke, &t) {
         return Err(format!(
             "not woken after the restart; got {woke:?}; daemon log:\n{}",
+            c.daemon.log()
+        ));
+    }
+    Ok(())
+}
+
+/// Scenarios that run against Postgres (`CONFORMANCE_POSTGRES_URL`), so a restart
+/// keeps the roster and the mail (MUS-76). Every other cell runs in memory.
+const POSTGRES_SCENARIOS: &[&str] = &["daemon-restart-mid-wait-pg", "restart-keeps-unread-mail"];
+
+/// Scenario 5b (Postgres): Mail sent before a restart, while the session was busy,
+/// is kept, and wakes the session once it goes idle after the restart.
+fn restart_keeps_unread_mail(c: &mut Cell) -> Result<(), String> {
+    let t = token("before-restart");
+    c.send(&t)?;
+    c.daemon.restart();
+    c.harness.arm_idle();
+    let woke = c.harness.wait_for_wake(Duration::from_secs(25));
+    if !contains(&woke, &t) {
+        return Err(format!(
+            "mail sent before the restart didn't wake it after; got {woke:?}; daemon log:\n{}",
             c.daemon.log()
         ));
     }
@@ -1744,6 +1794,10 @@ const PUSH_PLUGIN_NOT_APPLICABLE: &[(&str, &str)] = &[
         "wake-none-not-expected",
         "a connected plugin renders pushes, so the roster says channel, never none",
     ),
+    (
+        "restart-keeps-unread-mail",
+        "a busy plugin takes the push into its running turn, so nothing is unread at the restart",
+    ),
 ];
 
 enum Outcome {
@@ -1753,6 +1807,7 @@ enum Outcome {
     UnexpectedPass(&'static str),
     NotApplicable,
     NoBun,
+    NoPostgres,
 }
 
 fn run_cell(harness: &Harness, scenario: Scenario, name: &str) -> Outcome {
@@ -1762,12 +1817,23 @@ fn run_cell(harness: &Harness, scenario: Scenario, name: &str) -> Outcome {
     if harness.needs_bun && bun_bin().is_none() {
         return Outcome::NoBun;
     }
+    let postgres = std::env::var("CONFORMANCE_POSTGRES_URL")
+        .ok()
+        .filter(|url| !url.is_empty());
+    let postgres = if POSTGRES_SCENARIOS.contains(&name) {
+        match postgres {
+            Some(url) => Some(url),
+            None => return Outcome::NoPostgres,
+        }
+    } else {
+        None
+    };
     let known = KNOWN_FAILURES
         .iter()
         .find(|(h, s, _)| *h == harness.name && *s == name)
         .map(|(_, _, story)| *story);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let mut cell = Cell::new(harness.mode, (harness.make)());
+        let mut cell = Cell::new(harness.mode, (harness.make)(), postgres.as_deref());
         scenario(&mut cell)
     }))
     .unwrap_or_else(|panic| {
@@ -1808,6 +1874,7 @@ fn delivery_conformance() {
                 Outcome::UnexpectedPass(story) => format!("PASS? ({story})"),
                 Outcome::NotApplicable => "n/a".to_string(),
                 Outcome::NoBun => "no bun".to_string(),
+                Outcome::NoPostgres => "no postgres".to_string(),
             };
             eprintln!(
                 "{:<12} {:<30} {:<14} {:.1}s",
@@ -1827,6 +1894,14 @@ fn delivery_conformance() {
                 )),
                 // CI sets CONFORMANCE_REQUIRE_BUN, so a missing bun there is a
                 // failure, not a quiet gap.
+                Outcome::NoPostgres
+                    if std::env::var_os("CONFORMANCE_REQUIRE_POSTGRES").is_some() =>
+                {
+                    failures.push(format!(
+                        "{} / {name}: no postgres (set CONFORMANCE_POSTGRES_URL)",
+                        harness.name
+                    ));
+                }
                 Outcome::NoBun if std::env::var_os("CONFORMANCE_REQUIRE_BUN").is_some() => {
                     failures.push(format!(
                         "{} / {name}: no bun (set MUSTER_BUN or put bun on PATH)",
