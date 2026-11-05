@@ -81,8 +81,9 @@ already acked. An old plugin never sets the field.
   a driver command to drop and restore the plugin's daemon connection.
 - **A handover that never resolves:** the fake's harness API hangs on a push.
   After the hold's lease (shortened for the test), the next pull shows the
-  message once, and the hung handover resolving late doesn't ack it twice or
-  show it again. Both a conformance case and a unit test cover it.
+  message. If the hung handover then resolves, it doesn't ack the message a
+  second time, and no later pull shows it a third time. Both a conformance
+  case and a unit test cover it.
 - **Unit tests:** the plugins' own `bun test` gets #136's `inbox-pull` tests
   and #134's `live-push` tests, plus ones for the held set between a push and
   a pull, and for its lease.
@@ -107,6 +108,10 @@ already acked. An old plugin never sets the field.
 - **A push the plugin received but never handled**, because it died first,
   stays unread and comes back at the next pull. That's the point of the
   change.
+- **A handover that hangs past the lease and then succeeds can show the
+  message twice**: once from the pull that took it over, once from the late
+  handover, which the plugin can't take back. It's never lost, and losing
+  nothing is the better trade than showing once.
 - **#140's Claude-shim half is left for the upstream catch-up.** Muster's
   Claude sessions are delivered by hooks, so they don't need it. A channels-on
   Claude session would, and it belongs to MUS-82's gap, which has no
