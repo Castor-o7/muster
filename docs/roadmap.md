@@ -113,6 +113,16 @@ Merged and needing a live run: MUS-36 and MUS-37.
   The test half is shown by `a_row_without_a_client_binding_is_not_registered` and
   `roster_self_check_reregisters_only_after_the_full_window` in `crates/shim/src/main.rs`
   (`1c9fedf`). The live half wasn't reproducible on 2026-11-04: no session lost its binding.
+  Rechecked 2026-11-05, after MUS-3 and MUS-92: the race is still open. myko fills `client_id` only
+  on a `Session` SET that arrives over a client's WebSocket, and `register_hook_session` still
+  writes the whole row from a copy it read first (MUS-3 added `harness` and `identity` to that
+  write). The window is inside the daemon, so an HTTP hook can't hit it on cue, but its effect
+  reproduces deterministically: a shim's WebSocket registration, then a daemon write of the same
+  row with no client, leaves the row unbound (`crates/daemon/tests/binding_repair.rs`, which fails
+  without the fix). Closed in the daemon by `binding_repair.rs`: a saga remembers the client each
+  session was last bound to over its WebSocket, and when a later write leaves the stored row with
+  no client while that client is still connected, it puts the binding back. A row whose client has
+  gone, which the sweeper demotes (MUS-54), stays unbound, and a test pins that too.
 - [x] **MUS-29: Make send timeouts trustworthy.** `send_message` reported "command
   timed out" for a message that did arrive, so a retry could send a duplicate. Done
   when: a test shows a timed-out send can be retried without delivering twice.

@@ -8,6 +8,7 @@
 //! commands — there's no saga in the critical path for delivery.
 
 pub mod auto_rooms;
+pub mod binding_repair;
 pub mod cleanup;
 pub mod controls;
 pub mod credentials;
@@ -24,5 +25,6 @@ pub mod succession;
 
 pub fn link() {
     auto_rooms::link();
+    binding_repair::link();
     nickname_assign::link();
 }
