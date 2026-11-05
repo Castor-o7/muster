@@ -14,9 +14,10 @@
 //!
 //! Everything in the prefix is derivable from Claude's stdin payload
 //! (`workspace.current_dir`, `session_id`) plus the local environment
-//! (`USER`/`USERNAME`, `gethostname`). The handle is the session's
-//! deterministic `muster_entities::nickname` of its canonical session_id —
-//! the same name every peer computes, so it's what they address.
+//! (`USER`/`USERNAME`, `gethostname`). The handle is the nickname the daemon
+//! assigned, which peers address, plus the id's first 8 characters. It's read
+//! from a cache the SessionStart hook and the shim write, and left out when
+//! unknown (MUS-38).
 
 use std::io::Read;
 
@@ -72,8 +73,14 @@ pub fn render() {
         // computation, which mis-routes when the daemon salted this session's
         // nickname on a collision. Falls back to the computed name if the shim
         // hasn't written it yet.
-        crate::read_assigned_nickname(session_id)
-            .unwrap_or_else(|| muster_entities::nickname(session_id))
+        // MUS-38: only the name the daemon gave (cached by the SessionStart
+        // hook or the shim), with the id's first 8 characters. A computed guess
+        // can be wrong after a collision or a MUS-3 takeover, so with no cached
+        // name the handle is left out rather than guessed.
+        handle_for(
+            crate::read_assigned_nickname(session_id).as_deref(),
+            session_id,
+        )
     };
 
     // Current git branch, rendered in parentheses after the path per
@@ -87,7 +94,7 @@ pub fn render() {
     // flag-off — a forked/resumed launch that bypassed the wrapper — which
     // silently drops LIVE delivery even while the inbox path works; that state
     // used to be invisible, and now it warns.
-    let warnings = muster_warnings(session_id);
+    let warnings = muster_warnings(session_id, live_wait_hook());
 
     println!(
         "{}",
@@ -103,14 +110,16 @@ const HEALTH_STALE: std::time::Duration = std::time::Duration::from_secs(20);
 /// This session's statusline warning states (possibly several), empty when
 /// healthy. Reads the shim's heartbeat + channel-state files and probes the
 /// daemon.
-fn muster_warnings(session_id: &str) -> Vec<&'static str> {
+fn muster_warnings(session_id: &str, wait_hook: bool) -> Vec<&'static str> {
     let (health, channels_off) = if session_id.is_empty() {
         (None, false)
     } else {
         (
             crate::read_health(session_id),
             // Only a KNOWN flag-off state warns; unknown / no file never does.
-            crate::read_channels(session_id) == Some(false),
+            // With the asyncRewake wait hook wired, a session without the
+            // channels flag still gets live delivery, so that's no fault.
+            !wait_hook && crate::read_channels(session_id) == Some(false),
         )
     };
     pick_warnings(
@@ -190,6 +199,47 @@ fn git_branch(cwd: &str) -> Option<String> {
 /// session's memorable nickname (omitted when empty); `warnings`, when
 /// non-empty, appends ` ⚠ muster <w1> · <w2> …` — each active failure state as
 /// its own token (see `pick_warnings`).
+/// `nickname id8`, or empty when the daemon's name isn't known.
+fn handle_for(assigned: Option<&str>, session_id: &str) -> String {
+    match assigned.map(str::trim).filter(|n| !n.is_empty()) {
+        Some(nick) if !session_id.is_empty() => {
+            let short: String = session_id.chars().take(8).collect();
+            format!("{nick} {short}")
+        }
+        _ => String::new(),
+    }
+}
+
+/// Whether Claude Code has Muster's `asyncRewake` wait hook, which delivers
+/// live without the channels flag: from the plugin, or in `settings.json`. One
+/// small file read per render.
+fn live_wait_hook() -> bool {
+    let path = match std::env::var_os("CLAUDE_CONFIG_DIR").filter(|d| !d.is_empty()) {
+        Some(dir) => std::path::PathBuf::from(dir).join("settings.json"),
+        None => match std::env::var_os("HOME") {
+            Some(h) => std::path::PathBuf::from(h).join(".claude/settings.json"),
+            None => return false,
+        },
+    };
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .is_some_and(|v| has_wait_hook(&v))
+}
+
+fn has_wait_hook(settings: &serde_json::Value) -> bool {
+    settings["enabledPlugins"]["muster-shim@muster"].as_bool() == Some(true)
+        || settings["hooks"]["Stop"].as_array().is_some_and(|groups| {
+            groups
+                .iter()
+                .flat_map(|g| g["hooks"].as_array().into_iter().flatten())
+                .any(|h| {
+                    h["command"].as_str().map(str::trim) == Some("muster-shim claude-hook wait")
+                        && h["asyncRewake"].as_bool() == Some(true)
+                })
+        })
+}
+
 fn format_prefix(
     user: &str,
     host: &str,
@@ -224,7 +274,35 @@ fn extract_cwd(v: &serde_json::Value) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{HEALTH_STALE, format_prefix, pick_warnings};
+    use super::{HEALTH_STALE, format_prefix, handle_for, has_wait_hook, pick_warnings};
+
+    #[test]
+    fn the_handle_is_the_assigned_nickname_and_short_id_or_nothing() {
+        let sid = "744c6dc5-ff50-4b2f-b53b-8962d8019e23";
+        assert_eq!(
+            handle_for(Some("sienna-mullet"), sid),
+            "sienna-mullet 744c6dc5"
+        );
+        assert_eq!(handle_for(None, sid), "");
+        assert_eq!(handle_for(Some("  "), sid), "");
+        assert_eq!(handle_for(Some("x"), ""), "");
+    }
+
+    #[test]
+    fn the_wait_hook_comes_from_the_plugin_or_settings() {
+        let plugin: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../plugins/muster-shim/hooks/hooks.json"
+        ))
+        .unwrap();
+        assert!(has_wait_hook(&plugin));
+        assert!(has_wait_hook(
+            &serde_json::json!({ "enabledPlugins": { "muster-shim@muster": true } })
+        ));
+        assert!(!has_wait_hook(&serde_json::json!({})));
+        let mut no_rewake = plugin.clone();
+        no_rewake["hooks"]["Stop"][0]["hooks"][0]["asyncRewake"] = serde_json::json!(false);
+        assert!(!has_wait_hook(&no_rewake));
+    }
     use std::time::Duration;
 
     fn ok_fresh() -> Option<(&'static str, Duration)> {

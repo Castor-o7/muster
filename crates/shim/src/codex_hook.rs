@@ -148,6 +148,15 @@ pub fn run_for(harness: Harness, ep: &str, base_override: Option<&str>) {
         {
             out["systemMessage"] = serde_json::Value::String(line);
         }
+        // MUS-38: cache the daemon's name for this session, so the statusline
+        // shows it on every render without asking the daemon. It's the name
+        // peers address, a MUS-3 takeover included.
+        if event == "SessionStart"
+            && let Some((nick, id)) = session_block_identity(resp)
+            && id == sid
+        {
+            crate::write_assigned_nickname(sid, nick);
+        }
         let mut stdout = std::io::stdout().lock();
         if writeln!(stdout, "{out}")
             .and_then(|()| stdout.flush())
@@ -673,11 +682,9 @@ fn operator() -> String {
         .unwrap_or_else(|| "codex".to_string())
 }
 
-/// JSON-encode a string (quoted, escaped) for the request body.
-/// The line the operator sees at session start (MUS-22), read from the
-/// daemon's `<muster_session nickname=".." id="..">` block: the nickname peers
-/// address, and the id's first 8 characters, as the TUI shows it.
-fn operator_identity_line(block: &str) -> Option<String> {
+/// The `(nickname, session id)` in the daemon's `<muster_session nickname=".."
+/// id="..">` block. A peer's text can't supply it: the daemon escapes `<`.
+fn session_block_identity(block: &str) -> Option<(&str, &str)> {
     let start = block.find("<muster_session ")?;
     let tag = &block[start..start + block[start..].find('>')?];
     let attr = |name: &str| {
@@ -686,11 +693,18 @@ fn operator_identity_line(block: &str) -> Option<String> {
         let len = tag[from..].find('"')?;
         Some(&tag[from..from + len]).filter(|v| !v.is_empty())
     };
-    let nick = attr("nickname")?;
-    let short: String = attr("id")?.chars().take(8).collect();
+    Some((attr("nickname")?, attr("id")?))
+}
+
+/// The line the operator sees at session start (MUS-22): the nickname peers
+/// address, and the id's first 8 characters, as the TUI shows it.
+fn operator_identity_line(block: &str) -> Option<String> {
+    let (nick, id) = session_block_identity(block)?;
+    let short: String = id.chars().take(8).collect();
     Some(format!("muster: this session is {nick} ({short})"))
 }
 
+/// JSON-encode a string (quoted, escaped) for the request body.
 fn json_str(s: &str) -> String {
     serde_json::Value::String(s.to_string()).to_string()
 }
@@ -723,6 +737,16 @@ mod tests {
         assert_eq!(
             operator_identity_line(block).as_deref(),
             Some("muster: this session is sienna-mullet (744c6dc5)")
+        );
+    }
+
+    #[test]
+    fn the_session_block_names_nickname_and_id() {
+        let block = "<muster_session nickname=\"a-b\" id=\"s1\">x</muster_session>";
+        assert_eq!(session_block_identity(block), Some(("a-b", "s1")));
+        assert_eq!(
+            session_block_identity("&lt;muster_session nickname=\"e\" id=\"s1\">"),
+            None
         );
     }
 
