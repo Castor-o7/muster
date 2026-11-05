@@ -56,20 +56,6 @@ const QUIET_FOR: Duration = Duration::from_secs(4);
 /// and they're checked before `KNOWN_FAILURES`, which may list them too.
 const FLAKY: &[(&str, &str, &str, &str)] = &[
     (
-        "pi",
-        "daemon-restart-mid-wait-pg",
-        "MUS-90",
-        "passed once in CI in 2.2 s (#126 at e47c7e0), but failed 3 of 3 runs on a1 both on \
-         main (1fe3c02) and on #126, each at the full 26 s wait",
-    ),
-    (
-        "opencode",
-        "daemon-restart-mid-wait-pg",
-        "MUS-90",
-        "passed in CI in 2.8 s (#139 at fabebbc, run 42075783447), where it usually fails at \
-         the full 26 s wait, like pi's",
-    ),
-    (
         "claude-tls",
         "restart-keeps-identity",
         "MUS-93",
@@ -93,14 +79,10 @@ const KNOWN_FAILURES: &[(&str, &str, &str)] = &[
     ("pi", "resume-wakes-held-mail", "MUS-82"),
     ("opencode", "dropped-ack-redelivers", "MUS-81"),
     ("opencode", "resume-wakes-held-mail", "MUS-82"),
-    ("opencode", "mail-waiting-at-reconnect", "MUS-81"),
     ("opencode", "hung-handover-released", "MUS-81"),
     ("prime-agent", "dropped-ack-redelivers", "MUS-81"),
     ("prime-agent", "resume-wakes-held-mail", "MUS-82"),
     ("prime-agent", "hung-handover-released", "MUS-81"),
-    ("pi", "daemon-restart-mid-wait-pg", "MUS-90"),
-    ("opencode", "daemon-restart-mid-wait-pg", "MUS-90"),
-    ("prime-agent", "daemon-restart-mid-wait-pg", "MUS-90"),
 ];
 
 /// Harnesses in the grid that have no fake yet, with the stage that adds one.

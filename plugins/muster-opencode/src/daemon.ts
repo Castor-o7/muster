@@ -107,6 +107,8 @@ export class MusterDaemon {
   private livenessTimer: ReturnType<typeof setInterval> | null = null;
   private started = false;
   private connected = false;
+  /** Whether a connection has been up before, so the next one is a reconnect. */
+  private everConnected = false;
   private rosterChangedHandler: (() => void) | null = null;
   private connectionChangedHandler: ((connected: boolean) => void) | null = null;
 
@@ -125,9 +127,20 @@ export class MusterDaemon {
     this.client.connectionStatus$.subscribe((status) => {
       if (status === ConnectionStatus.Connected) {
         this.connected = true;
-        this.connectionChangedHandler?.(true);
         this.log(`connected to ${this.cfg.address}; re-publishing ${this.sessions.size} session(s)`);
         for (const item of this.sessions.values()) this.emitSet(item);
+        // MUS-90: mail sent while the connection was down couldn't be pushed:
+        // the daemon still had this session bound to the old, dead client
+        // (with Postgres the row outlives a restart). Nothing re-offers it,
+        // so treat a reconnect as a push with no body: each session's
+        // fallback pulls its unread mail and shows it, which wakes an idle
+        // session. The SETs above go first on this socket, so anything sent
+        // after them is pushed live instead.
+        if (this.everConnected) {
+          for (const id of this.sessions.keys()) this.notifyHandler?.({ to_session: id });
+        }
+        this.everConnected = true;
+        this.connectionChangedHandler?.(true);
       } else if (status === ConnectionStatus.Disconnected) {
         this.connected = false;
         this.connectionChangedHandler?.(false);

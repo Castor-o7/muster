@@ -61,10 +61,8 @@ passing, the suite fails until it's taken off the list.
 | Cells | Story | What fails |
 |---|---|---|
 | `opencode`, `prime-agent` × 3 | MUS-81 | A pushed message is marked read when the push reaches the plugin's connection. If the harness then loses it, the next turn's inbox drain finds nothing unread, and the message is gone: the push-side twin of MUS-75. Pi acks its own pushes and passes. |
-| `opencode` × 9 | MUS-81 | The plugin drains the inbox after a live push, which acks the mail that waited out the drop without showing it. |
 | `opencode`, `prime-agent` × 10 | MUS-81 | The push is marked read before the harness takes it, so a handover that never resolves loses it. |
 | `pi`, `opencode`, `prime-agent` × 6b | MUS-82 | While wakes are paused, the push is skipped and the mail stays unread, but resuming pushes nothing again, so a push session isn't woken until its next turn. |
-| `pi`, `opencode`, `prime-agent` × 5 (pg) | MUS-90 | After a restart with Postgres, mail sent after it doesn't wake the plugin. Unproven: its surviving Session row stays bound to the old connection. |
 
 ## The harnesses
 
