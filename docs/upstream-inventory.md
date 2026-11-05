@@ -61,7 +61,7 @@ cell says which part).
 | 3 | `989e4d9` (direct) | Docs: make the hook inbox Muster's default delivery path | split: the plugin README hook section | Hooks | `plugin.json` U-REL |
 | 4 | `5c05690` (direct) | TLS gate with per-machine pairing (`gate.rs`, `credentials.rs`, `pairing.rs`, `link.rs`, `muster-shim pair`) | port | Gate (foundation) | `Cargo.toml/lock` U-MY, U-REL; `daemon/src/main.rs` U-CG; `shim/src/codex_setup.rs` U-CG, U-WIN; `entities/src/lib.rs` U-SB; plugin `index.ts` U-RR |
 | 5 | `7d2c5d7` (direct) | CI on GitHub-hosted runners; drop upstream's release and public-CI pipelines | drop | — | `ci.yml` U-CG |
-| 6 | `6d55631` (direct) | The sweeper logs why it reaps a session | port | Other | `cleanup.rs` U-RR (adjacent lines) |
+| 6 | `6d55631` (direct) | The sweeper logs why it reaps a session | port | Durability (folded into port/durability: woven through the same sweep code as #51) | `cleanup.rs` U-RR (adjacent lines) |
 | 7 | #1 `58f6ec2` | Live inbox without the flag: the `/hook/wait` held request and Monitor watcher; the shim tries every resolved address; roadmap doc | split: code (roadmap is Muster-only) | Hooks | `hooks.rs` U-RR, U-CG; `shim/src/main.rs` U-CG |
 | 8 | #2 `a24b92f` | Board process and story IDs | drop | — | none |
 | 9 | #3 `77fd01d` | Board study findings | drop | — | none |
@@ -94,7 +94,7 @@ cell says which part).
 | 36 | #31 `8688659` | README/roadmap/board refresh | drop | — | none |
 | 37 | #32 `48a6243` | `idempotency_key` lets a timed-out send be retried without a duplicate | port | Durability | `send_message.rs`, `tools.rs`, daemon tests U-RR (both add a field to `SendMessage` and the tool schema); `ui/src/console.rs` U-RR |
 | 38 | #33 `c0ece8c` | Test: a lost send reply can be retried | port with #32 | Durability | `send_message.rs` U-RR |
-| 39 | #35 `68914b4` | `docs/agent-disappearance.md`: how work gets lost; mail goes at restart | split: the doc, without board refs | Durability | none |
+| 39 | #35 `68914b4` | `docs/agent-disappearance.md`: how work gets lost; mail goes at restart | drop for now: Muster process notes; the port/durability commit message carries the cases instead | — | none |
 | 40 | #34 `cc421d4` | Split work tracking out into Rally | drop | — | none |
 | 41 | #36 `af5c582` | Roadmap ticks | drop | — | none |
 | 42 | #37 `dc68b67` | Re-register when our roster row has no client binding | port | Hooks | `shim/src/main.rs` U-CG |
@@ -152,8 +152,8 @@ cell says which part).
 |---|---|
 | Hooks | 1, 3, 7, 10–12, 27, 28, 29, 42, 44, 46, 48, 50, 58, 61 (and the os/arch part of 30) |
 | Gate | 4, 17–19, 22, 30–32, 51, 73, 74, 77–81, part of 83 |
-| Durability | 37–39, 49, 55, 59, 62, 65 |
-| Other | 6, 21, 25, 26, 35, 47, part of 56, part of 83 |
+| Durability | 6, 37, 38, 49, 55, 59, 62, 65 |
+| Other | 21, 25, 26, 35, 47, part of 56, part of 83 |
 
 Suggested order: Hooks, then Durability, then Gate (the largest; #72 waits
 on myko), then Other. Each port is its own branch on upstream main
@@ -161,6 +161,12 @@ on myko), then Other. Each port is its own branch on upstream main
 bucket's entries under Marshal names. Where an entry collides with U-RR or
 U-CG, the branch reuses the resolution from modest-roach's G1 catch-up
 merge rather than resolving the conflict a second time.
+
+**Durability (port/durability).** It's stacked on port/hooks-v2, not on
+upstream main. #51 keeps a dropped session that still holds a `WakeWatcher`,
+and #57's test lives in `hook_wait_e2e.rs`, so both need Hooks. That matches
+the landing order. Entry 6 (`6d55631`) is folded in, because its reap reasons
+run through the same sweep code. Entry 39's doc is not ported.
 
 **Correction (port/hooks prep).** The Hooks entries can't be cherry-picked
 cleanly onto upstream: they are entangled with the Gate.
