@@ -53,6 +53,26 @@ For the launcher-selected thread, the bridge sets `[nickname]` even before
 Codex has generated a title. Later title updates retain the nickname prefix.
 Naming does not depend on a `SessionStart` hook firing before the first prompt.
 
+## The wake path on the roster (MUS-77)
+
+Codex holds no `/hook/wait`, so on its own the roster would call a bridge-watched
+thread `wake: none`, and a send to it would say `wake: unobserved`, though the
+bridge will start a turn. So the bridge tells the daemon which threads it can
+wake: while it leads the wake election for its app-server and wakes aren't
+paused, it posts `/hook/bridge-watch` with `{"session_id": …, "watching": true}`
+every 30 seconds for each thread it registered. The daemon keeps a `WakeWatcher`
+for each, as it does for a held wait, and the roster says `waiting` and a send
+says `wake: expected`. The bridge posts `"watching": false` when a thread closes,
+when it stops leading, when wakes are paused, when it loses the app-server, and
+when it exits. A thread leaves its registered threads only on `thread/closed`, so
+they're kept through an app-server outage and can be registered again
+(MUS-76), but it watches none of them until the app-server is back. Then a
+thread the reconnect's `thread/list` doesn't show as loaded, because it closed
+during the outage or the app-server unloaded it, stays registered but isn't
+watched, until it registers again or `thread/started` brings it back. If a request is lost, the
+daemon's record runs out within two minutes. The daemon keeps no record for a session that isn't on the roster, or
+while wakes are paused.
+
 The bridge deliberately does not mark the message read. The existing hook
 acknowledges it only after the daemon successfully writes the
 `<muster_inbox>` response back to Codex. If the app-server is unavailable, the

@@ -87,6 +87,7 @@ const KNOWN_FAILURES: &[(&str, &str, &str)] = &[
     ("pi", "resume-wakes-held-mail", "MUS-82"),
     ("opencode", "dropped-ack-redelivers", "MUS-81"),
     ("opencode", "resume-wakes-held-mail", "MUS-82"),
+    ("opencode", "armed-shows-its-wake-path", "MUS-89"),
     ("opencode", "hung-handover-released", "MUS-81"),
     ("prime-agent", "dropped-ack-redelivers", "MUS-81"),
     ("prime-agent", "resume-wakes-held-mail", "MUS-82"),
@@ -1438,6 +1439,7 @@ const SCENARIOS: &[(&str, Scenario)] = &[
     ("resume-wakes-held-mail", resume_wakes_held_mail),
     ("broadcast-never-wakes", broadcast_never_wakes),
     ("wake-none-not-expected", wake_none_not_expected),
+    ("armed-shows-its-wake-path", armed_shows_its_wake_path),
     ("mail-waiting-at-reconnect", mail_waiting_at_reconnect),
     ("hung-handover-released", hung_handover_released),
     ("restart-keeps-identity", restart_keeps_identity),
@@ -1802,6 +1804,44 @@ fn wake_none_not_expected(c: &mut Cell) -> Result<(), String> {
     Ok(())
 }
 
+/// Scenario 9: An idle session that something can wake is shown so, and it does wake. The roster
+/// says `waiting` for a held wait (Claude's waiter; for Codex, its app-server bridge, which holds
+/// none, MUS-77) and then a send says `expected`, or `channel` for a plugin that takes the live
+/// push. Never `none`.
+fn armed_shows_its_wake_path(c: &mut Cell) -> Result<(), String> {
+    c.harness.arm_idle();
+    let id = c.recipient();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let mut row = c.recipient_on_roster()?;
+    while row["wake"] != json!("waiting") && row["wake"] != json!("channel") {
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "the roster says wake {} for an armed idle session",
+                row["wake"]
+            ));
+        }
+        thread::sleep(Duration::from_millis(250));
+        row = c
+            .sender
+            .row(&id, Duration::from_secs(5))
+            .unwrap_or_default();
+    }
+    let waiting = row["wake"] == json!("waiting");
+    let t = token("armed");
+    let r = c.send(&t)?;
+    if waiting && r["wake"] != json!("expected") {
+        return Err(format!(
+            "send said wake {} for a session the roster says is waiting",
+            r["wake"]
+        ));
+    }
+    let woke = c.harness.wait_for_wake(WAKE_WITHIN);
+    if !contains(&woke, &t) {
+        return Err(format!("not woken with the message; woke with {woke:?}"));
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // The grid
 
@@ -2053,6 +2093,13 @@ const HARNESSES: &[Harness] = &[
         name: "codex",
         mode: Mode::Plain,
         make: || Box::new(FakeCodex::new()),
+        not_applicable: CODEX_NOT_APPLICABLE,
+        needs_bun: false,
+    },
+    Harness {
+        name: "codex-tls",
+        mode: Mode::Tls,
+        make: || Box::new(FakeCodex::new()),
         not_applicable: HOOK_HARNESS_NOT_APPLICABLE,
         needs_bun: false,
     },
@@ -2074,7 +2121,7 @@ const HARNESSES: &[Harness] = &[
         name: "opencode",
         mode: Mode::Plain,
         make: || Box::new(FakePlugin::new("muster-opencode")),
-        not_applicable: PUSH_PLUGIN_NOT_APPLICABLE,
+        not_applicable: OPENCODE_NOT_APPLICABLE,
         needs_bun: true,
     },
     Harness {
@@ -2088,6 +2135,17 @@ const HARNESSES: &[Harness] = &[
 
 /// Scenarios that don't apply to a harness delivered by hooks, with no live
 /// push to the session.
+/// Codex's: a hook harness's, and its app-server bridge is a wake path from the start (MUS-77).
+const CODEX_NOT_APPLICABLE: &[(&str, &str)] = &[
+    HOOK_HARNESS_NOT_APPLICABLE[0],
+    HOOK_HARNESS_NOT_APPLICABLE[1],
+    (
+        "wake-none-not-expected",
+        "its app-server bridge is a wake path from the start, so the roster never says none \
+         (MUS-77); armed-shows-its-wake-path covers it",
+    ),
+];
+
 const HOOK_HARNESS_NOT_APPLICABLE: &[(&str, &str)] = &[
     (
         "mail-waiting-at-reconnect",
@@ -2124,6 +2182,23 @@ const PUSH_PLUGIN_NOT_APPLICABLE: &[(&str, &str)] = &[
     (
         "restart-keeps-unread-mail",
         "a busy plugin takes the push into its running turn, so nothing is unread at the restart",
+    ),
+];
+
+/// OpenCode's, which differ from Pi's only in why the roster can't say none: its plugin doesn't
+/// declare its channel yet, so the roster says none though it wakes by the push (MUS-89).
+/// Every push plugin's entry but `wake-none-not-expected` is taken by index, so
+/// `opencode_skips_what_every_push_plugin_skips` checks the two lists agree.
+const OPENCODE_NOT_APPLICABLE: &[(&str, &str)] = &[
+    PUSH_PLUGIN_NOT_APPLICABLE[0],
+    PUSH_PLUGIN_NOT_APPLICABLE[1],
+    PUSH_PLUGIN_NOT_APPLICABLE[2],
+    PUSH_PLUGIN_NOT_APPLICABLE[3],
+    PUSH_PLUGIN_NOT_APPLICABLE[5],
+    (
+        "wake-none-not-expected",
+        "it wakes by the live push; its roster row says none only because the plugin doesn't \
+         declare its channel (MUS-89), and once it does it never will",
     ),
 ];
 
@@ -2204,6 +2279,21 @@ fn run_cell(harness: &Harness, scenario: Scenario, name: &str) -> Outcome {
         (Err(_), Some(story)) => Outcome::KnownFailure(story),
         (Err(e), None) => Outcome::Fail(e),
     }
+}
+
+/// OpenCode's n/a list is the push plugins' with one reason changed (MUS-89); a
+/// scenario added to theirs must reach it too.
+#[test]
+fn opencode_skips_what_every_push_plugin_skips() {
+    let names = |list: &[(&'static str, &'static str)]| {
+        let mut names: Vec<&str> = list.iter().map(|(name, _)| *name).collect();
+        names.sort_unstable();
+        names
+    };
+    assert_eq!(
+        names(OPENCODE_NOT_APPLICABLE),
+        names(PUSH_PLUGIN_NOT_APPLICABLE)
+    );
 }
 
 /// The daemon log lines that explain a failed cell: identity decisions, hook

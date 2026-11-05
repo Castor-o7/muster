@@ -509,6 +509,11 @@ BRIDGE_PID=$!
 for i in {1..100}; do grep -q "registered thread=$CODEX_THREAD" $WORK/codex-bridge.log 2>/dev/null && break; sleep 0.2; done
 check "a paired Codex bridge connects through the gate" 'grep -q "(paired, through the gate)" $WORK/codex-bridge.log'
 check "and registers its thread through the pairing" 'grep -q "registered thread=$CODEX_THREAD" $WORK/codex-bridge.log && [[ $(ROSTER) == *$CODEX_THREAD* ]]'
+# Its /hook/bridge-watch goes the same way (MUS-77), so the roster shows the
+# bridge's wake path for the thread rather than `wake: none`.
+CODEX_WAKE() { ROSTER | python3 -I -c 'import sys,json; print(next((s["wake"] for s in json.load(sys.stdin)["sessions"] if s["session_id"]==sys.argv[1]), ""))' $CODEX_THREAD 2>/dev/null; }
+for i in {1..50}; do [[ $(CODEX_WAKE) == waiting ]] && break; sleep 0.2; done
+check "and its bridge-watch reaches the daemon through the pairing: the roster says wake: waiting" '[[ $(CODEX_WAKE) == waiting ]]'
 T $BIN/muster-shim tell $CODEX_THREAD wake the paired codex thread >/dev/null 2>&1
 for i in {1..50}; do grep -q $CODEX_THREAD $WORK/codex-turns 2>/dev/null && break; sleep 0.2; done
 check "a message to that thread wakes it through the gate" 'grep -q $CODEX_THREAD $WORK/codex-turns 2>/dev/null'

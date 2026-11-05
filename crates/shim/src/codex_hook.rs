@@ -524,6 +524,30 @@ pub(crate) fn register_session(route: &HookRoute, session_id: &str, cwd: &str) -
     None
 }
 
+/// Tell the daemon whether the Codex bridge can wake `session_id` (MUS-77), so the roster shows
+/// its wake path. It goes the way the bridge registers its threads (`route`): through this
+/// machine's pairing when the route says so and there is one, otherwise to the hook listener.
+/// Returns whether the daemon now records it as watched.
+pub(crate) fn bridge_watch(route: &HookRoute, session_id: &str, watching: bool) -> bool {
+    let body = format!(
+        "{{\"session_id\":{},\"watching\":{watching}}}",
+        json_str(session_id)
+    );
+    let path = format!(
+        "/hook/bridge-watch?host={}&operator={}&harness=codex",
+        url_q(&short_host()),
+        url_q(&operator())
+    );
+    let pairing = route.via_pairing.then(crate::link::load_pairing).flatten();
+    let reply = match pairing {
+        Some(pairing) => crate::link::https_post_why(&pairing, &path, &body, TIMEOUT)
+            .ok()
+            .map(|reply| reply.body),
+        None => http_post(&route.base, &path, &body, TIMEOUT),
+    };
+    reply.is_some_and(|reply| reply == "watching")
+}
+
 /// Where a bridge registers its threads: the hook listener at `base`, or this
 /// machine's pairing when `via_pairing` is set and there is one.
 #[derive(Clone, Debug)]

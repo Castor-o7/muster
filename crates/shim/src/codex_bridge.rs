@@ -91,6 +91,9 @@ const REGISTRATION_RETRY: Duration = Duration::from_secs(2);
 /// missing from the roster (MUS-76).
 const REREGISTER_COOLDOWN: Duration = Duration::from_secs(5);
 const APP_SERVER_START_TIMEOUT: Duration = Duration::from_secs(10);
+/// How often the leading bridge tells the daemon, again, which threads it can wake (MUS-77).
+/// Well inside the daemon's two-minute `WakeWatcher` lifetime, which it extends only when due.
+const WATCH_REFRESH: Duration = Duration::from_secs(30);
 const WAKE_PROMPT: &str = "Muster delivery wakeup, not a new user assignment. Read the injected \
 <muster_inbox>; if absent, check unread direct Muster messages once. If none remain, stop. \
 Address only coordination relevant to existing authorization. Preserve waits for user input or approval \
@@ -1189,6 +1192,9 @@ pub async fn run(args: &[String]) -> Result<()> {
         registered.clone(),
     ));
     let mut reregistered_at: HashMap<String, Instant> = HashMap::new();
+    // The sessions this bridge has told the daemon it can wake, and when it last said so.
+    let mut watched: HashSet<String> = HashSet::new();
+    let mut watched_at: Option<Instant> = None;
     let client = Arc::new(MykoClient::new());
     let sessions = client.watch_query::<GetAllSessions>(GetAllSessions {});
     // The operator's pause (MUS-10), which the daemon publishes as one
@@ -1284,19 +1290,39 @@ pub async fn run(args: &[String]) -> Result<()> {
         }
         reregistered_at.retain(|id, _| registered.lock().unwrap().contains_key(id));
 
-        match wake_leadership.ready(now) {
-            Ok(true) => {}
-            Ok(false) => continue,
+        let leading = match wake_leadership.ready(now) {
+            Ok(leading) => leading,
             Err(error) => {
                 log::debug!("[codex-bridge] wake leadership unavailable: {error:#}");
-                continue;
+                false
             }
+        };
+        let paused = wakes_paused(&pauses.get());
+
+        // Tell the daemon which threads this bridge can wake, so the roster and a sender see
+        // the wake path (MUS-77): only while the app-server is up, the bridge leads, and wakes
+        // aren't paused.
+        let can_wake: HashSet<String> = if leading && !paused {
+            registered.wakeable_sessions()
+        } else {
+            HashSet::new()
+        };
+        let refresh_due = watched_at.is_none_or(|at| now.duration_since(at) >= WATCH_REFRESH);
+        let (watch, unwatch) = watch_plan(&can_wake, &watched, refresh_due);
+        if !watch.is_empty() || !unwatch.is_empty() {
+            sync_watches(&hook_route, &watch, &unwatch, &mut watched).await;
+        }
+        if refresh_due {
+            watched_at = Some(now);
         }
 
+        if !leading {
+            continue;
+        }
         // While wakes are paused, start no turns. The mail stays unread, so
         // the next hook still delivers it, and once wakes resume the bridge
         // wakes for whatever is still unread.
-        if wakes_paused(&pauses.get()) {
+        if paused {
             log::debug!("[codex-bridge] wakes are paused; not waking");
             continue;
         }
@@ -1334,6 +1360,9 @@ pub async fn run(args: &[String]) -> Result<()> {
     }
 
     registration_task.abort();
+    // This bridge can't wake anything once it stops.
+    let unwatch: Vec<String> = watched.iter().cloned().collect();
+    sync_watches(&hook_route, &[], &unwatch, &mut watched).await;
     // Keep the client and watched cells live until the loop exits.
     drop((pauses, sessions, client));
     Ok(())
@@ -1369,6 +1398,70 @@ async fn wait_for_launcher_exit(launcher_stdin: bool) {
 #[cfg(not(unix))]
 async fn wait_for_launcher_exit(_launcher_stdin: bool) {
     std::future::pending::<()>().await;
+}
+
+/// What to tell the daemon this tick (MUS-77): the sessions to watch (all of `can_wake` when a
+/// refresh is due, otherwise only new ones) and those to stop watching.
+fn watch_plan(
+    can_wake: &HashSet<String>,
+    watched: &HashSet<String>,
+    refresh_due: bool,
+) -> (Vec<String>, Vec<String>) {
+    let mut watch: Vec<String> = can_wake
+        .iter()
+        .filter(|session| refresh_due || !watched.contains(*session))
+        .cloned()
+        .collect();
+    let mut unwatch: Vec<String> = watched
+        .iter()
+        .filter(|session| !can_wake.contains(*session))
+        .cloned()
+        .collect();
+    watch.sort();
+    unwatch.sort();
+    (watch, unwatch)
+}
+
+/// Send the plan to the daemon's `/hook/bridge-watch`. A session counts as watched only once the
+/// daemon says so; one the bridge stops watching is forgotten either way, and the daemon's
+/// record runs out by itself if the request was lost.
+async fn sync_watches(
+    hook_route: &crate::codex_hook::HookRoute,
+    watch: &[String],
+    unwatch: &[String],
+    watched: &mut HashSet<String>,
+) {
+    let route = hook_route.clone();
+    let watch = watch.to_vec();
+    let unwatch = unwatch.to_vec();
+    let results = tokio::task::spawn_blocking(move || {
+        let watching: Vec<(String, bool)> = watch
+            .into_iter()
+            .map(|session| {
+                let ok = crate::codex_hook::bridge_watch(&route, &session, true);
+                (session, ok)
+            })
+            .collect();
+        for session in &unwatch {
+            crate::codex_hook::bridge_watch(&route, session, false);
+        }
+        (watching, unwatch)
+    })
+    .await;
+    let Ok((watching, unwatched)) = results else {
+        return;
+    };
+    for session in unwatched {
+        watched.remove(&session);
+    }
+    for (session, ok) in watching {
+        if ok {
+            watched.insert(session);
+        } else {
+            log::debug!("[codex-bridge] the daemon didn't record thread={session} as wakeable");
+            watched.remove(&session);
+        }
+    }
 }
 
 fn retain_active_cooldowns(cooldowns: &mut HashMap<SessionId, Instant>, now: Instant) {
@@ -1565,8 +1658,78 @@ struct ThreadRegistration {
 
 /// The threads this bridge has registered, by session id, until they close.
 /// The main loop registers one again when its session is missing from the
-/// roster, as after a daemon restart without Postgres (MUS-76).
-type RegisteredThreads = Arc<std::sync::Mutex<HashMap<String, ThreadRegistration>>>;
+/// roster, as after a daemon restart without Postgres (MUS-76), and, while the
+/// app-server is up, tells the daemon it can wake them (MUS-77).
+type RegisteredThreads = Arc<Registered>;
+
+/// [`RegisteredThreads`]' contents. A thread leaves only on `thread/closed`, so
+/// it's kept across an app-server outage and can be registered again when it's
+/// back (MUS-76). `app_server_up` says whether any can be woken now. A thread
+/// the reconnect's `thread/list` doesn't show as loaded (it closed during the
+/// outage, or the app-server unloaded it) stays registered but isn't watched
+/// (MUS-77) until it's registered again or `thread/started` brings it back.
+#[derive(Default)]
+struct Registered {
+    threads: std::sync::Mutex<HashMap<String, ThreadRegistration>>,
+    app_server_up: std::sync::atomic::AtomicBool,
+    /// Thread ids not shown as loaded by the last reconnect's `thread/list`.
+    not_loaded: std::sync::Mutex<HashSet<String>>,
+}
+
+impl Registered {
+    fn lock(
+        &self,
+    ) -> std::sync::LockResult<std::sync::MutexGuard<'_, HashMap<String, ThreadRegistration>>> {
+        self.threads.lock()
+    }
+
+    fn set_app_server_up(&self, up: bool) {
+        self.app_server_up
+            .store(up, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn app_server_up(&self) -> bool {
+        self.app_server_up.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Record a registration; its thread is loaded, since it just registered.
+    fn insert(&self, registration: ThreadRegistration) {
+        self.not_loaded
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&registration.thread_id);
+        self.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(registration.session_id.clone(), registration);
+    }
+
+    /// After a reconnect's `thread/list`: note which registered threads it didn't show as
+    /// loaded. They stay registered; only watching skips them.
+    fn mark_listed(&self, listed: &HashSet<String>) {
+        let unlisted: HashSet<String> = self
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .map(|registration| registration.thread_id.clone())
+            .filter(|thread| !listed.contains(thread))
+            .collect();
+        *self.not_loaded.lock().unwrap_or_else(|e| e.into_inner()) = unlisted;
+    }
+
+    /// The sessions this bridge can wake now (MUS-77): registered, loaded, and the app-server up.
+    fn wakeable_sessions(&self) -> HashSet<String> {
+        if !self.app_server_up() {
+            return HashSet::new();
+        }
+        let not_loaded = self.not_loaded.lock().unwrap_or_else(|e| e.into_inner());
+        self.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .filter(|registration| !not_loaded.contains(&registration.thread_id))
+            .map(|registration| registration.session_id.clone())
+            .collect()
+    }
+}
 
 /// Registered threads whose session isn't on the roster, and that weren't
 /// registered again within the last `REREGISTER_COOLDOWN`.
@@ -1663,6 +1826,9 @@ async fn watch_app_server_registrations(
                 .await
             }
         };
+        // No thread can be woken until the app-server is back. The threads stay
+        // registered, so they can be registered again then (MUS-76, MUS-77).
+        registered.set_app_server_up(false);
         if let Err(error) = result {
             log::debug!("[codex-bridge] app-server lifecycle connection unavailable: {error:#}");
         }
@@ -1739,6 +1905,7 @@ where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
     initialize_app_server(websocket).await?;
+    registered.set_app_server_up(true);
     let mut request_id = 100_i64;
     if let Some(launcher) = launcher.as_ref() {
         launcher.lock().await.connected()?;
@@ -1751,11 +1918,14 @@ where
             .with_context(|| format!("writing bridge readiness file {}", path.display()))?;
         ready_file.take();
     } else {
-        if let Err(error) = snapshot_loaded_threads(websocket, pending, &mut request_id).await {
+        match snapshot_loaded_threads(websocket, pending, &mut request_id).await {
+            Ok(listed) => registered.mark_listed(&listed),
             // Thread discovery is an optimization over the authoritative lifecycle
             // notifications. Keep the subscription alive against older app-server
             // versions that do not implement thread/list or thread/read.
-            log::warn!("[codex-bridge] could not snapshot loaded threads: {error:#}");
+            Err(error) => {
+                log::warn!("[codex-bridge] could not snapshot loaded threads: {error:#}");
+            }
         }
         let session_ids: Vec<String> = pending.keys().cloned().collect();
         for session_id in session_ids {
@@ -1770,10 +1940,7 @@ where
             )
             .await
             {
-                registered
-                    .lock()
-                    .unwrap()
-                    .insert(registration.session_id.clone(), registration);
+                registered.insert(registration);
             }
         }
     }
@@ -1820,10 +1987,7 @@ where
                     )
                     .await
                     {
-                        registered
-                            .lock()
-                            .unwrap()
-                            .insert(registration.session_id.clone(), registration);
+                        registered.insert(registration);
                     }
                 } else if let Some(thread_id) = closed_thread_id(&message) {
                     pending.retain(|_, registration| registration.thread_id != thread_id);
@@ -1889,10 +2053,7 @@ where
                     )
                     .await
                     {
-                        registered
-                            .lock()
-                            .unwrap()
-                            .insert(registration.session_id.clone(), registration);
+                        registered.insert(registration);
                     }
                 }
                 if let Some(thread_id) = selected
@@ -1933,15 +2094,17 @@ where
 /// connected. Omnigent starts the app-server and TUI independently, so relying
 /// only on `thread/started` leaves a real startup race. Runtime status keeps us
 /// from registering historical, unloaded threads from a shared CODEX_HOME.
+/// Queue every loaded thread for registration, and return the ids listed.
 async fn snapshot_loaded_threads<S>(
     websocket: &mut WebSocketStream<S>,
     pending: &mut HashMap<String, ThreadRegistration>,
     request_id: &mut i64,
-) -> Result<()>
+) -> Result<HashSet<String>>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
     let mut cursor: Option<String> = None;
+    let mut listed = HashSet::new();
 
     loop {
         let id = *request_id;
@@ -1973,6 +2136,7 @@ where
             .filter_map(|thread| thread.get("id").and_then(Value::as_str).map(str::to_string))
             .collect();
 
+        listed.extend(loaded_ids.iter().cloned());
         for thread_id in loaded_ids {
             let id = *request_id;
             *request_id += 1;
@@ -1997,7 +2161,7 @@ where
             .and_then(Value::as_str)
             .map(str::to_string);
         if cursor.is_none() {
-            return Ok(());
+            return Ok(listed);
         }
     }
 }
@@ -3463,6 +3627,60 @@ mod tests {
 
         watcher.abort();
         app_server.await.unwrap();
+    }
+
+    fn set(ids: &[&str]) -> HashSet<String> {
+        ids.iter().map(|id| id.to_string()).collect()
+    }
+
+    #[test]
+    fn the_bridge_watches_what_it_can_wake_and_stops_for_what_it_cannot() {
+        // MUS-77. New threads are watched at once; the rest only when a refresh is due.
+        let (watch, unwatch) = watch_plan(&set(&["a", "b"]), &set(&["a"]), false);
+        assert_eq!((watch, unwatch), (vec!["b".to_string()], vec![]));
+        let (watch, unwatch) = watch_plan(&set(&["a", "b"]), &set(&["a", "b"]), true);
+        assert_eq!(watch, vec!["a".to_string(), "b".to_string()]);
+        assert!(unwatch.is_empty());
+        // A closed thread, or a paused or non-leading bridge, or one whose app-server is
+        // gone (nothing it can wake): stop.
+        let (watch, unwatch) = watch_plan(&set(&["b"]), &set(&["a", "b"]), false);
+        assert_eq!((watch, unwatch), (vec![], vec!["a".to_string()]));
+        let (watch, unwatch) = watch_plan(&set(&[]), &set(&["a", "b"]), true);
+        assert!(watch.is_empty());
+        assert_eq!(unwatch, vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(watch_plan(&set(&[]), &set(&[]), true), (vec![], vec![]));
+    }
+
+    #[test]
+    fn a_thread_the_reconnect_doesnt_list_stays_registered_but_isnt_watched() {
+        let registration = |thread: &str, session: &str| ThreadRegistration {
+            thread_id: thread.to_string(),
+            session_id: session.to_string(),
+            cwd: "/work".to_string(),
+            name: None,
+        };
+        let registered = Registered::default();
+        registered.insert(registration("t-loaded", "s-loaded"));
+        registered.insert(registration("t-unlisted", "s-unlisted"));
+        // During the outage both stay registered, and none is wakeable.
+        assert!(registered.wakeable_sessions().is_empty());
+        assert_eq!(registered.lock().unwrap().len(), 2);
+        // The reconnect's thread/list shows only one as loaded: the other stays
+        // registered (MUS-76 can still register it again) but isn't watched.
+        registered.set_app_server_up(true);
+        registered.mark_listed(&set(&["t-loaded"]));
+        assert_eq!(registered.lock().unwrap().len(), 2);
+        assert_eq!(registered.wakeable_sessions(), set(&["s-loaded"]));
+        // Registered again, or started again, it's loaded and watched.
+        registered.insert(registration("t-unlisted", "s-unlisted"));
+        assert_eq!(
+            registered.wakeable_sessions(),
+            set(&["s-loaded", "s-unlisted"])
+        );
+        // The app-server goes: nothing is wakeable, and nothing is dropped.
+        registered.set_app_server_up(false);
+        assert!(registered.wakeable_sessions().is_empty());
+        assert_eq!(registered.lock().unwrap().len(), 2);
     }
 
     #[tokio::test]
