@@ -136,7 +136,9 @@ While a waiter holds `/hook/wait`, the session has a `WakeWatcher` record.
 The record lasts 2 minutes, is refreshed every minute, and is not persisted
 across daemon restarts (#43). `SendMessage` uses it in its result: a flagless
 session gets `live_push: unavailable` and `wake: expected` when a waiter is
-present or a live client is connected. Otherwise it gets `wake: unobserved`.
+present and wakes aren't paused, the same rule as the roster's `wake: waiting`.
+Otherwise it gets `wake: unobserved`. A live client alone doesn't count: the
+MCP shim of a session without the flag can't wake it (MUS-71).
 `wake: expected` means a wake path exists, not that a turn started.
 
 ## Differences that matter
