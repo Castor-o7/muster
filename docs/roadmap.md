@@ -14,7 +14,7 @@ evidence from a real run by the person or team named.
 
 ## Status
 
-2026-11-05: 36 of 77 stories ticked, about 47%, not counting the 3 moved to Rally. Live on
+2026-11-05: 37 of 81 stories ticked, about 46%, not counting the 3 moved to Rally. Live on
 Murph since 2026-11-05 08:48: `edf5ea8` (PID 3759037), applied by the operator with
 `MUSTER_TLS=1` and checked by checksum. Besides everything before, it brings MUS-8, MUS-9,
 MUS-10, MUS-60, MUS-11's rustls and tokio updates, MUS-62 (upstream v0.54.1), MUS-64 (the
@@ -469,12 +469,13 @@ Rally.
   tool call only reported "command timed out after 10000 ms (daemon unresponsive?)". Done
   when: a shim whose connection is refused for its token says so, and names the token file,
   and a test covers it.
-- [ ] **MUS-84: Keep `unpair` from revoking a machine and a link together.** Found by
+- [x] **MUS-84: Keep `unpair` from revoking a machine and a link together.** Found by
   tangerine-wombat cleaning up after the MUS-66 run: on Murph, `unpair a1` removes both a1's
   machine pairing (which every a1 session uses) and the link token `link:a1`, and `unlink a1`
   on the dialed side does nothing, because it edits only the dialer's `links` file. Done when:
   `unpair` takes `--machine` or `--link`, a bare name that matches both is refused with both
   forms named, `unlink` on the dialed side removes `link:<name>`, and an e2e covers each case.
+  Merged as #109, with `unpair --machine` refusing a link's name after the watchman's review.
 - [x] **MUS-72: Hold a session's first writes until it's registered.** Found by tangerine-wombat
   in the G5 run on Murph: a tool call right after `initialize` reached the daemon before the
   shim's Session SET and failed "caller has no session on the roster". A real agent's first
