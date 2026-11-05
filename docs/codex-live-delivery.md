@@ -63,9 +63,12 @@ paused, it posts `/hook/bridge-watch` with `{"session_id": …, "watching": true
 every 30 seconds for each thread it registered. The daemon keeps a `WakeWatcher`
 for each, as it does for a held wait, and the roster says `waiting` and a send
 says `wake: expected`. The bridge posts `"watching": false` when a thread closes,
-when it stops leading, when wakes are paused, and when it exits. If it loses the
-app-server it stops refreshing, and the daemon's record runs out within two
-minutes. The daemon keeps no record for a session that isn't on the roster, or
+when it stops leading, when wakes are paused, when it loses the app-server, and
+when it exits. It keeps its registered threads through an app-server outage, so
+it can register them again (MUS-76), but watches none of them until the
+app-server is back; then a thread the reconnect's `thread/list` doesn't name,
+because it closed during the outage, is dropped. If a request is lost, the
+daemon's record runs out within two minutes. The daemon keeps no record for a session that isn't on the roster, or
 while wakes are paused.
 
 The bridge deliberately does not mark the message read. The existing hook

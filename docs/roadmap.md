@@ -14,13 +14,13 @@ evidence from a real run by the person or team named.
 
 ## Status
 
-2026-11-05: 39 of 81 stories ticked, about 48%, not counting the 3 moved to Rally. Live on
+2026-11-05: 41 of 82 stories ticked, about 50%, not counting the 3 moved to Rally. Live on
 Murph since 2026-11-05 08:48: `edf5ea8` (PID 3759037), applied by the operator with
 `MUSTER_TLS=1` and checked by checksum. Besides everything before, it brings MUS-8, MUS-9,
 MUS-10, MUS-60, MUS-11's rustls and tokio updates, MUS-62 (upstream v0.54.1), MUS-64 (the
 optional TLS mode), MUS-66 (daemon links), and MUS-71, MUS-72, MUS-73, MUS-75, MUS-78 and MUS-79.
-Merged and waiting for the next daemon restart: MUS-74. Sessions pick up a rebuilt shim
-when they restart, and no keyed send (MUS-29) has been seen live yet. Verified live on 2026-11-04:
+Merged and waiting for the next daemon restart: MUS-74, MUS-84 and MUS-85. Sessions pick up a
+rebuilt shim when they restart, and no keyed send (MUS-29) has been seen live yet. Verified live on 2026-11-04:
 MUS-4, MUS-7, MUS-34, MUS-35, MUS-54 and MUS-57. Verified live on 2026-11-05: MUS-66, MUS-71,
 MUS-75 and MUS-78. Merged, live and not yet verified: MUS-46, MUS-48, MUS-50 (its live half
 needs a session that loses its binding), MUS-55 and MUS-59.
@@ -331,9 +331,24 @@ Merged and needing a live run: MUS-36 and MUS-37.
 - [ ] **MUS-13: Run CI on macOS.** Done when: CI runs on macOS and passes,
   including `recovery_tracks_codex_effective_working_directory`, which fails on
   macOS today.
+- [ ] **MUS-87: Keep CI from running out of disk or failing on a download.** Found on #113's
+  run (42043766050): the `check` job builds the workspace, runs the gate and links e2e, installs
+  bun and the plugins' `node_modules`, and builds again for conformance, and the ubuntu runner
+  ran out of space (`rustc-LLVM ERROR: IO failure on output stream: No space left on device`).
+  Two runs on main also failed at "Install bun" when GitHub's release download answered 504.
+  Done when: the job frees the runner SDKs it doesn't use and builds with line tables only,
+  shows `df -h` before, after and at the end, retries the bun download with its SHA-256
+  check kept, and CI passes on the PR with the headroom shown.
 - [ ] **MUS-14: Publish prebuilt binaries.** There are no releases yet, so
   `scripts/install-codex.sh` can't work and the plugins aren't on npm. Done when: macOS and Linux can
   install without a Rust toolchain.
+- [ ] **MUS-91: Keep `windows-cross-check` from timing out.** It hit its 20-minute limit on #110,
+  #113 and #124, and a re-run passed each time. Every time it was the apt step: `mingw-w64` pulls
+  278 MB (the i686 and x86_64 toolchains, C and C++), which normally takes 7 s, but the Azure
+  mirror sent it at about 70 KB/s (a 35 MB package took 5 to 9 minutes). The cache and the build
+  were fine: passing runs take 35 to 109 s, 247 s cold. Done when: the job installs only the x86_64
+  C cross-compiler, the apt step has its own limit so a stalled mirror fails fast and names the
+  step, and `windows-cross-check` passes without a re-run on three PRs in a row.
 - [ ] **MUS-15: One-command setup.** Done when: one command sets up a new machine,
   `muster doctor` reports what's wrong, and launchd and systemd units keep the
   daemon running across reboots. Needs a run: the operator, on a clean machine and
@@ -472,13 +487,18 @@ Rally.
   tool call only reported "command timed out after 10000 ms (daemon unresponsive?)". Done
   when: a shim whose connection is refused for its token says so, and names the token file,
   and a test covers it.
-- [ ] **MUS-84: Keep `unpair` from revoking a machine and a link together.** Found by
+  Built: while disconnected, the shim repeats the handshake once (`refusal.rs`); a `401` is
+  recorded with the file it came from (the local token, or the pairing), and writes fail at once
+  with that reason instead of waiting out the timeout. Covered by `crates/shim/tests/token_refused.rs`.
+  Still needs a live run once a session runs the rebuilt shim.
+- [x] **MUS-84: Keep `unpair` from revoking a machine and a link together.** Found by
   tangerine-wombat cleaning up after the MUS-66 run: on Murph, `unpair a1` removes both a1's
   machine pairing (which every a1 session uses) and the link token `link:a1`, and `unlink a1`
   on the dialed side does nothing, because it edits only the dialer's `links` file. Done when:
   `unpair` takes `--machine` or `--link`, a bare name that matches both is refused with both
   forms named, `unlink` on the dialed side removes `link:<name>`, and an e2e covers each case.
-- [ ] **MUS-85: Fail closed when the paired machines can't be read.** From the watchman's
+  Merged as #109, with `unpair --machine` refusing a link's name after the watchman's review.
+- [x] **MUS-85: Fail closed when the paired machines can't be read.** From the watchman's
   review of the upstream Gate port: `run_daemon` decides whether machines are paired with
   `token_names(&state_dir).unwrap_or_default()`, so a tokens file that exists but can't be read
   (permissions, an I/O error, invalid UTF-8) reads as no pairings, and a daemon whose unit lost
@@ -486,6 +506,12 @@ Rally.
   skipped the same way. Done when: an unreadable tokens file stops the daemon with the error
   named, any non-blank line counts as a pairing for this check, and a test covers both. The
   upstream port (port/gate-v2) does this as `mode::has_pairings`.
+  Merged as #119.
+- [ ] **MUS-86: Log client acks and lease re-offers.** Found by tangerine-wombat verifying
+  MUS-75 live: the daemon writes nothing at `info` when a hook acks its mail (`/hook/ack`) or when
+  a lapsed lease offers un-acked mail again, so the event log's `MessageRead` rows were the only
+  evidence. Done when: the daemon logs one `info` line per client ack (session, message count) and
+  one per re-offer after a lease lapses, with no bodies, and a test checks both lines.
 - [x] **MUS-72: Hold a session's first writes until it's registered.** Found by tangerine-wombat
   in the G5 run on Murph: a tool call right after `initialize` reached the daemon before the
   shim's Session SET and failed "caller has no session on the roster". A real agent's first
@@ -606,6 +632,13 @@ Rally.
   conformance suite's `pi`, `opencode` and `prime-agent` × `dropped-ack-redelivers` cells show it. Done when: a pushed message
   that the harness didn't take stays unread (the plugin acks after handing it over, or another
   design), and those cells pass.
+  Progress: the daemon half is in (#118, `acks_pushes`). Pi opts in (#123) and passes
+  `dropped-ack-redelivers` and the two new scenarios, `mail-waiting-at-reconnect` and
+  `hung-handover-released`. opencode is done but shelved by the operator's change of priority on
+  2026-11-05 (Claude and Codex first): branch `fix/mus-81-opencode` at `2f746e8`, green then, no PR.
+  It passes all three cells, and also carries MUS-89's fix (opencode sets `channelsEnabled`, so
+  its row reads `wake: channel`, not `none`). It needs main merged in before a PR. Prime Agent is
+  after that.
 - [ ] **MUS-82: Resuming wakes doesn't wake a push session with held mail.** From MUS-69. While
   wakes are paused, the live push is skipped and the mail stays unread. On resume, Claude's waiter
   and the Codex bridge (MUS-74) wake for it, but nothing pushes it again, so a push session (a
@@ -614,6 +647,25 @@ Rally.
   `resume-wakes-held-mail`) show it. A channels-on Claude session likely has the same gap,
   but no conformance fake models one yet. Done when: unread direct mail held by a pause is pushed
   when wakes resume, and those cells pass.
+- [ ] **MUS-88: Tests pick ports without races.** From MUS-69 and an e2e run on Murph. Two
+  causes. First, the conformance suite and the daemon's e2e tests (9 files) pick a free port by
+  binding port 0, reading the port and closing the socket, then hand the number to a daemon that
+  binds it later; in between, another process can take it. The suite hit that once on 2026-11-05
+  (`claude-tls` × `duplicate-shown-at-most-once`: the daemon's hook listener got "Address already
+  in use" and the daemon didn't come up), and it passed on rerun. Second, the gate and links e2e
+  scripts (`scripts/test-gate-e2e.sh`, `scripts/test-links-e2e.sh`) use fixed ports, 16255 to
+  16758, so two runs on one host collide, as peppy-skate's did on Murph the same night. Done when:
+  a test's daemon binds its own ports (port 0) and reports them, or the tests retry a bind that
+  loses the race; the e2e scripts take free ports per run, so two can run at once on one host;
+  and no test fails on a port another process took.
+- [ ] **MUS-90: Push plugins aren't woken after a restart with Postgres.** From MUS-76. In CI,
+  `pi`, `opencode` and `prime-agent` × `daemon-restart-mid-wait-pg` fail ("not woken after the
+  restart; got None", about 26 s each), while the in-memory restart cell passes for all three.
+  Hypothesis, unproven: with Postgres the plugin's Session row survives the restart, still bound
+  to the old connection, and the plugin's reconnect doesn't rebind it, so the push finds no live
+  client. In memory the roster empties and the plugin registers fresh; the Claude shim re-SETs
+  its session on connect. Done when: a push plugin is woken by mail sent after a restart with
+  Postgres, and those cells pass.
 
 ## Moved to Rally
 

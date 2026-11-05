@@ -35,11 +35,18 @@ checked as well as what the recipient sees.
 | 3b | `lost-hook-reply-redelivers` | When the reply to a busy session's prompt hook is lost after the daemon sent it, as when a harness kills a hook at its timeout, the message comes again at the next hook. |
 | 4 | `duplicate-shown-at-most-once` | A send retried with the same idempotency key is one message, shown once. A wake shows its message once, not once from the push and again from the woken turn's drain. Mail a wake delivered isn't injected again by the next hook. |
 | 4b | `burst-both-delivered` | Two messages sent back to back to an idle session both reach the model, between the wake and the next delivery point. A harness that drains the inbox while handling the first must show what it drains. |
-| 5 | `daemon-restart-mid-wait` | The daemon restarts (SIGTERM, as systemd stops it) while the session waits. The session still wakes on mail sent after the restart. |
+| 5 | `daemon-restart-mid-wait` | The daemon restarts (SIGTERM, as systemd stops it) while the session waits, in memory, so the roster empties. The session still wakes on mail sent after the restart. |
+| 5 (pg) | `daemon-restart-mid-wait-pg` | The same, with the daemon persisting to Postgres. |
+| 5b (pg) | `restart-keeps-unread-mail` | Mail sent while the session is busy, then a restart against Postgres: the mail is kept, and wakes the session once it goes idle. n/a for the push plugins, which take the push into their running turn. |
 | 6 | `operator-pause-stops-wakes` | With `muster-daemon pause`, mail doesn't wake an idle session but still arrives at the next hook. |
 | 6b | `resume-wakes-held-mail` | Mail sent while wakes are paused doesn't wake the session, and resuming alone wakes it with that mail, with no new message. |
 | 7 | `broadcast-never-wakes` | A room broadcast neither wakes the session nor is injected. |
 | 8 | `wake-none-not-expected` | A session the roster calls `wake: none` isn't reported to the sender as `wake: expected`. |
+| 9 | `mail-waiting-at-reconnect` | Mail sent while a push plugin's connection is down is shown once at the next turn after it reconnects, and not again after that, even when another message is pushed live first. A plugin that drains the inbox after a push acks the waiting mail there without showing it (upstream #133). |
+| 10 | `hung-handover-released` | When the harness's API hangs taking a push, a turn's pull doesn't show the message while the plugin holds it, the next turn shows it once the hold's lease lapses, and no pull shows it again after the hung handover goes through. That late handover can show it a second time, which the design accepts ([push-ack-design.md](push-ack-design.md)). |
+
+Scenarios 9 and 10 are about a live push, so they're `n/a` for the hook
+harnesses (Claude and Codex).
 
 Some cells fail today. Each is listed in `KNOWN_FAILURES` against the story
 that fixes it, and shows as `known (MUS-nn)` in the grid. If one starts
@@ -47,9 +54,11 @@ passing, the suite fails until it's taken off the list.
 
 | Cells | Story | What fails |
 |---|---|---|
-| `pi`, `opencode`, `prime-agent` × 3 | MUS-81 | A pushed message is marked read when the push reaches the plugin's connection. If the harness then loses it, the next turn's inbox drain finds nothing unread, and the message is gone: the push-side twin of MUS-75. |
+| `opencode`, `prime-agent` × 3 | MUS-81 | A pushed message is marked read when the push reaches the plugin's connection. If the harness then loses it, the next turn's inbox drain finds nothing unread, and the message is gone: the push-side twin of MUS-75. Pi acks its own pushes and passes. |
+| `opencode` × 9 | MUS-81 | The plugin drains the inbox after a live push, which acks the mail that waited out the drop without showing it. |
+| `opencode`, `prime-agent` × 10 | MUS-81 | The push is marked read before the harness takes it, so a handover that never resolves loses it. |
 | `pi`, `opencode`, `prime-agent` × 6b | MUS-82 | While wakes are paused, the push is skipped and the mail stays unread, but resuming pushes nothing again, so a push session isn't woken until its next turn. |
-| `codex` × 5 | MUS-76 | After a restart without Postgres, an idle Codex session is off the roster until its next hook: the bridge registers a thread only on `thread/started`. |
+| `pi`, `opencode`, `prime-agent` × 5 (pg) | MUS-90 | After a restart with Postgres, mail sent after it doesn't wake the plugin. Unproven: its surviving Session row stays bound to the old connection. |
 
 ## The harnesses
 
@@ -132,6 +141,12 @@ the suite can't check:
 - **A lost delivery** means `pi.sendMessage` rejects after the extension has
   received the push, as when pi fails to take the message. That's where the
   fake loses the ack in scenario 3.
+- **A hung handover** (scenario 10) means `pi.sendMessage` doesn't resolve
+  until the suite lets it go, and then pi takes the message after all.
+- **A dropped connection** (scenario 9) is the extension's WebSocket closing.
+  The driver wraps `WebSocket` before it loads the extension, closes the open
+  socket, and points new ones at a closed port until the suite restores it.
+  myko reconnects on its own, as it does after a real drop.
 
 Two scenarios are `n/a` for Pi. A plugin has no prompt hooks, so a hook reply
 can't be lost (3b). And a connected plugin renders pushes, so its roster row
@@ -159,7 +174,7 @@ check:
 - **The `event` hook gets `session.created` and `session.idle`** with the
   session id where `eventSessionId` looks for it.
 - **A lost delivery** means `session.prompt` rejects after the plugin has
-  received the push.
+  received the push. A hung handover and a dropped connection work as for Pi.
 
 Scenarios 3b and 8 are `n/a`, as for Pi.
 
@@ -190,17 +205,20 @@ These are listed so nobody reads the grid as more than it is.
   set `MUSTER_BUN`, and run `npm ci --workspaces=false` in the plugin's
   directory. Without bun the plugin cells read `no bun`, and CI fails them
   (`CONFORMANCE_REQUIRE_BUN`).
-- **The plugins' own `bun test` suites don't run in CI yet.** Only their
-  conformance drivers do.
+- **Only the pi plugin's own `bun test` suite runs in CI.** opencode's and
+  Prime Agent's don't yet; their conformance drivers do.
 - **The fixtures are constructed, not recorded.** The Claude fixtures follow
   Claude Code's documented hook input. The Codex fixtures follow the frames the
   bridge's own tests use, because Codex isn't installed where they were
   written. Recording both is below. The shim reads only a few fields from each
   (the ids and cwd), so the risk is small.
 - **Codex runs in plain mode only.** It has no `codex-tls` column yet.
-- **Restarts are tested without Postgres** (MUS-76). Mail sent before a
-  restart and not yet delivered lives only in memory, and is lost with it.
-  Scenario 5 sends after the restart. The durable case needs a database in CI.
+- **The Postgres cells need a database** (MUS-76): `CONFORMANCE_POSTGRES_URL`,
+  in which each daemon gets its own events table (`conformance_…`) and leaves it
+  behind. Without one they show `no postgres`. A local run therefore
+  accumulates `conformance_*` tables; drop them with
+  `psql "$CONFORMANCE_POSTGRES_URL" -Atc "select 'drop table ' || tablename || ';' from pg_tables where tablename like 'conformance\_%'" | psql "$CONFORMANCE_POSTGRES_URL"`. CI runs a `postgres:16` service
+  and sets `CONFORMANCE_REQUIRE_POSTGRES`, so there a missing database fails.
 - **Pause is only checked on the waiter.** With channels on, `SendMessage`'s
   live push also checks the pause. No harness here uses channels, because the
   fakes run without the flag, as Muster's sessions do.
