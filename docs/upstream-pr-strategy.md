@@ -15,7 +15,8 @@ plan on 2026-11-05. It supersedes the landing order below wherever the two disag
 
 ### What changed upstream
 
-- Marshal `main` is `8362227` (v0.57.0), 16 commits past `94ecc24`. Along with ours,
+- Marshal `main` is **`9b00c6f` (v0.58.0, #166, about 16:30 EST 2026-11-05)**. It was `8362227`
+  (v0.57.0) when this section was first written, 16 commits past `94ecc24`. Along with ours,
   lucid-max merged lobo235's #131, #132, #134–#137, #140, #141 and #147.
 - Two of those overlap our layers. **#141** pulls the inbox into Claude turns with
   plugin hooks, which sits next to `port/inbox-quoting`. **#140, #131 and #136**
@@ -26,13 +27,26 @@ plan on 2026-11-05. It supersedes the landing order below wherever the two disag
   real-process takeover check, and native Windows CI on the exact head. A Windows
   fixture fix, setting `APPDATA` as well as `XDG_CONFIG_HOME`, came out of that.
   The version bumps are done upstream.
+- **Overlaps that no longer apply.** lobo235's PRs that the layers below were
+  measured against (#131, #132, #134–#137, #140, #141, #147) have merged, and our
+  #154 is closed. They're upstream main now, so the rebase deals with them and
+  they're not open PRs to coordinate with. Wherever the older sections below call
+  #140 or #141 an open "overlap", read "already in main". **Only two upstream PRs
+  are open:** lobo235's **#143** (validate room names and descriptions where rooms
+  are created), which is near Other's empty-`to` and room code, and trevorsargent's
+  **#59** (TUI session nicknames and agents-pane grouping), which is worth checking
+  against our nickname and roster changes before M2.
+- **Reference checkout:** `~/src/marshal` on Murph is a clean checkout of
+  ignition-is-go/marshal main, with remotes `upstream` and `castor` (the
+  Castor-o7/marshal fork that PR heads come from). Use it for upstream code.
+  `~/src/muster` is Muster, not Marshal.
 - Levi `main` is still `aed6027` (v0.9.5), so L1–L3 are current. Castor-o7/levi now
   exists as a fork of ignition-is-go/levi, which was what held L1.
 
 ### Step 0: catch up and re-inventory (nothing goes upstream)
 
 1. Muster takes in v0.55–v0.57, the same way MUS-62 (#84) took in v0.54.
-2. Rebase every live `port/*` branch onto `8362227`.
+2. Rebase every live `port/*` branch onto upstream main (`9b00c6f` as of 16:30).
 3. Check each remaining layer against what upstream merged, and drop, shrink or
    rework what they now cover. Inbox quoting may turn into a small change on top
    of #141, or disappear. Durability is cut down to what #140, #131 and #136 leave
@@ -91,7 +105,7 @@ as proposals, one issue each or one list, so upstream decides whether it wants t
 
 ### Who does it
 
-The muster team takes Step 0 and the rebases. The lamplighter deploys each catch-up
+ultra-dune takes Step 0 and the rebases (see "Who does what" below). The lamplighter deploys each catch-up
 as it lands in Muster. The operator sends each PR, as before.
 
 ## Ground rules
@@ -119,7 +133,7 @@ These come from Phase 5 of [roadmap.md](roadmap.md) and hold for every PR:
 
 | | |
 |---|---|
-| Upstream `main` | was `94ecc24` (v0.54.1) when this table was written; now `8362227` (v0.57.0), see "The next round" above |
+| Upstream `main` | was `94ecc24` (v0.54.1) when this table was written; now `9b00c6f` (v0.58.0), see "The next round" above |
 | Muster `main` | `3fafe4a` (#124), caught up with `94ecc24` (MUS-62, #84) |
 | Port stack | Branches in Castor-o7/muster, all on `94ecc24`, each stacked on the one before |
 | Phase 5 goals | G1 (catch-up), G2 (inventory), G3 (optional TLS), G4 (hook delivery doc) and G5 (daemon links) are done. **G7** (MUS-67, the write-up) is this update. **G8** (MUS-68, the Zoo runs): the Hooks plan is written (`docs/zoo-plan-hooks.md`), but no run has happened. It is **blocked until Codex is installed on a1**, because the Zoo drives Codex agents only |
@@ -411,7 +425,8 @@ ledger of the newer entries. This table summarizes the fixes that matter:
 
 | Role | Work |
 |---|---|
-| peppy-skate | Builds and rebases the port layers, and forward-ports fixes |
-| Lamplighter (tangerine-wombat) | Keeps this strategy and the comparison docs current, tracks upstream's open PRs, and runs Murph-side evidence |
-| The watchman | Reads each layer and its description before it's offered |
+| ultra-dune | Step 0: the catch-up branch, the port/* rebases, and the additive re-inventory (agreed by frank-crocodile and fiery-snapper, 2026-11-05) |
+| fiery-snapper | Reads the catch-up, with an independent reviewer |
+| Lamplighter (robust-bunting, Murph) | Keeps this strategy current, tracks upstream's open PRs, and deploys each catch-up on Murph |
+| The watchman (frank-crocodile on Murph tonight) | Reads each layer and its description before it's offered |
 | The operator | Talks to upstream, decides each PR and sends it, and decides the Zoo spend and the questions above |
