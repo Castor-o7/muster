@@ -56,20 +56,6 @@ const QUIET_FOR: Duration = Duration::from_secs(4);
 /// and they're checked before `KNOWN_FAILURES`, which may list them too.
 const FLAKY: &[(&str, &str, &str, &str)] = &[
     (
-        "pi",
-        "daemon-restart-mid-wait-pg",
-        "MUS-90",
-        "passed once in CI in 2.2 s (#126 at e47c7e0), but failed 3 of 3 runs on a1 both on \
-         main (1fe3c02) and on #126, each at the full 26 s wait",
-    ),
-    (
-        "opencode",
-        "daemon-restart-mid-wait-pg",
-        "MUS-90",
-        "passed in CI in 2.8 s (#139 at fabebbc, run 42075783447), where it usually fails at \
-         the full 26 s wait, like pi's",
-    ),
-    (
         "claude-tls",
         "restart-keeps-identity",
         "MUS-93",
@@ -93,14 +79,10 @@ const KNOWN_FAILURES: &[(&str, &str, &str)] = &[
     ("pi", "resume-wakes-held-mail", "MUS-82"),
     ("opencode", "dropped-ack-redelivers", "MUS-81"),
     ("opencode", "resume-wakes-held-mail", "MUS-82"),
-    ("opencode", "mail-waiting-at-reconnect", "MUS-81"),
     ("opencode", "hung-handover-released", "MUS-81"),
     ("prime-agent", "dropped-ack-redelivers", "MUS-81"),
     ("prime-agent", "resume-wakes-held-mail", "MUS-82"),
     ("prime-agent", "hung-handover-released", "MUS-81"),
-    ("pi", "daemon-restart-mid-wait-pg", "MUS-90"),
-    ("opencode", "daemon-restart-mid-wait-pg", "MUS-90"),
-    ("prime-agent", "daemon-restart-mid-wait-pg", "MUS-90"),
 ];
 
 /// Harnesses in the grid that have no fake yet, with the stage that adds one.
@@ -1439,6 +1421,11 @@ const SCENARIOS: &[(&str, Scenario)] = &[
     ("daemon-restart-mid-wait", daemon_restart_mid_wait),
     ("daemon-restart-mid-wait-pg", daemon_restart_mid_wait),
     ("restart-keeps-unread-mail", restart_keeps_unread_mail),
+    ("restart-burst-shown-once-pg", restart_burst_shown_once),
+    (
+        "restart-without-mail-stays-idle-pg",
+        restart_without_mail_stays_idle,
+    ),
     ("operator-pause-stops-wakes", operator_pause_stops_wakes),
     ("resume-wakes-held-mail", resume_wakes_held_mail),
     ("broadcast-never-wakes", broadcast_never_wakes),
@@ -1627,7 +1614,67 @@ fn daemon_restart_mid_wait(c: &mut Cell) -> Result<(), String> {
 
 /// Scenarios that run against Postgres (`CONFORMANCE_POSTGRES_URL`), so a restart
 /// keeps the roster and the mail (MUS-76). Every other cell runs in memory.
-const POSTGRES_SCENARIOS: &[&str] = &["daemon-restart-mid-wait-pg", "restart-keeps-unread-mail"];
+const POSTGRES_SCENARIOS: &[&str] = &[
+    "daemon-restart-mid-wait-pg",
+    "restart-keeps-unread-mail",
+    "restart-burst-shown-once-pg",
+    "restart-without-mail-stays-idle-pg",
+];
+
+/// Scenario 5c (Postgres, MUS-90): Mail sent all through a plugin's reconnect
+/// after a restart is each shown once. With Postgres the session's row is on the
+/// roster from the start, so some of these are sent while the plugin is still
+/// away, some race its reconnect, where a live push can land while the
+/// reconnect's inbox pull is in flight, and some are pushed live after it.
+fn restart_burst_shown_once(c: &mut Cell) -> Result<(), String> {
+    c.harness.arm_idle();
+    c.daemon.restart();
+    c.sender = Cell::sender(&c.daemon, &c.sender_id);
+    // Every 350 ms for about 5 s, spanning the plugin's reconnect (about 3 s),
+    // and under the daemon's limit of 20 messages at once.
+    let mut sent = Vec::new();
+    for i in 0..14 {
+        let t = token(&format!("burst{i}"));
+        c.send(&t)?;
+        sent.push(t);
+        thread::sleep(Duration::from_millis(350));
+    }
+    let woke = c
+        .harness
+        .wait_for_wake(Duration::from_secs(25))
+        .unwrap_or_default();
+    thread::sleep(Duration::from_millis(500));
+    let next = c.harness.busy_boundary().unwrap_or_default();
+    // Past the hold lease, anything held but never acked would come back.
+    thread::sleep(Duration::from_secs(ACK_LEASE_SECS + 1));
+    let after = c.harness.busy_boundary().unwrap_or_default();
+    let seen = format!("{woke}\n{next}\n{after}");
+    let wrong: Vec<String> = sent
+        .iter()
+        .map(|t| (t, seen.matches(t.as_str()).count()))
+        .filter(|(_, n)| *n != 1)
+        .map(|(t, n)| format!("{t} x{n}"))
+        .collect();
+    if !wrong.is_empty() {
+        return Err(format!(
+            "not shown exactly once: {wrong:?}; the wake showed {woke:?}, then {next:?}, then {after:?}"
+        ));
+    }
+    Ok(())
+}
+
+/// Scenario 5d (Postgres, MUS-90): A restart with no mail doesn't wake an idle
+/// session. The reconnect pulls the inbox, and an empty one must stay quiet.
+fn restart_without_mail_stays_idle(c: &mut Cell) -> Result<(), String> {
+    c.harness.arm_idle();
+    c.daemon.restart();
+    // Long enough for the plugin to reconnect (about 3 s) and pull.
+    let woke = c.harness.wait_for_wake(QUIET_FOR + Duration::from_secs(4));
+    if woke.is_some() {
+        return Err(format!("woken by a restart with no mail: {woke:?}"));
+    }
+    Ok(())
+}
 
 /// Scenario 5b (Postgres): Mail sent before a restart, while the session was busy,
 /// is kept, and wakes the session once it goes idle after the restart.

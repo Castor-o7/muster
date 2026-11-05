@@ -77,6 +77,9 @@ export interface DaemonConfig {
 
 type NotifyHandler = (meta: NotifyChannelMeta) => void;
 
+/** How long a shown message id is remembered, to skip a second showing (MUS-90). */
+const SHOWN_FOR_MS = 10 * 60_000;
+
 export class MusterDaemon {
   private readonly client = new MykoClient();
   private readonly cfg: DaemonConfig;
@@ -107,6 +110,12 @@ export class MusterDaemon {
   private livenessTimer: ReturnType<typeof setInterval> | null = null;
   private started = false;
   private connected = false;
+  /** Whether a connection has been up before, so the next one is a reconnect. */
+  private everConnected = false;
+  /** Per session, the message ids a push or a drain has already shown, with
+   *  when. A live push can land while a reconnect's drain is reading the same
+   *  message as unread (MUS-90), so whichever gets it second skips it. */
+  private readonly shown = new Map<string, Map<string, number>>();
   private rosterChangedHandler: (() => void) | null = null;
   private connectionChangedHandler: ((connected: boolean) => void) | null = null;
 
@@ -125,9 +134,20 @@ export class MusterDaemon {
     this.client.connectionStatus$.subscribe((status) => {
       if (status === ConnectionStatus.Connected) {
         this.connected = true;
-        this.connectionChangedHandler?.(true);
         this.log(`connected to ${this.cfg.address}; re-publishing ${this.sessions.size} session(s)`);
         for (const item of this.sessions.values()) this.emitSet(item);
+        // MUS-90: mail sent while the connection was down couldn't be pushed:
+        // the daemon still had this session bound to the old, dead client
+        // (with Postgres the row outlives a restart). Nothing re-offers it,
+        // so treat a reconnect as a push with no body: each session's
+        // fallback pulls its unread mail and shows it, which wakes an idle
+        // session. The SETs above go first on this socket, so anything sent
+        // after them is pushed live instead.
+        if (this.everConnected) {
+          for (const id of this.sessions.keys()) this.notifyHandler?.({ to_session: id });
+        }
+        this.everConnected = true;
+        this.connectionChangedHandler?.(true);
       } else if (status === ConnectionStatus.Disconnected) {
         this.connected = false;
         this.connectionChangedHandler?.(false);
@@ -345,6 +365,21 @@ export class MusterDaemon {
     return `- [${m.messageId}] ${this.senderLabel(m.fromSessionId)} [response_required=${m.responseRequired ?? false}]: ${m.body}`;
   }
 
+  /** Claim a message for showing. False if a push or a drain already showed it,
+   *  so the caller skips it. Ids are forgotten after ten minutes. */
+  claimShown(sessionId: string, messageId: string): boolean {
+    const now = Date.now();
+    let ids = this.shown.get(sessionId);
+    if (!ids) {
+      ids = new Map();
+      this.shown.set(sessionId, ids);
+    }
+    for (const [id, at] of ids) if (now - at > SHOWN_FOR_MS) ids.delete(id);
+    if (ids.has(messageId)) return false;
+    ids.set(messageId, now);
+    return true;
+  }
+
   drainInbox(sessionId: string): Promise<string | null> {
     if (!this.connected) return Promise.resolve(null);
 
@@ -386,7 +421,9 @@ export class MusterDaemon {
     if (!result) return null;
     if (!result.messages || result.messages.length === 0) return null;
 
-    const block = this.renderInbox(result.messages);
+    // A message a live push already showed is acked here but not shown again.
+    const fresh = result.messages.filter((m) => this.claimShown(sessionId, m.messageId));
+    const block = fresh.length ? this.renderInbox(fresh) : null;
 
     try {
       await this.sendForInbox(ackMessages(sessionId, result.messages.map((m) => m.messageId)));

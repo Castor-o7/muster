@@ -750,7 +750,7 @@ Rally.
   a test's daemon binds its own ports (port 0) and reports them, or the tests retry a bind that
   loses the race; the e2e scripts take free ports per run, so two can run at once on one host;
   and no test fails on a port another process took.
-- [ ] **MUS-90: Push plugins aren't woken after a restart with Postgres.** From MUS-76. In CI,
+- [x] **MUS-90: Push plugins aren't woken after a restart with Postgres.** From MUS-76. In CI,
   `pi`, `opencode` and `prime-agent` × `daemon-restart-mid-wait-pg` fail ("not woken after the
   restart; got None", about 26 s each), while the in-memory restart cell passes for all three.
   Hypothesis, unproven: with Postgres the plugin's Session row survives the restart, still bound
@@ -761,6 +761,16 @@ Rally.
   Measured on a1 on 2026-11-05: 3 runs each failed 3 of 3 for all three plugins, both on main
   (`1fe3c02`) and with MUS-58's sweeper gate (#126 at `e47c7e0`), so the startup sweep isn't the
   cause; pi's one 2.2 s pass in CI is flaky, and the cell is in the suite's `FLAKY` list.
+  Fixed 2026-11-05. The hypothesis was half right: the Session row does survive, still bound to the
+  dead client, but the plugin's reconnect does rebind it (the sweeper logs "back on live client"
+  about 3 s later). The mail was lost in between. The suite sends once the recipient's row is on the
+  roster, which with Postgres is at once, so the push went to the dead client, and nothing offered
+  the unread mail again on reconnect. In memory the row only reappears after the reconnect, so the
+  push found a live client. Now each push plugin treats a reconnect as a push with no body, after
+  re-SETting its sessions on the same socket: its existing fallback pulls the unread mail and shows
+  it, which wakes an idle session. The three cells pass (about 2 s), and so does
+  `opencode` × `mail-waiting-at-reconnect`: the waiting mail is now shown at the reconnect, before a
+  later push can drain it. MUS-81's other opencode and Prime Agent cells are unchanged.
 
 ## Moved to Rally
 
