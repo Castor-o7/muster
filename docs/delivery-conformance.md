@@ -33,7 +33,8 @@ checked as well as what the recipient sees.
 | 2 | `busy-gets-it-at-next-hook` | A busy session's next hook or turn carries the message, and the one after doesn't. |
 | 3 | `dropped-ack-redelivers` | When a delivery's ack is lost, the message comes again at the session's next delivery point once the lease lapses, and not after an ack that arrives. Claude's waiter acks with its own `/hook/ack`, which the proxy drops. Codex has no ack request: the daemon acks a hook's reply once it has flushed it, so the proxy loses the reply instead. |
 | 3b | `lost-hook-reply-redelivers` | When the reply to a busy session's prompt hook is lost after the daemon sent it, as when a harness kills a hook at its timeout, the message comes again at the next hook. |
-| 4 | `duplicate-shown-at-most-once` | A send retried with the same idempotency key is one message, shown once. Mail the waiter delivered isn't injected again by the next hook. |
+| 4 | `duplicate-shown-at-most-once` | A send retried with the same idempotency key is one message, shown once. A wake shows its message once, not once from the push and again from the woken turn's drain. Mail a wake delivered isn't injected again by the next hook. |
+| 4b | `burst-both-delivered` | Two messages sent back to back to an idle session both reach the model, between the wake and the next delivery point. A harness that drains the inbox while handling the first must show what it drains. |
 | 5 | `daemon-restart-mid-wait` | The daemon restarts (SIGTERM, as systemd stops it) while the session waits. The session still wakes on mail sent after the restart. |
 | 6 | `operator-pause-stops-wakes` | With `muster-daemon pause`, mail doesn't wake an idle session but still arrives at the next hook. |
 | 6b | `resume-wakes-held-mail` | Mail sent while wakes are paused doesn't wake the session, and resuming alone wakes it with that mail, with no new message. |
@@ -46,8 +47,8 @@ passing, the suite fails until it's taken off the list.
 
 | Cells | Story | What fails |
 |---|---|---|
-| `pi` × 3 | MUS-81 | A pushed message is marked read when the push reaches the plugin's connection. If the harness then loses it, the next turn's inbox drain finds nothing unread, and the message is gone: the push-side twin of MUS-75. |
-| `pi` × 6b | MUS-82 | While wakes are paused, the push is skipped and the mail stays unread, but resuming pushes nothing again, so a push session isn't woken until its next turn. |
+| `pi`, `opencode` × 3 | MUS-81 | A pushed message is marked read when the push reaches the plugin's connection. If the harness then loses it, the next turn's inbox drain finds nothing unread, and the message is gone: the push-side twin of MUS-75. |
+| `pi`, `opencode` × 6b | MUS-82 | While wakes are paused, the push is skipped and the mail stays unread, but resuming pushes nothing again, so a push session isn't woken until its next turn. |
 | `codex` × 5 | MUS-76 | After a restart without Postgres, an idle Codex session is off the roster until its next hook: the bridge registers a thread only on `thread/started`. |
 
 ## The harnesses
@@ -57,7 +58,7 @@ passing, the suite fails until it's taken off the list.
 | `claude` | Claude Code | plain | built |
 | `claude-tls` | Claude Code | `MUSTER_TLS=1`, as Murph runs: the hooks carry the local token, and the shim connects through the gate's port | built |
 | `codex` | Codex, through `muster-shim codex-bridge` and the app-server | plain | built |
-| `opencode` | opencode plugin (`plugins/muster-opencode`) | plain | stage 3 |
+| `opencode` | opencode plugin (`plugins/muster-opencode`) | plain | built |
 | `pi` | Pi plugin (`plugins/muster-pi`) | plain | built |
 | `prime-agent` | Prime Agent plugin (`plugins/muster-prime-agent`) | plain | stage 3 |
 
@@ -136,12 +137,37 @@ Two scenarios are `n/a` for Pi. A plugin has no prompt hooks, so a hook reply
 can't be lost (3b). And a connected plugin renders pushes, so its roster row
 says `channel`, never `none` (8).
 
+### What the fake opencode assumes
+
+Pinned to **`@opencode-ai/plugin` and `@opencode-ai/sdk` 1.17.11**, the
+versions in `plugins/muster-opencode/package-lock.json`. The real
+muster-opencode plugin runs under bun, loaded by
+`plugins/muster-opencode/test/conformance-driver.ts` with a stand-in for
+opencode's plugin input: the SDK client (`session.prompt`, `tui.showToast`,
+`app.log`) and bun's own `$`. It connects to the daemon itself and takes the
+live push. It assumes these behaviours of opencode, which the suite can't
+check:
+
+- **`client.session.prompt` on an idle session starts a turn** with that
+  text. On a busy one, opencode queues it behind the running turn, so the model
+  sees it next. The fake records the first as the wake and the second as busy
+  delivery.
+- **A user turn runs the `chat.message` hook**, and parts the hook adds are
+  shown to the model. muster-opencode drains the inbox there, so the fake runs
+  it at each busy boundary, and after a wake, because the plugin's
+  `session.prompt` is itself a user turn.
+- **The `event` hook gets `session.created` and `session.idle`** with the
+  session id where `eventSessionId` looks for it.
+- **A lost delivery** means `session.prompt` rejects after the plugin has
+  received the push.
+
+Scenarios 3b and 8 are `n/a`, as for Pi.
+
 ## Gaps
 
 These are listed so nobody reads the grid as more than it is.
 
-- **opencode and Prime Agent have no fake yet** (stage 3). Their columns read
-  `not yet`.
+- **Prime Agent has no fake yet** (stage 3). Its column reads `not yet`.
 - **The plugin columns need bun and the plugin's `node_modules`.** CI downloads
   bun 1.3.14 from its GitHub release, checks it against a SHA-256 committed in
   the workflow, and runs `npm ci` in each plugin. Locally, put bun on `PATH` or
@@ -190,6 +216,11 @@ For Pi, the pinned thing is the extension API, not recorded data. When
 check its `ExtensionAPI` types against the stand-in in `conformance-driver.ts`
 (`on`, `sendMessage`, `registerTool`, `registerCommand`, and the events the
 extension handles), update the version above, and run the suite.
+
+For opencode, the pinned thing is the plugin API, likewise. When
+`@opencode-ai/plugin` changes in `plugins/muster-opencode/package-lock.json`,
+check its `Plugin` input and `Hooks` types against that plugin's
+`conformance-driver.ts`, update the version above, and run the suite.
 
 For Codex, with Codex installed:
 
