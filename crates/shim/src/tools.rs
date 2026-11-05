@@ -435,7 +435,12 @@ async fn wait_until_registered(host: &ToolHost) {
     if let Err(e) = crate::emit_session_set(&host.client, &snapshot) {
         log::warn!("[muster-shim] re-SET before a write failed: {e}");
     }
-    wait_for(registered, REGISTER_WAIT - REGISTER_RESEND_AFTER, REGISTER_POLL).await;
+    wait_for(
+        registered,
+        REGISTER_WAIT - REGISTER_RESEND_AFTER,
+        REGISTER_POLL,
+    )
+    .await;
 }
 
 /// Poll `ready` until it's true or `limit` passes. Returns whether it became true.
