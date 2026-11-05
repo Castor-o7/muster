@@ -144,6 +144,9 @@ impl Drop for HookHarness {
 
 async fn handle_hook_request(mut stream: TcpStream, ctx: Arc<MykoServerContext>) -> io::Result<()> {
     let (target, body) = read_http_request(&mut stream).await?;
+    // The daemon answers a registration with the session's identity, and the
+    // bridge watches a thread for mail only once it has one (MUS-18).
+    let mut reply = String::new();
     if target.starts_with("/hook/session-register")
         && let Ok(body) = serde_json::from_slice::<Value>(&body)
         && let Some(session_id) = body.get("session_id").and_then(Value::as_str)
@@ -155,9 +158,16 @@ async fn handle_hook_request(mut stream: TcpStream, ctx: Arc<MykoServerContext>)
         internal_context(&ctx)
             .emit_set(&hook_session(session_id, cwd))
             .expect("register hook-owned session");
+        reply = json!({"session_id": session_id, "nickname": "wake-canary"}).to_string();
     }
     stream
-        .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+        .write_all(
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                reply.len()
+            )
+            .as_bytes(),
+        )
         .await?;
     stream.flush().await
 }
