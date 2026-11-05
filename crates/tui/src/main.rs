@@ -17,8 +17,8 @@ use crossterm::{
 };
 use hyphae::{Signal, Watchable};
 use muster_entities::{
-    GetAllMessages, GetAllRoomMembers, GetAllRooms, GetAllSessions, Message, Room, RoomKind,
-    RoomMember, Session,
+    GetAllMessages, GetAllRoomMembers, GetAllRooms, GetAllSessions, GetAllWakeWatchers, Message,
+    Room, RoomKind, RoomMember, Session, WakeState, WakeWatcher, wake_state,
 };
 use myko::{
     client::{ConnectionStatus, MykoClient},
@@ -76,6 +76,8 @@ struct StateInner {
     /// set has lost its WS connection (or the daemon was just restarted
     /// and its shim hasn't reconnected yet).
     live_clients: HashSet<String>,
+    /// The daemon's wait records, for the observed `waiting` wake state (MUS-52).
+    watchers: Vec<Arc<WakeWatcher>>,
     connected: bool,
     last_event: Option<String>,
 }
@@ -215,6 +217,16 @@ async fn main() -> Result<()> {
     members_cell.own(members_guard);
     Box::leak(Box::new(members_cell));
 
+    let watchers_cell = client.watch_query::<GetAllWakeWatchers>(GetAllWakeWatchers {});
+    let watchers_state = state.clone();
+    let watchers_guard = watchers_cell.subscribe(move |signal| {
+        if let Signal::Value(value) = signal {
+            watchers_state.update(|s| s.watchers = (**value).clone());
+        }
+    });
+    watchers_cell.own(watchers_guard);
+    Box::leak(Box::new(watchers_cell));
+
     Box::leak(Box::new(client));
 
     let render_state = state.clone();
@@ -351,6 +363,7 @@ fn draw_agents(snap: &StateInner, area: Rect, frame: &mut ratatui::Frame) {
         RowCell::from("branch"),
         RowCell::from("rooms"),
         RowCell::from("activity"),
+        RowCell::from("wake"),
         RowCell::from("uptime"),
     ])
     .style(
@@ -389,6 +402,7 @@ fn draw_agents(snap: &StateInner, area: Rect, frame: &mut ratatui::Frame) {
                 RowCell::from(s.git_branch.clone().unwrap_or_else(|| "—".into())),
                 RowCell::from(rooms_summary).style(Style::default().fg(Color::Magenta)),
                 activity_cell,
+                build_wake_cell(wake_state(s, &snap.watchers, now)),
                 RowCell::from(format_duration(now - s.connected_at))
                     .style(Style::default().fg(Color::DarkGray)),
             ])
@@ -411,6 +425,7 @@ fn draw_agents(snap: &StateInner, area: Rect, frame: &mut ratatui::Frame) {
             Constraint::Fill(1),    // branch
             Constraint::Fill(2),    // rooms
             Constraint::Length(20), // activity
+            Constraint::Length(10), // wake
             Constraint::Length(8),  // uptime
         ],
     )
@@ -614,6 +629,28 @@ fn draw_status(snap: &StateInner, area: Rect, frame: &mut ratatui::Frame) {
     frame.render_widget(p, area);
 }
 
+/// The wake cell (MUS-52). `waiting` is the daemon's own observation and shows
+/// solid; `channel` and `busy` are the session's own claims, so they carry a `?`
+/// and render dim italic to read as declared.
+fn wake_cell_text(wake: WakeState) -> String {
+    match wake {
+        WakeState::Waiting => "● waiting".into(),
+        WakeState::None => "—".into(),
+        declared => format!("◌ {}?", declared.as_str()),
+    }
+}
+
+fn build_wake_cell(wake: WakeState) -> RowCell<'static> {
+    let style = match wake {
+        WakeState::Waiting => Style::default().fg(Color::Green),
+        WakeState::None => Style::default().fg(Color::DarkGray),
+        _ => Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::ITALIC),
+    };
+    RowCell::from(wake_cell_text(wake)).style(style)
+}
+
 /// Build the agents-table activity cell from a session's liveness
 /// fields (`last_activity_at`, `last_tool`, `last_tool_at`). Color
 /// drains from green → yellow → red as `last_activity_at` ages past
@@ -678,5 +715,18 @@ fn format_duration(diff_ms: i64) -> String {
         format!("{}h", s / 3600)
     } else {
         format!("{}d", s / 86400)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{WakeState, wake_cell_text};
+
+    #[test]
+    fn wake_cell_marks_declared_states() {
+        assert_eq!(wake_cell_text(WakeState::Waiting), "● waiting");
+        assert_eq!(wake_cell_text(WakeState::Channel), "◌ channel?");
+        assert_eq!(wake_cell_text(WakeState::Busy), "◌ busy?");
+        assert_eq!(wake_cell_text(WakeState::None), "—");
     }
 }
