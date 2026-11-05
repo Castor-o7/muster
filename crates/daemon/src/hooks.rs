@@ -225,6 +225,16 @@ fn handle_ack(body: &[u8], ctx: &Arc<MykoServerContext>) -> HookOutcome {
 /// The listener's `machine_may_act` has already checked that the caller may act
 /// for this session. A session that isn't on the roster gets no record, and
 /// while wakes are paused none is kept, since the bridge starts no turns then.
+/// A bridge name the daemon will key a record by: 1 to 128 characters from
+/// `[A-Za-z0-9._-]`. Any other name gets the shared `bridge` record, so a bridge
+/// can't make a record id as long as the request body.
+fn valid_bridge_name(name: &str) -> bool {
+    (1..=128).contains(&name.len())
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+}
+
 fn handle_bridge_watch(body: &[u8], ctx: &Arc<MykoServerContext>) -> HookOutcome {
     let parsed = parse_body(body);
     let Some(sid) = parsed
@@ -241,7 +251,7 @@ fn handle_bridge_watch(body: &[u8], ctx: &Arc<MykoServerContext>) -> HookOutcome
     let bridge = parsed
         .as_ref()
         .and_then(|b| b.get("bridge")?.as_str())
-        .filter(|s| !s.is_empty())
+        .filter(|s| valid_bridge_name(s))
         .unwrap_or("bridge");
     let record = WakeWatcher::bridge_id(sid, bridge);
     let cmd_ctx = internal_cmd_ctx(ctx);

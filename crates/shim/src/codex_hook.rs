@@ -540,7 +540,18 @@ pub(crate) fn bridge_instance() -> &'static str {
         let started = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_millis());
-        format!("{}-{}-{started}", short_host(), std::process::id())
+        let host: String = short_host()
+            .chars()
+            .take(64)
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || matches!(c, '.' | '_') {
+                    c
+                } else {
+                    '-'
+                }
+            })
+            .collect();
+        format!("{host}-{}-{started}", std::process::id())
     })
 }
 
@@ -808,6 +819,17 @@ mod tests {
             response.as_deref(),
             Some("ok"),
             "strict HTTP authority validation rejected the hook request"
+        );
+    }
+
+    #[test]
+    fn the_bridge_name_is_one_the_daemon_accepts() {
+        let name = bridge_instance();
+        assert!((1..=128).contains(&name.len()), "{name}");
+        assert!(
+            name.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-')),
+            "{name}"
         );
     }
 

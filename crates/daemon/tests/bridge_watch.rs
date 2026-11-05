@@ -187,6 +187,25 @@ fn a_bridge_watched_thread_shows_its_wake_path_until_the_bridge_stops() {
         "a held wait's end must leave the bridge's record"
     );
 
+    // A bridge name that's too long or has other characters gets the shared record.
+    let long = "x".repeat(129);
+    for bad in [long.as_str(), "a/b", "a b"] {
+        assert_eq!(watch_as(&ctx, bad, "thread-2", true), "watching");
+        let ids: Vec<String> = internal
+            .exec_query(GetAllWakeWatchers {})
+            .unwrap_or_default()
+            .iter()
+            .filter(|w| w.session() == "thread-2")
+            .map(|w| w.id.0.to_string())
+            .collect();
+        assert_eq!(
+            ids,
+            vec![WakeWatcher::bridge_id("thread-2", "bridge")],
+            "for {bad:?}"
+        );
+        assert_eq!(watch_as(&ctx, bad, "thread-2", false), "not watching");
+    }
+
     // When the session ends, every wake path to it goes.
     daemon::hooks::mark_waiting_now(&internal, "both");
     let ended = r#"{"session_id":"both"}"#;
