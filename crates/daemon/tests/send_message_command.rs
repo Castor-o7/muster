@@ -148,10 +148,104 @@ fn offline_recipient_succeeds_and_persists_for_pull() {
     assert_eq!(read.messages[0].body, "hi");
 }
 
+/// The operator's pause is process-wide, so tests that depend on it, either
+/// way, hold this lock. The guard resumes wakes when it drops.
+struct Paused(#[allow(dead_code)] std::sync::MutexGuard<'static, ()>);
+
+fn pause_state(paused: bool) -> Paused {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    muster_entities::controls::set_wakes_paused(paused);
+    Paused(guard)
+}
+
+impl Drop for Paused {
+    fn drop(&mut self) {
+        muster_entities::controls::set_wakes_paused(false);
+    }
+}
+
+/// A waiter holding `/hook/wait` for `id`, as the hook listener records it.
+fn set_waiter(ctx: &MykoServerContext, id: &str) {
+    let watcher = WakeWatcher {
+        id: WakeWatcherId(Arc::from(id)),
+        until: chrono::Utc::now().timestamp_millis() + 60_000,
+    };
+    let ev = MEvent::from_item(&watcher, MEventType::SET, &Uuid::new_v4().to_string());
+    ctx.apply_event_batch(vec![ev])
+        .expect("apply WakeWatcher SET");
+}
+
+fn send_to_recipient(ctx: &MykoServerContext) -> SendMessageResult {
+    SendMessage {
+        response_required: false,
+        to_session_id: SessionId(Arc::from("recipient")),
+        body: "hi".into(),
+        as_session: None,
+        idempotency_key: None,
+    }
+    .execute(cmd_ctx(ctx, Some("c-sender")))
+    .expect("send")
+}
+
+#[test]
+fn a_connected_channels_off_recipient_without_a_waiter_has_no_wake_path() {
+    // MUS-71: a Claude session's MCP shim without the channels flag is
+    // connected but can't wake the session, and the roster says `wake: none`.
+    let _unpaused = pause_state(false);
+    let ctx = setup();
+    set_session(&ctx, &session("sender", Some("c-sender")));
+    let mut recipient = session("recipient", Some("c-recipient"));
+    recipient.channels_enabled = Some(false);
+    set_session(&ctx, &recipient);
+
+    let result = send_to_recipient(&ctx);
+    assert_eq!(result.live_push, LivePushStatus::Unavailable);
+    assert_eq!(result.wake, WakeStatus::Unobserved);
+    assert_eq!(message_count(&ctx), 1);
+}
+
+#[test]
+fn a_waiter_while_wakes_are_paused_is_no_wake_path() {
+    // A paused `/hook/wait` hands out nothing, so the waiter won't wake it.
+    let _paused = pause_state(true);
+    let ctx = setup();
+    set_session(&ctx, &session("sender", Some("c-sender")));
+    let mut recipient = session("recipient", Some("c-recipient"));
+    recipient.channels_enabled = Some(false);
+    set_session(&ctx, &recipient);
+    set_waiter(&ctx, "recipient");
+
+    let result = send_to_recipient(&ctx);
+    assert_eq!(result.wake, WakeStatus::Unobserved);
+}
+
+#[test]
+fn a_push_capable_session_while_paused_is_never_expected() {
+    // Channels on and a waiter too, but paused: the push is skipped and the
+    // waiter hands out nothing, so there's no wake to expect.
+    let _paused = pause_state(true);
+    let ctx = setup();
+    set_session(&ctx, &session("sender", Some("c-sender")));
+    let mut recipient = session("recipient", Some("c-recipient"));
+    recipient.channels_enabled = Some(true);
+    set_session(&ctx, &recipient);
+    set_waiter(&ctx, "recipient");
+
+    let result = send_to_recipient(&ctx);
+    assert_ne!(result.live_push, LivePushStatus::Delivered);
+    assert!(
+        matches!(result.wake, WakeStatus::NotNeeded | WakeStatus::Unobserved),
+        "paused, so not expected: {:?}",
+        result.wake
+    );
+}
+
 #[test]
 fn a_pull_recipient_with_a_waiter_expects_a_wake() {
     // A session kept after its connection dropped (MUS-54) has no client but
     // still holds `/hook/wait`, so the message will wake it.
+    let _unpaused = pause_state(false);
     let ctx = setup();
     set_session(&ctx, &session("sender", Some("c-sender")));
     set_session(&ctx, &session("recipient", None));
@@ -499,4 +593,24 @@ fn unidentified_caller_errors() {
         err.message,
     );
     assert_eq!(message_count(&ctx), 0);
+}
+
+#[test]
+fn an_empty_recipient_is_refused_not_sent_to_the_sender() {
+    // Found on Murph: `to: ""` matched by prefix and landed on the sender.
+    let ctx = setup();
+    set_session(&ctx, &session("sender", Some("c-sender")));
+    for to in ["", "   "] {
+        let err = SendMessage {
+            response_required: false,
+            to_session_id: SessionId(Arc::from(to)),
+            body: "hi".into(),
+            as_session: None,
+            idempotency_key: None,
+        }
+        .execute(cmd_ctx(&ctx, Some("c-sender")))
+        .expect_err("an empty `to` must be refused");
+        assert!(err.message.contains("`to` is empty"), "{}", err.message);
+    }
+    assert_eq!(message_count(&ctx), 0, "nothing is stored");
 }

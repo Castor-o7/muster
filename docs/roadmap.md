@@ -14,12 +14,12 @@ evidence from a real run by the person or team named.
 
 ## Status
 
-2026-11-04: 32 of 66 stories ticked, about 48%, not counting the 3 moved to Rally. Live on
-Murph since 2026-11-04 16:02:18: `14e2d1a`, deployed by Lamplighter on the operator's word, with
-every port check passing. It carries MUS-7 (first live at `3746864`, 14:28) and MUS-59, besides
-everything before. Merged and waiting for the next daemon restart: MUS-8 (which also needs a
-rebuilt shim wherever a machine next pairs), MUS-9, MUS-10, MUS-60, and MUS-11's rustls
-and tokio security updates. Sessions pick up a rebuilt shim
+2026-11-05: 36 of 77 stories ticked, about 47%, not counting the 3 moved to Rally. Live on
+Murph since 2026-11-05 08:48: `edf5ea8` (PID 3759037), applied by the operator with
+`MUSTER_TLS=1` and checked by checksum. Besides everything before, it brings MUS-8, MUS-9,
+MUS-10, MUS-60, MUS-11's rustls and tokio updates, MUS-62 (upstream v0.54.1), MUS-64 (the
+optional TLS mode), MUS-66 (daemon links), and MUS-71, MUS-72, MUS-73, MUS-75, MUS-78 and MUS-79.
+Merged and waiting for the next daemon restart: MUS-74. Sessions pick up a rebuilt shim
 when they restart, and no keyed send (MUS-29) has been seen live yet. Verified live on 2026-11-04:
 MUS-4, MUS-7, MUS-34, MUS-35, MUS-54 and MUS-57. Merged, live and not yet verified: MUS-46,
 MUS-48, MUS-50 (its live half needs a session that loses its binding), MUS-55 and MUS-59.
@@ -460,10 +460,40 @@ Rally.
   restart. Done when: no machine's config names 6257 (a1's and Murph's `.mcp.json`, the TUI,
   the TS plugins), and the alias, its variable and its rollout check are removed. The upstream
   Gate PR ships without it.
+- [ ] **MUS-80: Give the unregistered refusal a stable code.** From the watchman's review of
+  MUS-79: the shim retries a write refused as unregistered by matching the daemon's text ("has
+  no session on the roster"), so a change of wording would quietly stop the retry. Done when:
+  `resolve_caller`'s refusal carries a stable code or data field, the shim matches that rather
+  than the text, and a test pins both ends to the same value.
+- [ ] **MUS-83: Say when the local token is refused.** Found in the MUS-66 run: a shim without
+  the daemon's local token was rejected at the gate ("missing or wrong local token"), but the
+  tool call only reported "command timed out after 10000 ms (daemon unresponsive?)". Done
+  when: a shim whose connection is refused for its token says so, and names the token file,
+  and a test covers it.
+- [ ] **MUS-84: Keep `unpair` from revoking a machine and a link together.** Found by
+  tangerine-wombat cleaning up after the MUS-66 run: on Murph, `unpair a1` removes both a1's
+  machine pairing (which every a1 session uses) and the link token `link:a1`, and `unlink a1`
+  on the dialed side does nothing, because it edits only the dialer's `links` file. Done when:
+  `unpair` takes `--machine` or `--link`, a bare name that matches both is refused with both
+  forms named, `unlink` on the dialed side removes `link:<name>`, and an e2e covers each case.
+- [x] **MUS-72: Hold a session's first writes until it's registered.** Found by tangerine-wombat
+  in the G5 run on Murph: a tool call right after `initialize` reached the daemon before the
+  shim's Session SET and failed "caller has no session on the roster". A real agent's first
+  turn can do the same. Done when: a write waits, up to 5 s, for the session's own row, and a
+  test shows it goes ahead once the row lands and gives up after the bound.
+- [x] **MUS-73: Refuse an empty recipient.** Found by tangerine-wombat: `send_message` with
+  `to: ""` matched every id by prefix and was delivered to the sender itself. Upstream
+  `94ecc24` behaves the same; a small upstream fix, when the operator allows upstream PRs.
+  Done when: an empty or blank `to` is refused with a clear error and nothing is stored.
+- [x] **MUS-79: Retry a write refused as unregistered.** The links e2e failed 6 of 39 on CI after
+  #102: a fresh shim for a session whose row was still bound to an earlier, dead connection saw
+  "a binding" and passed MUS-72's hold, and the daemon then refused its write, because it finds a
+  caller by this connection's binding. Done when: a write refused "has no session on the roster"
+  re-sends the session and is retried once, and the gate e2e reproduces the stale binding.
 - [x] **MUS-65: Document live delivery without the channels flag (G4).** How hooks give live
   delivery and wake, checked against the code, and how that differs from Marshal's channel
   push. Merged as #80.
-- [ ] **MUS-66: Message between daemons (G5).** Secure and bidirectional, on the TLS mode. The
+- [x] **MUS-66: Message between daemons (G5).** Secure and bidirectional, on the TLS mode. The
   watchman reads a design and threat model before any building. The design answers what
   configuration links two daemons (peer address, token or certificate fingerprint, and whether
   `muster-daemon pair` is reused), whether a test session needs its own shim pairing file, what
@@ -472,15 +502,89 @@ Rally.
   second daemon on Murph (loopback ports 6265–6268, its own state dir, config dir and database).
   Design merged as #90. Built: `pair --link` and `link`, the `/link` route and protocol, remote
   sessions on the roster, `nickname@link` addressing, an outbox that survives a restart (with
-  Postgres), and the threat-model checks, all covered by `scripts/test-links-e2e.sh`. Still
-  needs the two runs: Lamplighter's two-daemon test on Murph, then the real a1↔Murph run with
-  the operator's OK.
+  Postgres), and the threat-model checks, all covered by `scripts/test-links-e2e.sh`. The real
+  a1↔Murph run passed on 2026-11-05 with Murph on `edf5ea8` (`MUSTER_TLS=1`, checked by
+  checksum) and a test daemon on a1 built from the same commit: one `pair --link` code
+  redeemed, a message each way (labelled `gleaming-salamander@a1` and `tangerine-wombat@Murph`),
+  and the link back up after the a1 daemon restarted.
 - [ ] **MUS-67: Write up Muster against Marshal (G7).** What Muster adds and changes, written
   for the eventual upstream PR descriptions. Draft in #81.
 - [ ] **MUS-68: Simulate each behaviour change in Zoo (G8).** Upstream requires a real-agent
   simulation, imported into Marshal Zoo, for every change to behaviour or agent-facing
   instructions (`scripts/sandbox/README.md`, upstream `8563800`). Done when: each change bound
   for upstream has its simulation. Plan for the hooks change in #83.
+- [ ] **MUS-69: A delivery conformance suite.** Prove live delivery works for every harness
+  (Claude Code hooks, the Codex app-server bridge, opencode, Pi, Prime Agent) without running their
+  TUIs or any model: the real `muster-daemon` and `muster-shim` binaries against a fake harness for
+  each, all passing one scenario table. The table: an idle session wakes on a DM; a busy session gets
+  it at its next hook or turn; a dropped ack means redelivery; a duplicate is shown at most once; a
+  daemon restart in the middle of a wait; operator pause stops wakes; broadcasts never wake anyone;
+  and a session the roster calls `wake: none` isn't told `wake: expected` (MUS-71). Each fake is
+  pinned to a harness version, uses recorded fixtures, and says which TUI behaviour it assumes. Claude
+  runs in plain and TLS modes. Done when: it runs in CI with a harness × scenario grid, gaps are
+  listed openly, and there's a short doc on re-recording fixtures
+  ([delivery-conformance.md](delivery-conformance.md)). Stage 1: the suite and Claude in both modes.
+  Stage 2: Codex. Stage 3: the TypeScript plugins, with bun in CI from its GitHub release, checked
+  against a committed SHA-256.
+- [ ] **MUS-71: Don't report `wake: expected` for a session that can't wake.** From MUS-69. The
+  roster's `wake_state` counts a live client as a wake path only with channels on, but
+  `SendMessage` reports `wake: expected` for any recipient with a live `client_id`
+  (`crates/entities/src/send_message.rs`). So a Claude session whose MCP shim is connected, with no
+  waiter and channels off, reads `wake: none` on the roster while a sender is told `wake: expected`.
+  Done when: the send result says `expected` only when the roster would say `waiting` (a live
+  waiter) and wakes aren't paused, a live client alone no longer counts, and the conformance
+  suite's `wake-none-not-expected` cells pass and leave `KNOWN_FAILURES`. A bridge-watched Codex
+  thread reads `none`/`unobserved` in both places until MUS-77.
+- [ ] **MUS-77: Show a Codex bridge's wake path on the roster.** From MUS-71. The roster calls a
+  Codex session `wake: none`, and a send to it says `wake: unobserved`, though its bridge will
+  start a turn, because the bridge leaves no trace on the row: Codex's MCP shim registers no
+  session, and the bridge writes no `WakeWatcher`. Done when: the bridge refreshes a
+  `WakeWatcher` for each thread it can wake, so the roster says `waiting` and a send says
+  `expected` for it, and stops when it can't (paused per MUS-74, or the app-server is gone).
+- [ ] **MUS-74: The Codex bridge ignores the operator's pause.** From MUS-69. `muster-daemon
+  pause` stops Claude's waiter (`/hook/wait` hands out nothing) and the live push, but
+  `codex_bridge.rs` sends `turn/start` for any unread direct message without checking it, so a
+  paused Codex session is still woken. Done when: the bridge doesn't wake while wakes are paused,
+  mail still arrives at the next hook, and the conformance suite's `codex` ×
+  `operator-pause-stops-wakes` cell passes.
+- [ ] **MUS-75: Mail is lost when a prompt hook's reply doesn't arrive.** From MUS-69. The hook
+  listener marks prompt-hook mail read once it has flushed the reply (`deferred_ack`). If the reply
+  is then lost, the mail is gone. That can happen when the harness kills the hook at its timeout
+  after the daemon wrote, or when a paired machine's tunnel breaks after the gate wrote.
+  `hook-delivery.md` says a dropped hook leaves the mail unread, which holds only for a failure
+  before the flush. It affects Claude's busy-path hooks and every Codex delivery. Done when: a
+  reply that doesn't reach the harness leaves the mail unread (a client ack like the waiter's, or
+  another design), and the suite's `lost-hook-reply-redelivers` cells and `codex` ×
+  `dropped-ack-redelivers` pass.
+- [ ] **MUS-76: Restarts under test, with Postgres, and Codex sessions after a restart.** From
+  MUS-69. The suite restarts the daemon without Postgres, so mail sent before a restart isn't
+  covered, and the roster empties. A Claude session's waiter re-registers it, but an idle Codex
+  session stays off the roster until its next hook, because the bridge registers a thread only on
+  `thread/started`. Done when: the suite runs the restart cells against Postgres in CI, covering
+  mail sent before the restart, and the bridge re-registers its threads when its daemon connection
+  comes back, so the `codex` × `daemon-restart-mid-wait` cell passes.
+- [ ] **MUS-78: A shim's first write can beat its registration despite MUS-72's hold.** From
+  MUS-69, against MUS-72. MUS-72 holds a shim's first write until its session is on the roster,
+  for at most 5 s (`REGISTER_WAIT`). Registration can take longer than that, and then the daemon
+  refuses the send with "has no session on the roster". The conformance suite hit it right after
+  a TLS daemon restart on Murph (2 of 8 runs), and on GitHub's runner with no restart at all, in
+  plain and TLS mode (#96's CI, two cells at 5.5 s). The suite retries that one refusal in its
+  MCP helper for now, naming this story. Done when: a shim's first write isn't refused while its
+  registration is still on its way, and that retry is removed.
+- [ ] **MUS-81: A pushed message is lost if the harness loses it after the push.** From MUS-69,
+  the push-side twin of MUS-75. `SendMessage` writes `MessageRead` as soon as the live push reaches
+  the recipient's connection. A plugin harness (Pi, and probably opencode and Prime Agent) then
+  hands it to the model, and if that fails, the next turn's inbox drain finds nothing unread. The
+  conformance suite's `pi` × `dropped-ack-redelivers` cell shows it. Done when: a pushed message
+  that the harness didn't take stays unread (the plugin acks after handing it over, or another
+  design), and that cell passes.
+- [ ] **MUS-82: Resuming wakes doesn't wake a push session with held mail.** From MUS-69. While
+  wakes are paused, the live push is skipped and the mail stays unread. On resume, Claude's waiter
+  and the Codex bridge (MUS-74) wake for it, but nothing pushes it again, so a push session (a
+  plugin, or Claude with channels on) waits for its next turn. The suite's `pi` ×
+  `resume-wakes-held-mail` cell shows it. A channels-on Claude session likely has the same gap,
+  but no conformance fake models one yet. Done when: unread direct mail held by a pause is pushed
+  when wakes resume, and that cell passes.
 
 ## Moved to Rally
 

@@ -58,7 +58,7 @@ dialer (a1):
 ```bash
 muster-daemon link <code>       # redeems the invite at Murph's gate, stores the link
 muster-daemon links             # lists links and whether each is up
-muster-daemon unlink murph      # forgets it; on Murph, `muster-daemon unpair a1` revokes it
+muster-daemon unlink murph      # forgets it; on Murph, `muster-daemon unlink a1` revokes it (MUS-84)
 ```
 
 - **Peer address and certificate:** carried in the code, exactly as for a

@@ -85,10 +85,18 @@ On the daemon side (`crates/daemon/src/hooks.rs`), `handle_prompt_submit`
 re-runs the session registration, which repairs a missing roster row. Then
 `surface_unread` reads up to 20 unread **direct** messages, leases them, and
 renders the `<muster_inbox>` block. The block puts mail for the operator
-first, then peer mail framed as untrusted. The listener acks (writes
-`MessageRead`) only after the response has been written and flushed
-(`http_listener.rs`, `deferred_ack`). A timed-out or dropped hook therefore
-leaves the mail unread for the next hook. Delivery is at-least-once.
+first, then peer mail framed as untrusted. The shim's hooks ask to ack the mail
+themselves (`ack=client`, MUS-75), as the waiter does. The listener returns the
+ids in an `X-Muster-Ack` header and writes no `MessageRead`; the hook prints
+the block, and only then POSTs `/hook/ack` with the ids. A hook killed at its
+timeout, or a reply dropped on a tunnel hop, therefore leaves the mail unread:
+the lease keeps it from being offered twice for 60 s, and then the next hook
+gets it again. Delivery is at-least-once.
+
+Until MUS-75 the listener acked once it had written and flushed the reply
+(`deferred_ack`), which it still does for a caller that doesn't send
+`ack=client`. A flush doesn't prove the reply arrived, so a reply lost after
+it lost the mail.
 
 ### The waiter: waking an idle session
 
@@ -136,7 +144,9 @@ While a waiter holds `/hook/wait`, the session has a `WakeWatcher` record.
 The record lasts 2 minutes, is refreshed every minute, and is not persisted
 across daemon restarts (#43). `SendMessage` uses it in its result: a flagless
 session gets `live_push: unavailable` and `wake: expected` when a waiter is
-present or a live client is connected. Otherwise it gets `wake: unobserved`.
+present and wakes aren't paused, the same rule as the roster's `wake: waiting`.
+Otherwise it gets `wake: unobserved`. A live client alone doesn't count: the
+MCP shim of a session without the flag can't wake it (MUS-71).
 `wake: expected` means a wake path exists, not that a turn started.
 
 ## Differences that matter
@@ -146,9 +156,8 @@ present or a live client is connected. Otherwise it gets `wake: unobserved`.
   waiter keeps that delay to about 500 ms on an idle session.
 - **What "read" means.** With a push, "read" means the daemon reached the
   shim's WebSocket. It doesn't confirm Claude rendered it, which is how the
-  macOS case went wrong. With hooks, "read" means the text went back to
-  Claude Code: in the hook's HTTP response, or printed by the waiter before
-  its ack.
+  macOS case went wrong. With hooks, "read" means the hook or the waiter
+  printed the text for Claude Code, then acked it.
 - **Duplicates.** Both paths prefer a duplicate to a loss. Hooks can show a
   message twice if an ack is lost or a lease lapses. A push is not retried.
 - **Framing.** Both wrap peer text as untrusted. Hook mail arrives as a
@@ -159,8 +168,9 @@ present or a live client is connected. Otherwise it gets `wake: unobserved`.
   wake.
 - **Operator pause.** `controls::wakes_paused()` (MUS-10) stops both. The
   push is skipped (`push_to_client` returns false, so the result reads
-  `failed`), and `/hook/wait` hands out nothing. The prompt hooks still
-  deliver, because they don't wake a session.
+  `failed`), and `/hook/wait` hands out nothing. The Codex bridge also starts
+  no turns while the daemon's `WakePause` record says paused (MUS-74). The
+  prompt hooks still deliver, because they don't wake a session.
 - **Codex.** Codex can't take a push or an `asyncRewake`. It uses the same
   pull hooks plus the app-server bridge's `turn/start`
   ([codex-live-delivery.md](codex-live-delivery.md)).
