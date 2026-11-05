@@ -85,6 +85,9 @@ fn view(
                     "git_branch": s.git_branch,
                     "pid": s.pid,
                     "channels_enabled": s.channels_enabled,
+                    "harness": s.harness,
+                    // MUS-3: a claimed role, which reaches this session by name.
+                    "role": s.identity.as_deref().filter(|i| *i != "none"),
                 },
             })
         })
@@ -160,6 +163,8 @@ mod tests {
             project: None,
             channels_enabled: None,
             acks_pushes: None,
+            harness: None,
+            identity: None,
         })
     }
 

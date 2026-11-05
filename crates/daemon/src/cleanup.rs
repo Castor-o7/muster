@@ -126,6 +126,10 @@ pub async fn run_sweeper(ctx: MykoServerContext) {
     loop {
         interval.tick().await;
         sweep_once(&ctx, &mut state);
+        crate::succession::recheck_pending(
+            &crate::succession::internal_ctx(&ctx),
+            Utc::now().timestamp_millis(),
+        );
         sweep_rooms(&ctx);
         sweep_wake_watchers(&ctx);
         // Prune old messages on the first tick (boot cleanup) and every
@@ -274,6 +278,17 @@ fn sweep_once(ctx: &MykoServerContext, state: &mut SweepState) {
         .client_last_live
         .retain(|_, seen| now.duration_since(*seen) < CLIENT_MEMORY);
     let now_ms = Utc::now().timestamp_millis();
+    // MUS-3: what succession needs to tell a dead predecessor from a live one.
+    let rows: Vec<(Arc<str>, Option<Arc<str>>)> = session_store
+        .entries()
+        .materialize()
+        .get()
+        .into_iter()
+        .filter_map(|(id, item)| {
+            downcast_item::<Session>(&item).map(|s| (id, s.client_id.as_ref().map(|c| c.0.clone())))
+        })
+        .collect();
+    crate::succession::observe(&rows, &live_client_ids, now_ms);
     let waiting: HashSet<Arc<str>> = ctx
         .registry
         .get(WakeWatcher::ENTITY_NAME_STATIC)
@@ -468,6 +483,8 @@ mod tests {
             project: None,
             channels_enabled: None,
             acks_pushes: None,
+            harness: None,
+            identity: None,
         };
         let event = MEvent::from_item(&session, MEventType::SET, &Uuid::new_v4().to_string());
         ctx.apply_event_batch(vec![event])
@@ -535,6 +552,8 @@ mod tests {
             project: None,
             channels_enabled: None,
             acks_pushes: None,
+            harness: None,
+            identity: None,
         };
         let event = MEvent::from_item(&session, MEventType::SET, &Uuid::new_v4().to_string());
         ctx.apply_event_batch(vec![event])
