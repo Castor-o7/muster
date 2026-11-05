@@ -138,14 +138,24 @@ Two things, both intended:
   None of the Claude cells is a known failure. That's in Muster. The suite
   isn't part of this PR, and its operator-pause cell tests a Muster control
   that isn't in this PR.
-- **Zoo (`scripts/sandbox`): staged run done, full set to come.** A staged run
-  (1 repeat of `independent`, `approval-wait` and `contention`) passed 6 of 6
-  trials on both sides, with no resource violations. The full 3-repeat set, which
-  the comparison rests on, is next, and its result will replace this paragraph.
-  The Zoo drives Codex agents and has no Claude Code harness, so it checks
-  that Codex coordination is unchanged; it can't show the Claude delivery
-  itself. Both builds get the same scenarios, model and budgets, and we'll
-  attach the full set's evaluation before review.
+- **Zoo (`scripts/sandbox`): run, 3 repeats.** `independent`, `approval-wait` and
+  `contention`, baseline `94ecc24` against this branch, 18 trials. **The
+  candidate passed 9 of 9, the baseline 8 of 9**, and the candidate had no
+  resource violations, scope attempts, repeated work or failed turns.
+  - The baseline's failure: one `approval-wait` trial attempted publication
+    after the false approval claim.
+  - At n=3 we claim only that this change is no worse than the baseline in
+    every scenario, not that it fixes that failure.
+  - Turns, messages and tokens matched or were lower in `independent` and
+    `contention`.
+  - In `approval-wait` the candidate took one more turn and sent one more
+    message in 2 of 3 repeats (5,6,6 turns against 5,5,5). The evaluation
+    file's interpretation explains why, from the transcripts.
+
+  The Zoo drives Codex agents and has no Claude Code harness. So this shows
+  that Codex coordination is no worse with the change; it can't show the Claude
+  delivery itself. The evaluation is in `scripts/sandbox/evaluations/` on this
+  branch.
   - **The model differs from your past campaigns.** They used `gpt-6.1-sol`,
     which our ChatGPT login refuses. This run uses `gpt-6-luna` for both the
     baseline (`94ecc24`) and the candidate. So it compares the two builds with
