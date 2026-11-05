@@ -507,9 +507,40 @@ Rally.
   `SendMessage` reports `wake: expected` for any recipient with a live `client_id`
   (`crates/entities/src/send_message.rs`). So a Claude session whose MCP shim is connected, with no
   waiter and channels off, reads `wake: none` on the roster while a sender is told `wake: expected`.
-  Done when: the send result agrees with the roster, a Codex bridge's session still counts as a
-  wake path, and the conformance suite's `wake-none-not-expected` cells pass and leave
-  `KNOWN_FAILURES`.
+  The reverse mismatch exists too: the roster calls a Codex session `wake: none` though its
+  bridge wakes it, because the bridge leaves no trace on the row. Done when: the send result
+  agrees with the roster, a Codex bridge's session still counts as a wake path, and the
+  conformance suite's `wake-none-not-expected` cells pass and leave `KNOWN_FAILURES`.
+- [ ] **MUS-74: The Codex bridge ignores the operator's pause.** From MUS-69. `muster-daemon
+  pause` stops Claude's waiter (`/hook/wait` hands out nothing) and the live push, but
+  `codex_bridge.rs` sends `turn/start` for any unread direct message without checking it, so a
+  paused Codex session is still woken. Done when: the bridge doesn't wake while wakes are paused,
+  mail still arrives at the next hook, and the conformance suite's `codex` ×
+  `operator-pause-stops-wakes` cell passes.
+- [ ] **MUS-75: Mail is lost when a prompt hook's reply doesn't arrive.** From MUS-69. The hook
+  listener marks prompt-hook mail read once it has flushed the reply (`deferred_ack`). If the reply
+  is then lost, the mail is gone. That can happen when the harness kills the hook at its timeout
+  after the daemon wrote, or when a paired machine's tunnel breaks after the gate wrote.
+  `hook-delivery.md` says a dropped hook leaves the mail unread, which holds only for a failure
+  before the flush. It affects Claude's busy-path hooks and every Codex delivery. Done when: a
+  reply that doesn't reach the harness leaves the mail unread (a client ack like the waiter's, or
+  another design), and the suite's `lost-hook-reply-redelivers` cells and `codex` ×
+  `dropped-ack-redelivers` pass.
+- [ ] **MUS-76: Restarts under test, with Postgres, and Codex sessions after a restart.** From
+  MUS-69. The suite restarts the daemon without Postgres, so mail sent before a restart isn't
+  covered, and the roster empties. A Claude session's waiter re-registers it, but an idle Codex
+  session stays off the roster until its next hook, because the bridge registers a thread only on
+  `thread/started`. Done when: the suite runs the restart cells against Postgres in CI, covering
+  mail sent before the restart, and the bridge re-registers its threads when its daemon connection
+  comes back, so the `codex` × `daemon-restart-mid-wait` cell passes.
+- [ ] **MUS-78: A shim's first write can beat its registration despite MUS-72's hold.** From
+  MUS-69, against MUS-72. MUS-72 holds a shim's first write until its session is on the roster,
+  for at most 5 s (`REGISTER_WAIT`). Registration can take longer than that, and then the daemon
+  refuses the send with "has no session on the roster". The conformance suite hit it right after
+  a TLS daemon restart on Murph (2 of 8 runs), and on GitHub's runner with no restart at all, in
+  plain and TLS mode (#96's CI, two cells at 5.5 s). The suite retries that one refusal in its
+  MCP helper for now, naming this story. Done when: a shim's first write isn't refused while its
+  registration is still on its way, and that retry is removed.
 
 ## Moved to Rally
 
