@@ -118,18 +118,27 @@ impl Handler for CoordHandler {
             // come before the shim's registration lands (MUS-72), so hold it
             // briefly rather than fail it.
             wait_until_registered(&host).await;
-            match name.as_str() {
-                "set_status" => set_status(&host, &args).await,
-                "send_message" => send_message(&host, &args).await,
-                "broadcast" => broadcast(&host, &args).await,
-                "join_room" => join_room(&host, &args).await,
-                "leave_room" => leave_room(&host, &args).await,
-                "ack_messages" => ack_messages(&host, &args).await,
-                other => Err(ToolError {
-                    code: METHOD_NOT_FOUND,
-                    message: format!("unknown tool: {other}"),
-                    data: None,
-                }),
+            let first = dispatch_tool(&host, &name, &args).await;
+            // The hold can pass on a row still bound to an earlier connection
+            // for this session (one that died and the sweeper hasn't cleared),
+            // and the daemon then refuses the write, because it finds a caller
+            // by this connection's binding (MUS-79). A refused write stored
+            // nothing, so send the session again and retry it once.
+            match first {
+                Err(e) if !host.is_codex && is_unbound_refusal(&e.message) => {
+                    log::warn!(
+                        "[muster-shim] {name} was refused as unregistered; sending the session again and retrying once"
+                    );
+                    let snapshot = host.session.lock().unwrap().clone();
+                    if let Err(err) = crate::emit_session_set(&host.client, &snapshot) {
+                        log::warn!("[muster-shim] re-SET before a retry failed: {err}");
+                    }
+                    // The roster can't tell this connection's binding from an
+                    // older one, so give the SET a moment to land.
+                    tokio::time::sleep(UNBOUND_RETRY_AFTER).await;
+                    dispatch_tool(&host, &name, &args).await
+                }
+                other => other,
             }
         })
     }
@@ -402,6 +411,36 @@ async fn read_messages(
 // =============================================================================
 // Tool implementations (writes)
 // =============================================================================
+
+/// Run one tool call.
+async fn dispatch_tool(
+    host: &ToolHost,
+    name: &str,
+    args: &Value,
+) -> Result<ToolOutcome, ToolError> {
+    match name {
+        "set_status" => set_status(host, args).await,
+        "send_message" => send_message(host, args).await,
+        "broadcast" => broadcast(host, args).await,
+        "join_room" => join_room(host, args).await,
+        "leave_room" => leave_room(host, args).await,
+        "ack_messages" => ack_messages(host, args).await,
+        other => Err(ToolError {
+            code: METHOD_NOT_FOUND,
+            message: format!("unknown tool: {other}"),
+            data: None,
+        }),
+    }
+}
+
+/// How long a retried write waits for its re-SET to land (MUS-79).
+const UNBOUND_RETRY_AFTER: std::time::Duration = std::time::Duration::from_millis(750);
+
+/// Whether the daemon refused a write because this connection has no session
+/// bound to it (`resolve_caller`'s refusal), which re-sending the session fixes.
+fn is_unbound_refusal(message: &str) -> bool {
+    message.contains("has no session on the roster")
+}
 
 /// How long a write waits for this session to reach the roster (MUS-72).
 const REGISTER_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
@@ -1004,6 +1043,20 @@ where
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn only_the_unbound_refusal_is_retried() {
+        assert!(super::is_unbound_refusal(
+            "caller (client abc) has no session on the roster — re-SET your Session and retry"
+        ));
+        for other in [
+            "no session matches 'x' (by id, nickname, operator, or id-prefix) — check muster://roster",
+            "too many messages from this session: try again in 3 s",
+            "command timed out after 15000 ms (daemon unresponsive?)",
+        ] {
+            assert!(!super::is_unbound_refusal(other), "{other}");
+        }
+    }
 
     #[tokio::test]
     async fn an_early_write_waits_for_registration_then_goes_ahead() {
