@@ -652,6 +652,14 @@ Rally.
   a test's daemon binds its own ports (port 0) and reports them, or the tests retry a bind that
   loses the race; the e2e scripts take free ports per run, so two can run at once on one host;
   and no test fails on a port another process took.
+- [ ] **MUS-90: Push plugins aren't woken after a restart with Postgres.** From MUS-76. In CI,
+  `pi`, `opencode` and `prime-agent` × `daemon-restart-mid-wait-pg` fail ("not woken after the
+  restart; got None", about 26 s each), while the in-memory restart cell passes for all three.
+  Hypothesis, unproven: with Postgres the plugin's Session row survives the restart, still bound
+  to the old connection, and the plugin's reconnect doesn't rebind it, so the push finds no live
+  client. In memory the roster empties and the plugin registers fresh; the Claude shim re-SETs
+  its session on connect. Done when: a push plugin is woken by mail sent after a restart with
+  Postgres, and those cells pass.
 
 ## Moved to Rally
 
