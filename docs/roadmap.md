@@ -14,7 +14,7 @@ evidence from a real run by the person or team named.
 
 ## Status
 
-2026-11-05: 43 of 84 stories ticked, about 51%, not counting the 3 moved to Rally. Live on
+2026-11-05: 43 of 85 stories ticked, about 51%, not counting the 3 moved to Rally. Live on
 Murph since 2026-11-05 08:48: `edf5ea8` (PID 3759037), applied by the operator with
 `MUSTER_TLS=1` and checked by checksum. Besides everything before, it brings MUS-8, MUS-9,
 MUS-10, MUS-60, MUS-11's rustls and tokio updates, MUS-62 (upstream v0.54.1), MUS-64 (the
@@ -178,6 +178,10 @@ Merged and needing a live run: MUS-36 and MUS-37.
   broadcast reached 4 of 14 members, each miss failing as "session vanished from roster
   mid-broadcast". Done when: a session that leaves the roster leaves its rooms too, a
   broadcast counts only live members, and a test covers a session reaped during a broadcast.
+  Merged in #126 (`4f2e9fa`). The sweeper drops a member whose session has left the roster,
+  and starts only once myko has replayed Postgres. `BroadcastMessage` counts only members still
+  on the roster, shown by `a_session_off_the_roster_leaves_its_rooms` in `cleanup.rs` and by
+  `broadcast_message_command.rs`. Not yet seen live. #133 pins the restart order in CI.
 
 ## Phase 2: Security
 
@@ -621,12 +625,24 @@ Rally.
   session, and the bridge writes no `WakeWatcher`. Done when: the bridge refreshes a
   `WakeWatcher` for each thread it can wake, so the roster says `waiting` and a send says
   `expected` for it, and stops when it can't (paused per MUS-74, or the app-server is gone).
+- [ ] **MUS-94: Keep one wake path's end from clearing another's.** From the watchman's read of
+  #125 (MUS-77) on 2026-11-05. A session has one `WakeWatcher` row, keyed by its session id, and
+  `end_wait` deletes that row whoever calls it. So a stale Codex wake leader's `watching:false`
+  after a handoff clears the record the new leader just wrote, and the roster reads `none`
+  until the new leader's next refresh, up to 30 s. A bridge's `watching:false` can likewise
+  clear a record that a `/hook/wait` waiter holds for the same session. Done when: each wake
+  path keeps its own record, so ending one leaves the others, and the roster reads `waiting`
+  while any is live. Tests show that a stale leader's unwatch after a handoff leaves the new
+  leader's record, and that a bridge's `watching:false` leaves a held wait's record. Depends on MUS-77.
 - [ ] **MUS-74: The Codex bridge ignores the operator's pause.** From MUS-69. `muster-daemon
   pause` stops Claude's waiter (`/hook/wait` hands out nothing) and the live push, but
   `codex_bridge.rs` sends `turn/start` for any unread direct message without checking it, so a
   paused Codex session is still woken. Done when: the bridge doesn't wake while wakes are paused,
   mail still arrives at the next hook, and the conformance suite's `codex` ×
   `operator-pause-stops-wakes` cell passes.
+  Merged in #100 (`7e75534`). The bridge watches the daemon's `WakePause` and starts no turn while
+  wakes are paused. The `codex` × `operator-pause-stops-wakes` cell passes in CI. Not yet seen
+  live: it needs a paused daemon with a Codex session idle on it.
 - [x] **MUS-75: Mail is lost when a prompt hook's reply doesn't arrive.** From MUS-69. The hook
   listener marks prompt-hook mail read once it has flushed the reply (`deferred_ack`). If the reply
   is then lost, the mail is gone. That can happen when the harness kills the hook at its timeout
