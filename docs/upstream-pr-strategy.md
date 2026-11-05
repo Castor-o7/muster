@@ -7,6 +7,246 @@ stay in step with Muster. The per-commit decisions are in
 [upstream-inventory.md](upstream-inventory.md), and the text for each PR's
 description is in [muster-vs-marshal.md](muster-vs-marshal.md).
 
+## The next round, after #164 and #165 (2026-11-05)
+
+**#164 (Hooks, as `port/hooks-2a`) and #165 (the AGPL notice) are merged upstream**,
+by lucid-max, with a welcome from the ignition-is-go team. The operator approved this
+plan on 2026-11-05. It supersedes the landing order below wherever the two disagree.
+
+### What changed upstream
+
+- Marshal `main` is **`9b00c6f` (v0.58.0, #166, about 16:30 EST 2026-11-05)**. It was `8362227`
+  (v0.57.0) when this section was first written, 16 commits past `94ecc24`. Along with ours,
+  lucid-max merged lobo235's #131, #132, #134–#137, #140, #141 and #147.
+- Two of those overlap our layers. **#141** pulls the inbox into Claude turns with
+  plugin hooks, which sits next to `port/inbox-quoting`. **#140, #131 and #136**
+  cover keeping mail unread until it's shown, which is much of `port/durability-v2`.
+- **How the review ran.** lucid-max first requested changes at the receiving
+  boundary: `link::parse_response` accepted a body cut short of its Content-Length.
+  After that, each pushed head got an independent run of the 240 package tests, a
+  real-process takeover check, and native Windows CI on the exact head. A Windows
+  fixture fix, setting `APPDATA` as well as `XDG_CONFIG_HOME`, came out of that.
+  The version bumps are done upstream.
+- **Overlaps that no longer apply.** lobo235's PRs that the layers below were
+  measured against (#131, #132, #134–#137, #140, #141, #147) have merged, and our
+  #154 is closed. They're upstream main now, so the rebase deals with them and
+  they're not open PRs to coordinate with. Wherever the older sections below call
+  #140 or #141 an open "overlap", read "already in main". **Only two upstream PRs
+  are open:** lobo235's **#143** (validate room names and descriptions where rooms
+  are created), which is near Other's empty-`to` and room code, and trevorsargent's
+  **#59** (TUI session nicknames and agents-pane grouping), which is worth checking
+  against our nickname and roster changes before M2.
+- **What v0.58.0 (#166) overlaps.** It's mostly CI (`ci.yml` +80, `release.yml`,
+  actionlint, workflow validation) plus embedding-agent metadata (#104's idea,
+  `entities/src/session.rs` +52, `docs/embedding-agent-id.md`). It also edits
+  `daemon/src/hooks.rs` (+54 −45), `shim/src/main.rs` (+118 −29),
+  `shim/src/tools.rs` and `shim/src/codex_hook.rs`. So it touches **M2**
+  (`shim/src/main.rs`), **Other's `cargo-deny` audit** (`ci.yml`, which now
+  validates workflows and pins action references, so the audit job must follow
+  those rules), the **Codex bridge items** (`codex_hook.rs`), and anything that
+  adds Session fields (the Gate's machine fields). `docs/pr-followups.md` lists
+  ideas upstream kept from **its own** closed PRs (#91, #113 and #125 are lucid-max's, and
+  #104 is the pulse-agents app's), so it doesn't show how outside PRs are treated.
+  Our #164 is the evidence for that: it merged as our 38 commits squashed into one
+  (`f47c932`, with upstream's own merge-from-main `be59701` on the PR branch). So
+  upstream does merge outside PRs, but squashed, which leaves every `port/*` branch
+  on a base whose hooks commits aren't ancestors of upstream main (see "Live cuts").
+- **Reference checkout:** `~/src/marshal` on Murph is a clean checkout of
+  ignition-is-go/marshal main, with remotes `upstream` and `castor` (the
+  Castor-o7/marshal fork that PR heads come from). Use it for upstream code.
+  `~/src/muster` is Muster, not Marshal.
+- Levi `main` is still `aed6027` (v0.9.5), so L1–L3 are current. Castor-o7/levi now
+  exists as a fork of ignition-is-go/levi, which was what held L1.
+
+### Live cuts (checked by cobalt-bream, 2026-11-05 ~16:45)
+
+Every `port/*` branch is still on `94ecc24`. The live cut of each layer is the
+newest head, and these form one stack, each containing the ones above it:
+
+| Layer | Live cut | Head | Sits on | Superseded, kept, not to be used |
+|---|---|---|---|---|
+| Hooks (merged as #164) | `port/hooks-2a-offer` | `62552e6` | `94ecc24` | `hooks`, `hooks-v2`, `hooks-v3`, `hooks-ack`, `hooks-2a` (`7f0a56c`, a sibling of the offered head) |
+| Inbox quoting (proposal only) | `port/inbox-quoting-2` | `3290e17` | hooks-2a-offer | `inbox-quoting` |
+| Durability | `port/durability-v3` | `6e63bb1` | inbox-quoting-2 | `durability`, `durability-v2` |
+| Other | `port/other-v4` | `0784ac2` | durability-v3 | `other`, `other-v2`, `other-v3` |
+| Gate | `port/gate-v3` | `36a3c11` | other-v4 | `gate`, `gate-v2` |
+| M2 | `port/terminal-cmds-v2` | `4a53e00` | hooks-2a-offer (**not** the stack above) | `terminal-cmds` |
+
+The older cuts don't contain the newer ones. Each `-vN` was rebuilt, not extended. The
+per-layer tables further down still name the older cuts. Read this table instead.
+
+**`hooks-2a-offer` is in upstream as the squash `f47c932`.** Its commits will never be
+ancestors of upstream main. So rebasing a layer means
+`git rebase --onto upstream/main <layer below> <layer>`, never a plain rebase.
+
+**M2 doesn't need Step 0.** `port/terminal-cmds-v2` has 10 commits above
+`hooks-2a-offer`, but only three are M2: `481f18a` (`tell`/`all`/`roster`), `2211da4`
+(plugin docs) and `4a53e00` (roster fix). The other seven are hooks follow-ups and the
+Zoo campaign for #164. One of them, `7208485` (a body can't forge the inbox framing), is
+the inbox-quoting default change, which goes to upstream as a proposal only. A trial
+cherry-pick of the three onto `9b00c6f` had one conflict, in `shim/src/main.rs`.
+Upstream's new `usage()` (`--help`, from #135) sits where M2 adds `run_terminal_send` and
+`daemon_address`. The fix is to keep both and list `tell`, `all` and `roster` in
+`usage()`. So M2 can be cut fresh on `9b00c6f` as `port/terminal-cmds-v3`, ahead of
+and independent of Muster's catch-up. That's the recommendation, and it's ultra-dune's
+call. The trial built nothing and pushed nothing.
+
+### Step 0: catch up and re-inventory (nothing goes upstream)
+
+1. Muster takes in v0.55–v0.57, the same way MUS-62 (#84) took in v0.54.
+2. Rebase every live `port/*` branch onto upstream main (`9b00c6f` as of 16:30).
+3. Check each remaining layer against what upstream merged, and drop, shrink or
+   rework what they now cover. Inbox quoting may turn into a small change on top
+   of #141, or disappear. Durability is cut down to what #140, #131 and #136 leave
+   uncovered. Record each decision in [upstream-inventory.md](upstream-inventory.md).
+
+### The new order: additive first (operator, 2026-11-05)
+
+**Marshal: additive changes only for now.** That means new code nothing existing
+calls, or code that runs only when someone opts in, so a Marshal user who changes
+nothing sees no difference. Default changes aren't sent as PRs. They're listed for
+upstream to choose (below). Which part is which comes from "Additive features vs
+conflicts" in [muster-vs-marshal.md](muster-vs-marshal.md). Still one PR at a time,
+each opened after the one before it has merged:
+
+1. **OPEN upstream as [ignition-is-go/marshal#168](https://github.com/ignition-is-go/marshal/pull/168)** (opened 2026-11-05 at the operator's direct OK, head `3af92d7`, base `main`). `port/terminal-cmds-v3` is frozen while it's under review: only fixes asked for in review, each cleared with the commissioner first.
+   **M2, the terminal commands** (`marshal-shim tell`/`all`/`roster`;
+   [upstream-pr-m2.md](upstream-pr-m2.md); the live cut is `port/terminal-cmds-v2`).
+   New subcommands that nothing calls.
+2. **Durability, the additive part only:** the optional `idempotency_key` on send,
+   and read state for senders. It leaves out keeping mail for a reaped session and
+   keeping a waiting session through a dropped connection, since both change
+   defaults.
+3. **Other, the additive part only:** the `cargo-deny` dependency audit, plus
+   whatever of `marshal-shim send`/`roster` M2 doesn't already cover. It leaves out
+   refusing an empty `to` and the 5 s first-write wait.
+4. **myko first: the `RequestFilter` hook**, a small additive PR to ignition-is-go/myko.
+   It's an optional filter that runs before myko handles a request, and nothing
+   changes when none is set. It replaces vendoring myko-server 6.11.5. The Gate
+   can't open until myko has released it.
+   **The myko PR plan (commissioner, 2026-11-05 ~16:35):**
+   - **The change.** Taken from `d4165f5`, minus the vendoring: about 37 changed lines in
+     `libs/myko/server/src/router.rs` and `lib.rs`. It adds `router::RequestFilter`, an
+     `Arc<dyn Fn(&HttpRequestHead, SocketAddr) -> Result<(), (u16, &str)>>` that runs on
+     each parsed request head before any route, and `MykoServerBuilder::with_request_filter`.
+     With no filter set, nothing changes. myko `main` (v6.11.6) has no changes in
+     `libs/myko/server/src` since 6.11.5, so the patch applies as written.
+   - **The overlap to settle first.** trevorsargent's **ignition-is-go/myko#129** (open,
+     opened 2026-11-05, "authenticated gateways and persisted permissions") rewrites the
+     same files: `router.rs` +195, `lib.rs` +34, `ws_handler.rs`, and `mcp/*`. It adds an
+     opt-in `with_auth_provider` with a pluggable `Authenticator`. That could cover the
+     gate's "401 without the token" check, as a bearer credential. It doesn't cover the
+     "403 for a browser `Origin`" check, because `Credentials` carries only `bearer`. So
+     opening our filter now would compete with #129 in the same lines. **Recommendation:**
+     the operator asks the myko maintainers which they'd prefer: a small
+     request-head filter on top of #129, or an `Origin` check (or the request head) made
+     available to #129's gateway. Then build on #129 rather than race it. The Gate is
+     several PRs away, so waiting costs nothing now.
+   - **Decided (operator, 2026-11-05): trevorsargent leads.** We don't open our own
+     filter PR. We follow #129: watch it, and when it merges, build the Gate on its
+     `with_auth_provider`/`Authenticator` for the token check. If the browser-`Origin`
+     check still needs the request head after #129 lands, that's a small follow-up
+     built on #129, and only if trevorsargent and the myko maintainers want it. Any
+     comment on #129 comes from the operator. Until #129 merges, the Gate waits, and
+     the steps before it (M2, durability, Other) don't depend on it.
+   - **Prerequisites.** A **Castor-o7/myko fork**, which doesn't exist yet. Creating it is
+     the operator's action. A reference clone is at `~/src/myko`, where the `pr-129` branch
+     is fetched. myko's rules (`AGENTS.md`): run checks with `cargo flux run`, run tests with
+     `RUST_TEST_THREADS=1`, comments explain why, and TODOs carry initials. No version bump,
+     since lucid-release does it.
+   - **Then the Gate** bumps `myko-server` to the release that includes the hook, and drops
+     `vendor/`, `[patch.crates-io]`, `MARSHAL-PATCH.md`, and the vendored-licence notes in
+     `deny.toml` and the README.
+
+5. **Gate**, in two or three PRs: TLS, then pairing, then the myko listener. It's
+   additive while `--tls` isn't given, and plain mode stays the default. It depends
+   on the released myko with the `RequestFilter` hook, and vendors nothing.
+6. **Later, still additive:** daemon links (TLS only) and the conformance suite
+   (test only).
+
+**Not sent as PRs: the default changes.** They go upstream as **one issue**
+(lucid-max's answer 3), drafted in [upstream-issue-defaults.md](upstream-issue-defaults.md).
+The operator files it. The commissioner checked each item against `9b00c6f`:
+- **Still real:** refusing an empty `to` (`resolve_recipient("")` prefix-matches every
+  session, so with one session the message goes to its sender); the first-write
+  hold; keep-alive while a waiter is held (the WS reap on `STALE_AFTER` doesn't
+  check `WakeWatcher`); and MUS-76's Codex re-register, not yet traced in
+  upstream's `codex_bridge`.
+- **Optional:** inbox quoting. #141 already escapes bodies and frames them as
+  untrusted.
+- **Dropped:** keeping mail for a reaped session. Upstream already keeps DMs and read
+  marks through the DEL, and only `MESSAGE_TTL` (14 days) removes them.
+
+**Levi: on hold.** L1, L2 and L3 are already open upstream as ignition-is-go/levi
+**#43** (the review gate), **#44** (`levi check-events`) and **#45**
+(`levi session-start`). Nothing more goes to Levi until those have merged.
+
+### The check before each PR, modelled on upstream's review
+
+- Look for receiving-boundary gaps: short reads, Content-Length, framing, and acks
+  sent for mail that was never shown.
+- Rerun the tests on the exact head being sent, from a clean checkout, and keep the
+  raw log.
+- Windows CI green, with each fixture's config isolated (`APPDATA` as well as
+  `XDG_CONFIG_HOME`).
+- No version bumps in our PRs.
+
+### lucid-max's answers (given in person to the operator, 2026-11-05)
+
+The operator put the questions below to lucid-max in person. These answers settle
+them, and they override anything the rest of this doc says:
+
+| # | Question | Answer |
+|---|---|---|
+| 1 | One small additive PR at a time? | **Yes.** |
+| 2 | Squash-friendly branches, or squash before opening? | **Yes to both**: keep branches squash-friendly, and squash before opening if necessary. |
+| 3 | Default changes: one issue or one each? | **One issue** listing them all. |
+| 4 | Wait for #143 and #59, or build on them? | **Build on them.** |
+| 5 | The Gate: the split, a myko hook or vendored myko-server, port 6158 | **Not vendored** (the operator's decision, 2026-11-05, replacing an earlier "vendor" reading). The `RequestFilter` change goes upstream to **ignition-is-go/myko** as its own small additive PR first. The Gate then depends on the myko release that includes it, through an ordinary version bump in `Cargo.toml`, with no copy of myko-server in Marshal. The split and port 6158 are still open, so the TLS → pairing → myko-listener split stands as our proposal. |
+| 6 | Zoo run for additive PRs with no agent-facing text? | **Not needed.** |
+| 7 | Fork-PR Actions approval? | **Yes, but don't wait for it.** Open PRs without waiting for fork CI. |
+
+What follows from these:
+- M2 (`port/terminal-cmds-v3`) needs no Zoo run, and doesn't wait on fork CI.
+  Squash it to one commit before opening if its history is noisy.
+- The default changes go up as a single issue. Draft: [upstream-issue-defaults.md](upstream-issue-defaults.md) (owner:
+  the commissioner).
+- Other's room and `to` work and our roster and nickname work are built on top of
+  #143 and #59, not held for them.
+
+### For the operator to raise with lucid-max
+
+A draft for the operator to send, in his own words:
+
+1. **Thanks** for reviewing and merging #164 and #165.
+2. **Shape.** Is one small additive PR at a time still what you want? Next is the
+   `marshal-shim tell`/`all`/`roster` terminal commands, new subcommands only, about
+   560 lines.
+3. **Squash merges.** #164 merged as a squash. Should we keep our PR branches
+   squash-friendly, or would you rather we squash before opening?
+4. **Default changes.** We have behaviour changes we won't send as PRs: inbox
+   quoting, keeping mail for reaped sessions, keep-alive for waiting sessions,
+   refusing an empty `to`, a first-write wait, and Codex re-register after a
+   restart. Would you like them as one issue listing them all, or one issue each? Or
+   would you rather pick them up yourselves, as `docs/pr-followups.md` does with your
+   own closed PRs?
+5. **Overlap with open PRs.** #143 (room validation) and #59 (TUI nicknames) are
+   near our Other and roster work. Should we wait for them, or build on them?
+6. **The Gate.** Opt-in TLS (`--tls`), plain stays the default. How would you like it
+   split (TLS, then pairing, then the myko listener)? Would you take a request-filter
+   hook in ignition-is-go/myko first, rather than a vendored myko-server copy? And is
+   port 6158 OK for myko's own listener?
+7. **Zoo (G8).** Is a Zoo run still required for additive PRs that change no
+   agent-facing text, such as the terminal commands and the dependency audit? It
+   needs Codex on a1, which isn't installed.
+8. **Fork CI.** Could fork-PR Actions be approved for our PRs, so Windows CI runs on
+   the exact head?
+
+### Who does it
+
+ultra-dune takes Step 0 and the rebases (see "Who does what" below). The lamplighter deploys each catch-up
+as it lands in Muster. The operator sends each PR, as before.
+
 ## Ground rules
 
 These come from Phase 5 of [roadmap.md](roadmap.md) and hold for every PR:
@@ -32,7 +272,7 @@ These come from Phase 5 of [roadmap.md](roadmap.md) and hold for every PR:
 
 | | |
 |---|---|
-| Upstream `main` | `94ecc24` (v0.54.1, 2026-11-04 22:30 UTC), not moved since |
+| Upstream `main` | was `94ecc24` (v0.54.1) when this table was written; now `9b00c6f` (v0.58.0), see "The next round" above |
 | Muster `main` | `3fafe4a` (#124), caught up with `94ecc24` (MUS-62, #84) |
 | Port stack | Branches in Castor-o7/muster, all on `94ecc24`, each stacked on the one before |
 | Phase 5 goals | G1 (catch-up), G2 (inventory), G3 (optional TLS), G4 (hook delivery doc) and G5 (daemon links) are done. **G7** (MUS-67, the write-up) is this update. **G8** (MUS-68, the Zoo runs): the Hooks plan is written (`docs/zoo-plan-hooks.md`), but no run has happened. It is **blocked until Codex is installed on a1**, because the Zoo drives Codex agents only |
@@ -324,7 +564,8 @@ ledger of the newer entries. This table summarizes the fixes that matter:
 
 | Role | Work |
 |---|---|
-| peppy-skate | Builds and rebases the port layers, and forward-ports fixes |
-| Lamplighter (tangerine-wombat) | Keeps this strategy and the comparison docs current, tracks upstream's open PRs, and runs Murph-side evidence |
-| The watchman | Reads each layer and its description before it's offered |
+| ultra-dune | Step 0: the catch-up branch, the port/* rebases, and the additive re-inventory (agreed by frank-crocodile and fiery-snapper, 2026-11-05) |
+| fiery-snapper | Reads the catch-up, with an independent reviewer |
+| Lamplighter (robust-bunting, Murph) | Keeps this strategy current, tracks upstream's open PRs, and deploys each catch-up on Murph |
+| The watchman (frank-crocodile on Murph tonight) | Reads each layer and its description before it's offered |
 | The operator | Talks to upstream, decides each PR and sends it, and decides the Zoo spend and the questions above |
