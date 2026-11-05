@@ -141,12 +141,22 @@ jobs:
       # (#134's run hit the step limit), so the .debs are cached (MUS-91). On a
       # cache hit the install never touches the mirror. The key carries the
       # runner image's version, so a new image fetches its own packages once.
+      # ImageOS and ImageVersion are set in the runner's shell environment, not
+      # in the workflow's `env` context, so `${{ env.ImageOS }}` is empty there
+      # (#137's first run keyed on `mingw-debs-Linux---...`). This step reads
+      # them from the shell and hands them to the key.
+      - name: Read the runner image
+        id: runner-image
+        run: |
+          test -n "$ImageOS" && test -n "$ImageVersion"
+          echo "image=$ImageOS-$ImageVersion" >> "$GITHUB_OUTPUT"
+          echo "runner image: $ImageOS-$ImageVersion"
       - name: Cache the mingw packages
         id: mingw-cache
         uses: actions/cache@v4
         with:
           path: ~/mingw-debs
-          key: mingw-debs-${{ runner.os }}-${{ env.ImageOS }}-${{ env.ImageVersion }}-gcc-mingw-w64-x86-64-v1
+          key: mingw-debs-${{ runner.os }}-${{ steps.runner-image.outputs.image }}-gcc-mingw-w64-x86-64-v1
       - name: Install the mingw C cross-compiler
         timeout-minutes: 8
         run: |
