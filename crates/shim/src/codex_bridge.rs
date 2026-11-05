@@ -2144,10 +2144,6 @@ fn strip_muster_thread_name_prefix<'a>(name: &'a str, nickname: &str) -> &'a str
     base
 }
 
-/// Direct, unread, hook-owned sessions on this host. Hook-owned Codex sessions
-/// have no WS `client_id`; Claude shims do. The app-server itself is the final
-/// authority: a plain Codex thread is not present there and the wake request
-/// simply fails while its durable inbox remains untouched.
 /// Whether the operator has paused wakes. No record yet (the daemon hasn't
 /// published one, or the view hasn't loaded) reads as not paused, as the
 /// roster reads it.
@@ -2155,6 +2151,10 @@ fn wakes_paused(pauses: &[Arc<muster_entities::WakePause>]) -> bool {
     pauses.iter().any(|p| p.paused)
 }
 
+/// Direct, unread, hook-owned sessions on this host. Hook-owned Codex sessions
+/// have no WS `client_id`; Claude shims do. The app-server itself is the final
+/// authority: a plain Codex thread is not present there and the wake request
+/// simply fails while its durable inbox remains untouched.
 fn unread_local_codex_sessions(
     sessions: &[Arc<Session>],
     messages: &[Arc<Message>],
