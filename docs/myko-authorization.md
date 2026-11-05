@@ -109,6 +109,11 @@ else. Two ways to know:
   It could also be in-process: MUS-59 noted that myko's per-connection handlers are
   public.
 
+**Recommendation: the internal listener.** Its trust doesn't depend on how well each OS
+keeps one process from reading another's memory, which is still to check on both a1 and
+Murph. The in-process form avoids a socket file altogether. The per-boot secret is the
+fallback if the listener turns out too intrusive for the patch.
+
 On any other connection, the filter **refuses** a request that carries
 `X-Muster-Machine` or `X-Muster-Gate`, rather than ignoring them, so a spoof is logged.
 Without them, the principal is `local`, which is what the daemon's own host gets today. In
