@@ -95,7 +95,12 @@ What the watchman does:
 6. **Checks that work is real.** The watchman reads the diff at the head itself
    ("Verifying a story"), or assigns another team, never the author's, to assess
    it and report. Either way, the watchman makes the call and confirms the head,
-   CI and "done when" before marking it Verified or merging.
+   CI and "done when" before marking it Verified or merging. While a watchman is
+   designated, an assigned team's assessment informs the watchman's read but
+   doesn't replace it: the merge still waits for the watchman's own read at the
+   head being merged (in Rally, its own `rally verify`), as the operator ruled on
+   2026-11-04. The assessment lets the watchman read with another team's findings
+   in hand, and spreads the deep checking across teams.
 7. **Says when the roadmap runs out.** When a team has no ready story left, the
    watchman tells the operator, and the team proposes new stories from what it
    found along the way, for the operator to agree.
