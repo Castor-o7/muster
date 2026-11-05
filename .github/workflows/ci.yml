@@ -62,7 +62,7 @@ jobs:
       # install scripts.
       - name: Install the plugins' locked dependencies
         run: |
-          for plugin in muster-pi muster-opencode; do
+          for plugin in muster-pi muster-opencode muster-prime-agent; do
             (cd "plugins/$plugin" && npm ci --workspaces=false --no-audit --no-fund --ignore-scripts)
           done
       # MUS-69: every harness against one scenario table, with the real
