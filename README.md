@@ -35,7 +35,7 @@ each team's progress.
 
 Muster is a fork of [Marshal](https://github.com/ignition-is-go/marshal) by
 ignition-is-go, used under its MIT OR Apache-2.0 licence, and it can run side by side with
-Marshal: it has its own binaries (`muster-shim`, `muster-daemon`), ports (6255 to 6257),
+Marshal: it has its own binaries (`muster-shim`, `muster-daemon`), ports (6255, 6256 and 6258),
 `MUSTER_*` variables and `~/.config/muster`. Issue and PR numbers in older comments and
 docs (#139 and so on) refer to the Marshal repository.
 
@@ -101,7 +101,6 @@ The daemon runs in one of two modes (MUS-64).
 |---|---|---|---|
 | 6255 | `MUSTER_BIND` | `127.0.0.1:6255` | **The gate**. TLS connections must present a per-machine access token; plain HTTP from the daemon's own host (loopback) must present the local token; plain HTTP from another machine gets `426` and is told to pair |
 | 6256 | `MUSTER_HOOK_BIND` | `127.0.0.1:6256` | The plain-HTTP hook listener; requires the local token, refuses browser origins |
-| 6257 | `MUSTER_INTERNAL_BIND` | `127.0.0.1:6257` | The old local-gate port, kept for one release so sessions configured for `ws://localhost:6257` keep working; new setups use 6255 |
 | 6258 | `MUSTER_MYKO_BIND` | `127.0.0.1:6258` | myko's own WebSocket/MCP listener, behind the gate; admits only what a gate forwards, refuses browser origins |
 
 To accept sessions from other machines, turn TLS on, set `MUSTER_BIND=0.0.0.0:6255` (or a LAN/mesh address), and pair each machine (below). Tools running on the daemon's own host, like the shim and the TUI, connect to `ws://localhost:6255` in either mode. With TLS on they add the **local token**: the daemon writes it owner-only to `~/.config/muster/local-token` (under `$XDG_CONFIG_HOME` if set) on first start, and the shim and TUI read it from there. A process that can't read that file gets `401`, and any request naming a browser `Origin` gets `403`, on the hook listener, the gate's local path, and myko's own listener. myko's listener admits only requests a gate forwarded, through a request filter in the patched myko-server under `vendor/myko-server` (MUS-59). Loopback isn't the trust boundary: a reverse proxy on the host forwards from loopback too. The local token is. The web UI needs TLS off for now.

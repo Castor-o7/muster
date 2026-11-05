@@ -23,11 +23,6 @@ use std::{
 /// other hosts. Port 6255 is distinct from myko's default 5155 and Marshal's 6155.
 const DEFAULT_BIND: &str = "127.0.0.1:6255";
 
-/// The local gate's old port, kept with TLS on for one release so sessions
-/// configured for `ws://localhost:6257` keep working through a restart
-/// (MUS-64). Local tools now use 6255, where the gate takes them too.
-const DEFAULT_INTERNAL_BIND: &str = "127.0.0.1:6257";
-
 /// The plain-HTTP hook listener (the `/hook/*` endpoints), also behind the
 /// gate. Keep it on loopback (`MUSTER_HOOK_BIND`) — see `http_listener`.
 const DEFAULT_HOOK_BIND: &str = "127.0.0.1:6256";
@@ -434,7 +429,14 @@ async fn run_daemon(tls_flag: bool) -> Result<()> {
         .await;
     }
 
-    let bind_addr = resolve_bind("MUSTER_INTERNAL_BIND", DEFAULT_INTERNAL_BIND)?;
+    // The local gate's old port (6257) was kept for one release (MUS-64) and
+    // retired in MUS-70: local tools use the gate's own port.
+    if std::env::var_os("MUSTER_INTERNAL_BIND").is_some() {
+        log::warn!(
+            "muster-daemon: MUSTER_INTERNAL_BIND is ignored: the 6257 local gate was retired; \
+             local tools connect to {public_bind}"
+        );
+    }
     let myko_bind = resolve_bind("MUSTER_MYKO_BIND", DEFAULT_MYKO_BIND)?;
     let local_token = daemon::credentials::ensure_local_token()?;
     log::info!(
@@ -464,8 +466,8 @@ async fn run_daemon(tls_flag: bool) -> Result<()> {
     };
 
     log::info!(
-        "muster-daemon: gate on {public_bind} (TLS), local gate on ws://{bind_addr}, \
-         myko on ws://{myko_bind}, hooks on http://{hook_bind}"
+        "muster-daemon: gate on {public_bind} (TLS and local tools), myko on \
+         ws://{myko_bind}, hooks on http://{hook_bind}"
     );
     let gate = daemon::gate::run(daemon::gate::GateConfig {
         bind: public_bind,
@@ -475,19 +477,12 @@ async fn run_daemon(tls_flag: bool) -> Result<()> {
         local_token: local_token.clone(),
         links: Some(links),
     });
-    let local_gate = daemon::gate::run_local(daemon::gate::LocalGateConfig {
-        bind: bind_addr,
-        myko: myko_bind,
-        state_dir,
-        local_token,
-    });
     // The gate is the daemon's only public surface: if it can't bind or
     // stops, exit rather than keep running unreachable. The same goes for the
     // hook listener, without which no session can be woken.
     serve_until_stopped(server, stop_rx.0, async move {
         tokio::select! {
             r = gate => exit_listener_stopped(&format!("gate on {public_bind}"), r),
-            r = local_gate => exit_listener_stopped(&format!("local gate on {bind_addr}"), r),
             r = hooks => exit_listener_stopped(&format!("hook listener on {hook_bind}"), r),
         }
     })
