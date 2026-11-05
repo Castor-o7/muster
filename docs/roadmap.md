@@ -608,6 +608,14 @@ Rally.
   `resume-wakes-held-mail`) show it. A channels-on Claude session likely has the same gap,
   but no conformance fake models one yet. Done when: unread direct mail held by a pause is pushed
   when wakes resume, and those cells pass.
+- [ ] **MUS-88: Tests pick ports without races.** From MUS-69 and an e2e run on Murph. The
+  conformance suite and the daemon's e2e tests pick a free port by binding port 0, reading the
+  port, and closing the socket, then hand the number to a daemon that binds it later. In between,
+  another process can take it. The suite hit it once on 2026-11-05 (`claude-tls` ×
+  `duplicate-shown-at-most-once`: the daemon's hook listener got "Address already in use" and the
+  daemon didn't come up), and peppy-skate hit e2e port collisions on Murph the same night. Both
+  passed on rerun. Done when: a test's daemon binds its own ports (port 0) and reports them, or
+  the tests retry a bind that loses the race, so no test fails on a port another process took.
 
 ## Moved to Rally
 
