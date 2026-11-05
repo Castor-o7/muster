@@ -33,7 +33,8 @@ checked as well as what the recipient sees.
 | 2 | `busy-gets-it-at-next-hook` | A busy session's next hook or turn carries the message, and the one after doesn't. |
 | 3 | `dropped-ack-redelivers` | When a delivery's ack is lost, the message comes again at the session's next delivery point once the lease lapses, and not after an ack that arrives. Claude's waiter acks with its own `/hook/ack`, which the proxy drops. Codex has no ack request: the daemon acks a hook's reply once it has flushed it, so the proxy loses the reply instead. |
 | 3b | `lost-hook-reply-redelivers` | When the reply to a busy session's prompt hook is lost after the daemon sent it, as when a harness kills a hook at its timeout, the message comes again at the next hook. |
-| 4 | `duplicate-shown-at-most-once` | A send retried with the same idempotency key is one message, shown once. Mail the waiter delivered isn't injected again by the next hook. |
+| 4 | `duplicate-shown-at-most-once` | A send retried with the same idempotency key is one message, shown once. A wake shows its message once, not once from the push and again from the woken turn's drain. Mail a wake delivered isn't injected again by the next hook. |
+| 4b | `burst-both-delivered` | Two messages sent back to back to an idle session both reach the model, between the wake and the next delivery point. A harness that drains the inbox while handling the first must show what it drains. |
 | 5 | `daemon-restart-mid-wait` | The daemon restarts (SIGTERM, as systemd stops it) while the session waits. The session still wakes on mail sent after the restart. |
 | 6 | `operator-pause-stops-wakes` | With `muster-daemon pause`, mail doesn't wake an idle session but still arrives at the next hook. |
 | 6b | `resume-wakes-held-mail` | Mail sent while wakes are paused doesn't wake the session, and resuming alone wakes it with that mail, with no new message. |
@@ -153,7 +154,8 @@ check:
   delivery.
 - **A user turn runs the `chat.message` hook**, and parts the hook adds are
   shown to the model. muster-opencode drains the inbox there, so the fake runs
-  it at each busy boundary.
+  it at each busy boundary, and after a wake, because the plugin's
+  `session.prompt` is itself a user turn.
 - **The `event` hook gets `session.created` and `session.idle`** with the
   session id where `eventSessionId` looks for it.
 - **A lost delivery** means `session.prompt` rejects after the plugin has
@@ -225,15 +227,16 @@ fixtures with recorded ones.
    fixture README to say the files are recorded, and update the version above.
 5. Run the suite. If a cell changes, the change is a finding: report it.
 
-For Pi and opencode, the pinned thing is the plugin API, not recorded data.
-For opencode, when `@opencode-ai/plugin` changes in its lockfile, check the
-`Plugin` input and `Hooks` types against `conformance-driver.ts` the same way.
-
 For Pi, the pinned thing is the extension API, not recorded data. When
 `@earendil-works/pi-coding-agent` changes in `plugins/muster-pi/package-lock.json`,
 check its `ExtensionAPI` types against the stand-in in `conformance-driver.ts`
 (`on`, `sendMessage`, `registerTool`, `registerCommand`, and the events the
 extension handles), update the version above, and run the suite.
+
+For opencode, the pinned thing is the plugin API, likewise. When
+`@opencode-ai/plugin` changes in `plugins/muster-opencode/package-lock.json`,
+check its `Plugin` input and `Hooks` types against that plugin's
+`conformance-driver.ts`, update the version above, and run the suite.
 
 For Codex, with Codex installed:
 

@@ -1263,6 +1263,7 @@ const SCENARIOS: &[(&str, Scenario)] = &[
     ("dropped-ack-redelivers", dropped_ack_redelivers),
     ("lost-hook-reply-redelivers", lost_hook_reply_redelivers),
     ("duplicate-shown-at-most-once", duplicate_shown_at_most_once),
+    ("burst-both-delivered", burst_both_delivered),
     ("daemon-restart-mid-wait", daemon_restart_mid_wait),
     ("operator-pause-stops-wakes", operator_pause_stops_wakes),
     ("resume-wakes-held-mail", resume_wakes_held_mail),
@@ -1377,11 +1378,47 @@ fn duplicate_shown_at_most_once(c: &mut Cell) -> Result<(), String> {
     c.harness.arm_idle();
     let t2 = token("dup-wake");
     c.send(&t2)?;
-    if !contains(&c.harness.wait_for_wake(WAKE_WITHIN), &t2) {
-        return Err("the waiter didn't deliver the second message".into());
+    let woke = c.harness.wait_for_wake(WAKE_WITHIN).unwrap_or_default();
+    match woke.matches(&t2).count() {
+        0 => return Err("the wake didn't deliver the second message".into()),
+        1 => {}
+        // As when a push's text and the woken turn's inbox drain both carry it.
+        n => {
+            return Err(format!(
+                "the wake showed the second message {n} times, not once"
+            ));
+        }
     }
     if contains(&c.harness.busy_boundary(), &t2) {
         return Err("mail the waiter delivered was injected again by the next hook".into());
+    }
+    Ok(())
+}
+
+/// Scenario 4b: Two direct messages sent back to back to an idle session both
+/// reach the model, between the wake and the next delivery point. A harness
+/// that drains the inbox while handling the first must show what it drains,
+/// not just ack it.
+fn burst_both_delivered(c: &mut Cell) -> Result<(), String> {
+    c.harness.arm_idle();
+    let (t1, t2) = (token("burst-a"), token("burst-b"));
+    c.send(&t1)?;
+    c.send(&t2)?;
+    let woke = c.harness.wait_for_wake(WAKE_WITHIN).unwrap_or_default();
+    // Whatever the wake didn't carry must come at the next delivery point.
+    thread::sleep(Duration::from_millis(500));
+    let next = c.harness.busy_boundary().unwrap_or_default();
+    let seen = format!("{woke}\n{next}");
+    let missing: Vec<&str> = [&t1, &t2]
+        .into_iter()
+        .filter(|t| !seen.contains(t.as_str()))
+        .map(String::as_str)
+        .collect();
+    if !missing.is_empty() {
+        return Err(format!(
+            "never shown: {missing:?} (the wake showed {:?}, the next delivery point {:?})",
+            woke, next
+        ));
     }
     Ok(())
 }
