@@ -225,14 +225,14 @@ fn handle_ack(body: &[u8], ctx: &Arc<MykoServerContext>) -> HookOutcome {
 /// The listener's `machine_may_act` has already checked that the caller may act
 /// for this session. A session that isn't on the roster gets no record, and
 /// while wakes are paused none is kept, since the bridge starts no turns then.
-/// A bridge name the daemon will key a record by: 1 to 128 characters from
-/// `[A-Za-z0-9._-]`. Any other name gets the shared `bridge` record, so a bridge
+/// A bridge name the daemon will key a record by: 1 to 64 characters from
+/// `[A-Za-z0-9:._-]`. Any other name gets the shared `bridge` record, so a bridge
 /// can't make a record id as long as the request body.
 fn valid_bridge_name(name: &str) -> bool {
-    (1..=128).contains(&name.len())
+    (1..=64).contains(&name.len())
         && name
             .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b':' | b'.' | b'_' | b'-'))
 }
 
 fn handle_bridge_watch(body: &[u8], ctx: &Arc<MykoServerContext>) -> HookOutcome {
@@ -269,7 +269,7 @@ fn handle_bridge_watch(body: &[u8], ctx: &Arc<MykoServerContext>) -> HookOutcome
         );
         HookOutcome::text("watching".to_string())
     } else {
-        end_path(&cmd_ctx, &record);
+        end_path(&cmd_ctx, &record, sid);
         HookOutcome::text("not watching".to_string())
     }
 }
@@ -431,6 +431,12 @@ fn register_hook_session(
 ) -> Option<(String, CommandContext)> {
     let body = parse_body(body)?;
     let sid = body.get("session_id").and_then(|v| v.as_str())?;
+    // An id the daemon doesn't store, such as one with the `#` of a bridge's
+    // wake-path record, registers nothing (MUS-94).
+    if !crate::credentials::safe_session_id(sid) {
+        log::warn!("[hook] not registering session id {sid:?}: not one the daemon stores");
+        return None;
+    }
     let sid = sid.to_string();
     let q = parse_query(query);
     let cwd = body
@@ -614,11 +620,14 @@ fn mark_path(cmd_ctx: &CommandContext, id: &str, session: Option<&str>, now: i64
     let watchers: Vec<Arc<WakeWatcher>> = cmd_ctx
         .exec_query(GetAllWakeWatchers {})
         .unwrap_or_default();
-    let until = watchers
-        .iter()
-        .find(|w| w.id.0.as_ref() == id)
-        .map(|w| w.until);
-    if !wake_watcher_due(until, now) {
+    let existing = watchers.iter().find(|w| w.id.0.as_ref() == id);
+    // A record that wakes another session isn't this path's to replace (MUS-94).
+    let wakes = session.unwrap_or(id);
+    if existing.is_some_and(|w| w.session() != wakes) {
+        log::warn!("[hook] not replacing wake watcher {id}: it belongs to another session");
+        return;
+    }
+    if !wake_watcher_due(existing.map(|w| w.until), now) {
         return;
     }
     let watcher = WakeWatcher {
@@ -645,11 +654,23 @@ fn truncation_notice(message_id: &str, sent_at: i64) -> String {
 /// normally asks again at once. Only the held wait's record goes: a Codex bridge's
 /// record for the same session is its own (MUS-94).
 pub fn end_wait(cmd_ctx: &CommandContext, sid: &str) {
-    end_path(cmd_ctx, sid);
+    end_path(cmd_ctx, sid, sid);
 }
 
-/// Remove the wake-path record `id`.
-fn end_path(cmd_ctx: &CommandContext, id: &str) {
+/// Remove the wake-path record `id`, if it's one that wakes `session`: a record
+/// for another session isn't this path's to end (MUS-94).
+fn end_path(cmd_ctx: &CommandContext, id: &str, session: &str) {
+    let watchers: Vec<Arc<WakeWatcher>> = cmd_ctx
+        .exec_query(GetAllWakeWatchers {})
+        .unwrap_or_default();
+    match watchers.iter().find(|w| w.id.0.as_ref() == id) {
+        Some(w) if w.session() == session => {}
+        Some(_) => {
+            log::warn!("[hook] not ending wake watcher {id}: it belongs to another session");
+            return;
+        }
+        None => return,
+    }
     let watcher = WakeWatcher {
         id: WakeWatcherId(Arc::from(id)),
         until: 0,
@@ -667,7 +688,7 @@ fn end_all_waits(cmd_ctx: &CommandContext, sid: &str) {
         .exec_query(GetAllWakeWatchers {})
         .unwrap_or_default();
     for w in watchers.iter().filter(|w| w.session() == sid) {
-        end_path(cmd_ctx, w.id.0.as_ref());
+        end_path(cmd_ctx, w.id.0.as_ref(), sid);
     }
 }
 

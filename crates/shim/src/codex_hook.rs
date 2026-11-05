@@ -542,7 +542,7 @@ pub(crate) fn bridge_instance() -> &'static str {
             .map_or(0, |d| d.as_millis());
         let host: String = short_host()
             .chars()
-            .take(64)
+            .take(32)
             .map(|c| {
                 if c.is_ascii_alphanumeric() || matches!(c, '.' | '_') {
                     c
@@ -825,10 +825,10 @@ mod tests {
     #[test]
     fn the_bridge_name_is_one_the_daemon_accepts() {
         let name = bridge_instance();
-        assert!((1..=128).contains(&name.len()), "{name}");
+        assert!((1..=64).contains(&name.len()), "{name}");
         assert!(
             name.bytes()
-                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-')),
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b':' | b'.' | b'_' | b'-')),
             "{name}"
         );
     }

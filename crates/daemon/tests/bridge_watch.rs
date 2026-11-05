@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use muster_entities::{
-    GetAllWakeWatchers, SendMessage, Session, SessionId, WakeStatus, WakeWatcher,
+    GetAllSessions, GetAllWakeWatchers, SendMessage, Session, SessionId, WakeStatus, WakeWatcher,
 };
 use myko::{
     command::{CommandContext, CommandHandler},
@@ -188,7 +188,7 @@ fn a_bridge_watched_thread_shows_its_wake_path_until_the_bridge_stops() {
     );
 
     // A bridge name that's too long or has other characters gets the shared record.
-    let long = "x".repeat(129);
+    let long = "x".repeat(65);
     for bad in [long.as_str(), "a/b", "a b"] {
         assert_eq!(watch_as(&ctx, bad, "thread-2", true), "watching");
         let ids: Vec<String> = internal
@@ -205,6 +205,45 @@ fn a_bridge_watched_thread_shows_its_wake_path_until_the_bridge_stops() {
         );
         assert_eq!(watch_as(&ctx, bad, "thread-2", false), "not watching");
     }
+
+    // A session can't squat on another session's bridge record (MUS-94): it can't register
+    // under the record's id, and a wait under that id neither replaces nor ends it.
+    assert_eq!(watch_as(&ctx, "bridge-b", "thread-2", true), "watching");
+    let squat = WakeWatcher::bridge_id("thread-2", "bridge-b");
+    let register = format!(r#"{{"session_id":"{squat}","cwd":"/repo"}}"#);
+    daemon::hooks::dispatch(
+        "/hook/session-register",
+        "harness=claude",
+        register.as_bytes(),
+        &ctx,
+    )
+    .expect("a known route");
+    let squatter_on_roster = internal
+        .exec_query(GetAllSessions {})
+        .unwrap_or_default()
+        .iter()
+        .any(|s| s.id.0.as_ref() == squat);
+    assert!(!squatter_on_roster, "an id with '#' must not register");
+    let begun = daemon::hooks::begin_wait("harness=claude", register.as_bytes(), &ctx);
+    assert!(begun.is_none(), "an id with '#' can't hold a wait");
+    daemon::hooks::mark_waiting_now(&internal, &squat);
+    daemon::hooks::end_wait(&internal, &squat);
+    let record = internal
+        .exec_query(GetAllWakeWatchers {})
+        .unwrap_or_default()
+        .into_iter()
+        .find(|w| w.id.0.as_ref() == squat)
+        .expect("the bridge's record is still there");
+    assert_eq!(
+        record.session(),
+        "thread-2",
+        "and still wakes its own session"
+    );
+    assert_eq!(send_wake(&ctx, "thread-2"), WakeStatus::Expected);
+    assert_eq!(
+        watch_as(&ctx, "bridge-b", "thread-2", false),
+        "not watching"
+    );
 
     // When the session ends, every wake path to it goes.
     daemon::hooks::mark_waiting_now(&internal, "both");
