@@ -30,7 +30,7 @@ Prerequisites:
 muster-tui
 ```
 
-It connects to `ws://localhost:6257` by default. Use `--address <url>` or
+It connects to `ws://localhost:6255` by default. Use `--address <url>` or
 `MUSTER_DAEMON_ADDRESS` to point it elsewhere. Press `q` or `Esc` to quit.
 
 See the [full README](https://github.com/Castor-o7/muster#readme) for setting up the

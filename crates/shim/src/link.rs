@@ -233,6 +233,9 @@ pub enum PostFailure {
     Unreachable,
     /// The daemon's certificate isn't the one this machine paired with.
     Certificate,
+    /// The paired address answered, but not with TLS: the daemon there runs
+    /// plain (MUS-64), or the address now belongs to something else.
+    NotTls,
     /// The daemon answered with this non-2xx status.
     Status(u16),
 }
@@ -241,7 +244,10 @@ impl PostFailure {
     /// Whether the daemon, not the network, said no, so retrying won't help
     /// until someone changes something.
     pub fn is_refusal(self) -> bool {
-        matches!(self, Self::Certificate | Self::Status(401 | 403))
+        matches!(
+            self,
+            Self::Certificate | Self::NotTls | Self::Status(401 | 403 | 426)
+        )
     }
 }
 
@@ -260,6 +266,17 @@ impl std::fmt::Display for PostFailure {
             Self::Status(403) => write!(
                 f,
                 "the daemon refused this request (403); this machine doesn't own that session"
+            ),
+            Self::NotTls => write!(
+                f,
+                "this machine is paired, but the daemon at the paired address isn't serving TLS \
+                 (it accepted the connection and never answered TLS): turn TLS back on there \
+                 (MUSTER_TLS=1), or remove the pairing with `muster-shim unpair`"
+            ),
+            Self::Status(426) => write!(
+                f,
+                "the daemon requires pairing (426): run `muster-daemon pair --name <machine>` on its \
+                 host, then `muster-shim pair <code>` here"
             ),
             Self::Status(code) => write!(f, "the daemon answered with an error ({code})"),
         }
@@ -312,16 +329,28 @@ pub fn parse_response(buf: &[u8]) -> Result<Reply, PostFailure> {
     })
 }
 
-/// rustls reports a certificate it rejected as an I/O error wrapping its own.
+/// How long the gate gets to answer a TLS handshake.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Why a handshake failed. A connection that was accepted and then never
+/// answered the ClientHello is not a gate.
+fn handshake_failure(e: &io::Error) -> PostFailure {
+    match e.kind() {
+        io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock => PostFailure::NotTls,
+        _ => tls_failure(e),
+    }
+}
+
+/// rustls reports a certificate it rejected, or a reply that isn't TLS at all,
+/// as an I/O error wrapping its own.
 fn tls_failure(e: &io::Error) -> PostFailure {
-    let certificate = e
+    match e
         .get_ref()
         .and_then(|inner| inner.downcast_ref::<rustls::Error>())
-        .is_some_and(|tls| matches!(tls, rustls::Error::InvalidCertificate(_)));
-    if certificate {
-        PostFailure::Certificate
-    } else {
-        PostFailure::Unreachable
+    {
+        Some(rustls::Error::InvalidCertificate(_)) => PostFailure::Certificate,
+        Some(rustls::Error::InvalidMessage(_)) => PostFailure::NotTls,
+        _ => PostFailure::Unreachable,
     }
 }
 
@@ -358,12 +387,23 @@ pub fn https_post_why(
     timeout: Duration,
 ) -> Result<Reply, PostFailure> {
     let unreachable = |_| PostFailure::Unreachable;
-    let tcp = connect_any(pairing.address.as_str(), timeout).ok_or(PostFailure::Unreachable)?;
+    let mut tcp = connect_any(pairing.address.as_str(), timeout).ok_or(PostFailure::Unreachable)?;
+    // The handshake gets its own short limit: a held wait may run for minutes,
+    // but a gate answers a ClientHello at once. A daemon running plain (MUS-64)
+    // never answers it at all; it waits for an HTTP head that never comes.
+    let handshake = timeout.min(HANDSHAKE_TIMEOUT);
+    tcp.set_read_timeout(Some(handshake)).map_err(unreachable)?;
+    tcp.set_write_timeout(Some(handshake))
+        .map_err(unreachable)?;
+    let config = client_config(&pairing.fingerprint).map_err(unreachable)?;
+    let mut conn = rustls::ClientConnection::new(config, server_name())
+        .map_err(|_| PostFailure::Unreachable)?;
+    while conn.is_handshaking() {
+        conn.complete_io(&mut tcp)
+            .map_err(|e| handshake_failure(&e))?;
+    }
     tcp.set_read_timeout(Some(timeout)).map_err(unreachable)?;
     tcp.set_write_timeout(Some(timeout)).map_err(unreachable)?;
-    let config = client_config(&pairing.fingerprint).map_err(unreachable)?;
-    let conn = rustls::ClientConnection::new(config, server_name())
-        .map_err(|_| PostFailure::Unreachable)?;
     let mut tls = rustls::StreamOwned::new(conn, tcp);
     let request = format!(
         "POST {path} HTTP/1.1\r\nHost: {}\r\nAuthorization: Bearer {}\r\n\
@@ -436,6 +476,28 @@ mod tests {
         let stream = connect_any(&[refused, live_addr][..], Duration::from_secs(1))
             .expect("should fall through to the address that accepts");
         assert_eq!(stream.peer_addr().unwrap(), live_addr);
+    }
+
+    #[test]
+    fn a_listener_that_never_answers_tls_is_not_a_gate() {
+        let plain = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = plain.local_addr().unwrap();
+        // Accepts, reads, and sends nothing back, like myko waiting for a head.
+        let held = std::thread::spawn(move || {
+            let (mut s, _) = plain.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            while matches!(s.read(&mut buf), Ok(n) if n > 0) {}
+        });
+        let pairing = Pairing {
+            address: addr.to_string(),
+            fingerprint: "0".repeat(64),
+            token: "t".into(),
+            name: "x".into(),
+        };
+        let failure = https_post_why(&pairing, "/hook/wait", "{}", Duration::from_secs(1));
+        assert_eq!(failure, Err(PostFailure::NotTls));
+        assert!(PostFailure::NotTls.is_refusal());
+        drop(held);
     }
 
     #[test]

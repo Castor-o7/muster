@@ -49,7 +49,7 @@ Both the shim and the hooks reach the daemon through its TLS gate (port **6255**
 muster-shim pair muster-pair:v1:…
 ```
 
-See "Pair each machine" in the main README. Without a pairing, the shim and the hooks connect unencrypted to the daemon's internal loopback listener (`ws://localhost:6257`, or `~/.config/muster/daemon-address` / `MUSTER_DAEMON_ADDRESS` if set). That only works on the daemon's own host.
+See "Pair each machine" in the main README. Without a pairing, the shim and the hooks connect unencrypted to the daemon's internal loopback listener (`ws://localhost:6255`, or `~/.config/muster/daemon-address` / `MUSTER_DAEMON_ADDRESS` if set). That only works on the daemon's own host.
 
 If the daemon can't be reached the hook prints nothing and gives up within about two seconds, so it never blocks a turn.
 
@@ -117,6 +117,6 @@ Then add the hooks to a `settings.json` Claude Code reads:
 
 ## Pointing at a non-default daemon
 
-A paired machine finds the daemon from its pairing, so it needs nothing here. An unpaired shim on the daemon's own host connects to `ws://localhost:6257`. `MUSTER_DAEMON_ADDRESS` overrides that address for an unpaired shim, and the plugin's `.mcp.json` passes it through.
+A paired machine finds the daemon from its pairing, so it needs nothing here. An unpaired shim on the daemon's own host connects to `ws://localhost:6255`. `MUSTER_DAEMON_ADDRESS` overrides that address for an unpaired shim, and the plugin's `.mcp.json` passes it through.
 
 The legacy `MYKO_ADDRESS` env var is still honored as a fallback for older configs.

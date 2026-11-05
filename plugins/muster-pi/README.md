@@ -30,11 +30,11 @@ pi install npm:muster-pi
 ```
 
 Restart Pi after installation. No MCP server or wrapper is required. The
-extension uses `ws://localhost:6257` by default, so run it on the daemon's own host. It
+extension uses `ws://localhost:6255` by default, so run it on the daemon's own host. It
 can't use the TLS gate yet. To set the address explicitly:
 
 ```bash
-export MUSTER_DAEMON_ADDRESS=ws://localhost:6257
+export MUSTER_DAEMON_ADDRESS=ws://localhost:6255
 pi
 ```
 

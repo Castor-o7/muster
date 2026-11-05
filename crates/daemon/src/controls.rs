@@ -93,10 +93,12 @@ pub fn clear_allowed(dir: &Path) -> io::Result<()> {
 }
 
 /// Apply the files once, and publish the pause if it changed since `last`.
-pub fn apply(dir: &Path, ctx: &MykoServerContext, last: &mut Option<(bool, i64)>) {
+/// Without `allowlist` (plain mode, MUS-64) the sender list is ignored: with no
+/// pairing there are no machine names to check senders against.
+pub fn apply(dir: &Path, ctx: &MykoServerContext, last: &mut Option<(bool, i64)>, allowlist: bool) {
     let since = paused_since(dir);
     muster_entities::controls::set_wakes_paused(since.is_some());
-    let senders = allowed(dir).map(|mut list| {
+    let senders = allowed(dir).filter(|_| allowlist).map(|mut list| {
         if let Some(host) = this_host()
             && !list.iter().any(|m| m.eq_ignore_ascii_case(&host))
         {
@@ -126,12 +128,12 @@ pub fn apply(dir: &Path, ctx: &MykoServerContext, last: &mut Option<(bool, i64)>
 }
 
 /// Keep applying the files, every [`REFRESH`]. Spawn on a tokio task.
-pub async fn run(dir: std::path::PathBuf, ctx: MykoServerContext) {
+pub async fn run(dir: std::path::PathBuf, ctx: MykoServerContext, allowlist: bool) {
     let mut last = None;
     let mut interval = tokio::time::interval(REFRESH);
     loop {
         interval.tick().await;
-        apply(&dir, &ctx, &mut last);
+        apply(&dir, &ctx, &mut last, allowlist);
     }
 }
 

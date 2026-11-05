@@ -17,6 +17,7 @@ pub mod hooks;
 pub mod http_listener;
 pub mod limits;
 pub mod liveness_filter;
+pub mod mode;
 pub mod nickname_assign;
 
 pub fn link() {

@@ -16,28 +16,29 @@ use std::{
     sync::Arc,
 };
 
-/// Default public bind: the TLS + token gate (see `gate`), the only listener
-/// meant to be reachable from other machines. Loopback by default; set
-/// `MUSTER_BIND=0.0.0.0:6255` (or a LAN/mesh address) to accept other hosts.
-/// Port 6255 is distinct from myko's default 5155 and Marshal's 6155.
+/// Default public bind (MUS-64). In plain mode myko's own WebSocket/MCP
+/// listener, as in upstream Marshal; with TLS on, the gate (see `gate`), which
+/// serves local tools and paired machines on the same port. Loopback by
+/// default; set `MUSTER_BIND=0.0.0.0:6255` (or a LAN/mesh address) to accept
+/// other hosts. Port 6255 is distinct from myko's default 5155 and Marshal's 6155.
 const DEFAULT_BIND: &str = "127.0.0.1:6255";
 
-/// myko's own WebSocket/MCP listener. No TLS or auth, so keep it on
-/// loopback (`MUSTER_INTERNAL_BIND`); the gate forwards to it. Local tools
-/// on the daemon's host (the TUI, the web UI) may connect here directly.
+/// The local gate's old port, kept with TLS on for one release so sessions
+/// configured for `ws://localhost:6257` keep working through a restart
+/// (MUS-64). Local tools now use 6255, where the gate takes them too.
 const DEFAULT_INTERNAL_BIND: &str = "127.0.0.1:6257";
 
 /// The plain-HTTP hook listener (the `/hook/*` endpoints), also behind the
 /// gate. Keep it on loopback (`MUSTER_HOOK_BIND`) — see `http_listener`.
 const DEFAULT_HOOK_BIND: &str = "127.0.0.1:6256";
 /// myko's own WebSocket/MCP listener, which has no authentication of its own.
-/// The local gate on `MUSTER_INTERNAL_BIND` fronts it for the host's tools
-/// (MUS-7); nothing else should dial it.
+/// Used only with TLS on: the gate fronts it (MUS-7); nothing else should dial it.
 const DEFAULT_MYKO_BIND: &str = "127.0.0.1:6258";
 
 const USAGE: &str = "\
 usage:
-  muster-daemon                       run the daemon
+  muster-daemon [--tls]               run the daemon; --tls (or MUSTER_TLS=1) turns on
+                                      the gate: TLS, pairing, tokens and limits
   muster-daemon pair --name NAME [--address HOST:PORT] [--expires 15m]
                                       print a one-time pairing code for a machine
   muster-daemon unpair NAME           revoke a machine's access
@@ -50,7 +51,8 @@ usage:
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
-        None => run_daemon(),
+        None => run_daemon(false),
+        Some("--tls") if args.len() == 1 => run_daemon(true),
         Some("pair") => pair(&args[1..]),
         Some("unpair") => match args.get(1) {
             Some(name) if args.len() == 2 => {
@@ -98,6 +100,7 @@ fn main() -> Result<()> {
                 let dir = daemon::credentials::state_dir()?;
                 let list = daemon::controls::set_allowed(&dir, machine, cmd == "allow")?;
                 print_senders(Some(list));
+                tls_notice("the sender allow-list applies");
                 Ok(())
             }
             _ => anyhow::bail!("{USAGE}"),
@@ -163,7 +166,20 @@ fn pair(args: &[String]) -> Result<()> {
         "\nThe code works once and expires in {}. Until then, treat it like a password.",
         describe_duration(ttl)
     );
+    tls_notice("pairing takes effect");
     Ok(())
+}
+
+/// Commands that change TLS-only state run separately from the daemon, so they
+/// can't know its mode; say so when this shell doesn't turn TLS on (MUS-64).
+fn tls_notice(what: &str) {
+    let on = daemon::mode::parse_env(std::env::var(daemon::mode::ENV).ok().as_deref())
+        .ok()
+        .flatten()
+        == Some(true);
+    if !on {
+        eprintln!("({what} only when the daemon runs with TLS: --tls or MUSTER_TLS=1)");
+    }
 }
 
 /// Say who may send, after a change to the allowlist (MUS-10).
@@ -225,24 +241,106 @@ fn pairing_address_from_bind() -> Result<String> {
 }
 
 #[tokio::main]
-async fn run_daemon() -> Result<()> {
+async fn run_daemon(tls_flag: bool) -> Result<()> {
     init_logging();
 
     // Resolve via the system resolver (not bare `parse`) so a mesh DNS
     // name like `muster-01.lucid.host:6255` works and survives the peer's
     // mesh IP being reassigned (next start re-resolves).
-    let gate_bind = resolve_bind("MUSTER_BIND", DEFAULT_BIND)?;
-    let bind_addr = resolve_bind("MUSTER_INTERNAL_BIND", DEFAULT_INTERNAL_BIND)?;
+    let public_bind = resolve_bind("MUSTER_BIND", DEFAULT_BIND)?;
     let hook_bind = resolve_bind("MUSTER_HOOK_BIND", DEFAULT_HOOK_BIND)?;
-    let myko_bind = resolve_bind("MUSTER_MYKO_BIND", DEFAULT_MYKO_BIND)?;
     let state_dir = daemon::credentials::state_dir()?;
-    let local_token = daemon::credentials::ensure_local_token()?;
+    let has_pairings = !daemon::credentials::token_names(&state_dir)
+        .unwrap_or_default()
+        .is_empty();
+    let mode = daemon::mode::resolve(
+        tls_flag,
+        std::env::var(daemon::mode::ENV).ok().as_deref(),
+        has_pairings,
+    )
+    .map_err(|why| anyhow::anyhow!("muster-daemon: {why}"))?;
 
     // Force-link entities + sagas so their `inventory` registrations aren't
     // dead-code-eliminated.
     muster_entities::link();
     daemon::link();
 
+    if !mode.is_tls() {
+        log::info!(
+            "TLS gate: off (plain WebSocket on {public_bind}; set MUSTER_TLS=1 or --tls to \
+             require pairing)"
+        );
+        // Parity with upstream Marshal (MUS-64): no message or connection limits.
+        muster_entities::rate::set_enabled(false);
+        daemon::limits::uncap();
+        let server = build_server(public_bind, None);
+        let stop_rx = start_background(&server, &state_dir, false);
+        let hooks =
+            daemon::http_listener::run_until(hook_bind, Arc::new(server.ctx()), None, stop_rx.1);
+        log::info!("muster-daemon: myko on ws://{public_bind}, hooks on http://{hook_bind}");
+        return serve_until_stopped(server, stop_rx.0, async move {
+            exit_listener_stopped(&format!("hook listener on {hook_bind}"), hooks.await)
+        })
+        .await;
+    }
+
+    let bind_addr = resolve_bind("MUSTER_INTERNAL_BIND", DEFAULT_INTERNAL_BIND)?;
+    let myko_bind = resolve_bind("MUSTER_MYKO_BIND", DEFAULT_MYKO_BIND)?;
+    let local_token = daemon::credentials::ensure_local_token()?;
+    log::info!(
+        "TLS gate: on (TLS and local tools on {public_bind}; paired machines need a pairing code)"
+    );
+    // Only the gates reach myko (MUS-59); see `gate::myko_request_filter`.
+    let server = build_server(
+        myko_bind,
+        Some(daemon::gate::myko_request_filter(local_token.clone())),
+    );
+    let stop_rx = start_background(&server, &state_dir, true);
+    let hooks = {
+        let hook_ctx = Arc::new(server.ctx());
+        let access = Arc::new(daemon::http_listener::Access {
+            state_dir: state_dir.clone(),
+            local_token: local_token.clone(),
+        });
+        daemon::http_listener::run_until(hook_bind, hook_ctx, Some(access), stop_rx.1)
+    };
+
+    log::info!(
+        "muster-daemon: gate on {public_bind} (TLS), local gate on ws://{bind_addr}, \
+         myko on ws://{myko_bind}, hooks on http://{hook_bind}"
+    );
+    let gate = daemon::gate::run(daemon::gate::GateConfig {
+        bind: public_bind,
+        myko: myko_bind,
+        hooks: hook_bind,
+        state_dir: state_dir.clone(),
+        local_token: local_token.clone(),
+    });
+    let local_gate = daemon::gate::run_local(daemon::gate::LocalGateConfig {
+        bind: bind_addr,
+        myko: myko_bind,
+        state_dir,
+        local_token,
+    });
+    // The gate is the daemon's only public surface: if it can't bind or
+    // stops, exit rather than keep running unreachable. The same goes for the
+    // hook listener, without which no session can be woken.
+    serve_until_stopped(server, stop_rx.0, async move {
+        tokio::select! {
+            r = gate => exit_listener_stopped(&format!("gate on {public_bind}"), r),
+            r = local_gate => exit_listener_stopped(&format!("local gate on {bind_addr}"), r),
+            r = hooks => exit_listener_stopped(&format!("hook listener on {hook_bind}"), r),
+        }
+    })
+    .await
+}
+
+/// The myko server on `bind`, with Muster's persisters and, with TLS on, the
+/// request filter that admits only the gates (MUS-59).
+fn build_server(
+    bind: SocketAddr,
+    request_filter: Option<myko_server::router::RequestFilter>,
+) -> MykoServer {
     // Client/Server entities are WS-bound and always transient — blackhole them
     // so connection bookkeeping never lands in durable storage (a replayed
     // Client would reference a WS connection that no longer exists).
@@ -253,7 +351,7 @@ async fn run_daemon() -> Result<()> {
     // (lv-6731). Late-bound to the Postgres producer after build below.
     let session_filter = Arc::new(daemon::liveness_filter::SessionLivenessFilter::new());
     let mut builder = MykoServer::builder()
-        .with_bind_addr(myko_bind)
+        .with_bind_addr(bind)
         .with_persister_override("Client", blackhole.clone())
         .with_persister_override("Server", blackhole.clone())
         // A wait dies with the daemon, so there's nothing to replay, and a held
@@ -262,9 +360,10 @@ async fn run_daemon() -> Result<()> {
         // Rebuilt from the state directory at start (MUS-10).
         .with_persister_override("WakePause", blackhole.clone())
         .with_persister_override("Session", session_filter.clone())
-        .with_server_info(muster_server_info())
-        // Only the gates reach myko (MUS-59); see `gate::myko_request_filter`.
-        .with_request_filter(daemon::gate::myko_request_filter(local_token.clone()));
+        .with_server_info(muster_server_info());
+    if let Some(filter) = request_filter {
+        builder = builder.with_request_filter(filter);
+    }
 
     // Persistence: Postgres via myko when `MYKO_POSTGRES_URL` is set — durable,
     // latest-state-per-entity (no append-forever event log and no full-file
@@ -298,52 +397,44 @@ async fn run_daemon() -> Result<()> {
     if let Some(handle) = server.postgres_producer.clone() {
         session_filter.bind(Arc::new(handle));
     }
+    server
+}
 
+type StopChannel = (
+    tokio::sync::watch::Sender<bool>,
+    tokio::sync::watch::Receiver<bool>,
+);
+
+/// Start the sweeper and the operator's controls, and make the stop signal
+/// held waits listen for.
+fn start_background(
+    server: &MykoServer,
+    state_dir: &std::path::Path,
+    allowlist: bool,
+) -> StopChannel {
     // Spawn the periodic sweeper. WS-shim sessions reap on client loss +
     // grace; pull/hook sessions reap on the activity backstop. See cleanup.
     tokio::spawn(daemon::cleanup::run_sweeper(server.ctx()));
-    // The operator's pause and sender allowlist (MUS-10).
-    tokio::spawn(daemon::controls::run(state_dir.clone(), server.ctx()));
-
-    // Spawn muster's own plain-HTTP listener for the Claude Code `/hook/*`
-    // endpoints. Shares the server ctx (same registry + event log); stock
-    // myko's MCP listener is left untouched on its own port.
+    // The operator's pause and, with TLS on, the sender allowlist (MUS-10).
+    tokio::spawn(daemon::controls::run(
+        state_dir.to_path_buf(),
+        server.ctx(),
+        allowlist,
+    ));
     // Set on SIGTERM or Ctrl-C, so held waits end cleanly before the daemon exits.
-    let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
-    let hooks = {
-        let hook_ctx = Arc::new(server.ctx());
-        let access = Arc::new(daemon::http_listener::Access {
-            state_dir: state_dir.clone(),
-            local_token: local_token.clone(),
-        });
-        daemon::http_listener::run_until(hook_bind, hook_ctx, Some(access), stop_rx)
-    };
+    tokio::sync::watch::channel(false)
+}
 
-    log::info!(
-        "muster-daemon: gate on {gate_bind} (TLS), local gate on ws://{bind_addr}, \
-         myko on ws://{myko_bind}, hooks on http://{hook_bind}"
-    );
-    let gate = daemon::gate::run(daemon::gate::GateConfig {
-        bind: gate_bind,
-        myko: myko_bind,
-        hooks: hook_bind,
-        state_dir: state_dir.clone(),
-        local_token: local_token.clone(),
-    });
-    let local_gate = daemon::gate::run_local(daemon::gate::LocalGateConfig {
-        bind: bind_addr,
-        myko: myko_bind,
-        state_dir,
-        local_token,
-    });
-    // The gate is the daemon's only public surface: if it can't bind or
-    // stops, exit rather than keep running unreachable. The same goes for the
-    // hook listener, without which no session can be woken.
+/// Run myko until a listener stops (`listeners` exits the process) or a stop
+/// signal arrives, which first ends held waits.
+async fn serve_until_stopped(
+    server: MykoServer,
+    stop_tx: tokio::sync::watch::Sender<bool>,
+    listeners: impl std::future::Future<Output = ()>,
+) -> Result<()> {
     tokio::select! {
         r = server.run() => r.map_err(|e| anyhow::anyhow!(e))?,
-        r = gate => exit_listener_stopped(&format!("gate on {gate_bind}"), r),
-        r = local_gate => exit_listener_stopped(&format!("local gate on {bind_addr}"), r),
-        r = hooks => exit_listener_stopped(&format!("hook listener on {hook_bind}"), r),
+        () = listeners => {}
         signal = stop_signal() => {
             log::info!("muster-daemon: {signal}; ending held waits, then stopping");
             let _ = stop_tx.send(true);

@@ -8,7 +8,16 @@
 //! cap each. Every cap can be changed with an environment variable.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+
+static UNCAPPED: AtomicBool = AtomicBool::new(false);
+
+/// Lift every cap made by [`ConnLimiter::from_env`] from now on. Plain mode does
+/// this (MUS-64), for parity with upstream Marshal.
+pub fn uncap() {
+    UNCAPPED.store(true, Ordering::SeqCst);
+}
 
 /// Counts open connections per key, up to `max` each.
 pub struct ConnLimiter {
@@ -32,6 +41,9 @@ impl ConnLimiter {
 
     /// A limiter whose cap comes from `var` when that is set to a number.
     pub fn from_env(var: &str, default: usize) -> Arc<Self> {
+        if UNCAPPED.load(Ordering::SeqCst) {
+            return Self::new(usize::MAX);
+        }
         let max = std::env::var(var)
             .ok()
             .and_then(|v| v.trim().parse().ok())

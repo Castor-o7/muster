@@ -86,18 +86,27 @@ daemon that fails at start but not one that fails later: keep watching the log f
 minutes. The script needs Linux with a systemd user unit.
 `scripts/test-rollout.sh` checks the rollback against a throwaway unit.
 
-The daemon has three listeners. Only the gate is meant to be reachable from other machines:
+The daemon runs in one of two modes (MUS-64).
+
+**Plain (the default), as upstream Marshal runs.** myko serves WebSocket and MCP directly on `MUSTER_BIND`, and the hook listener takes requests without a token. There's no TLS, pairing, token or limit; the daemon is protected only by where it's bound, so keep it on loopback or a network you trust. The startup line says `TLS gate: off`.
 
 | Port | Variable | Default | Serves |
 |---|---|---|---|
-| 6255 | `MUSTER_BIND` | `127.0.0.1:6255` | **The gate**: TLS plus a per-machine access token, in front of the two below |
-| 6257 | `MUSTER_INTERNAL_BIND` | `127.0.0.1:6257` | **The local gate**: plain TCP for the host's own shims and tools, which present the local token |
+| 6255 | `MUSTER_BIND` | `127.0.0.1:6255` | myko's own WebSocket/MCP listener |
+| 6256 | `MUSTER_HOOK_BIND` | `127.0.0.1:6256` | The plain-HTTP hook listener; refuses browser origins |
+
+**TLS (`muster-daemon --tls`, or `MUSTER_TLS=1`).** Everything below: the gate, pairing, tokens, the frame filter, the limits and the sender allowlist. The startup line says `TLS gate: on`. If `--tls` and `MUSTER_TLS` disagree (`--tls` with `MUSTER_TLS=0`), the daemon refuses to start. It also refuses to run plain while its state directory has paired machines, unless `MUSTER_TLS=0` says so, so a unit file that loses the setting can't quietly open a gated daemon. Turning TLS off leaves the certificate, tokens and pairings on disk, so turning it back on restores them.
+
+| Port | Variable | Default | Serves |
+|---|---|---|---|
+| 6255 | `MUSTER_BIND` | `127.0.0.1:6255` | **The gate**. TLS connections must present a per-machine access token; plain HTTP from the daemon's own host (loopback) must present the local token; plain HTTP from another machine gets `426` and is told to pair |
 | 6256 | `MUSTER_HOOK_BIND` | `127.0.0.1:6256` | The plain-HTTP hook listener; requires the local token, refuses browser origins |
-| 6258 | `MUSTER_MYKO_BIND` | `127.0.0.1:6258` | myko's own WebSocket/MCP listener, behind the two gates; admits only what a gate forwards, refuses browser origins |
+| 6257 | `MUSTER_INTERNAL_BIND` | `127.0.0.1:6257` | The old local-gate port, kept for one release so sessions configured for `ws://localhost:6257` keep working; new setups use 6255 |
+| 6258 | `MUSTER_MYKO_BIND` | `127.0.0.1:6258` | myko's own WebSocket/MCP listener, behind the gate; admits only what a gate forwards, refuses browser origins |
 
-To accept sessions from other machines, set `MUSTER_BIND=0.0.0.0:6255` (or a LAN/mesh address) and pair each machine (below). Tools running on the daemon's own host, like the shim and the TUI, connect to the local gate on `ws://127.0.0.1:6257` with the **local token**: the daemon writes it owner-only to `~/.config/muster/local-token` (under `$XDG_CONFIG_HOME` if set) on first start, and the shim and TUI read it from there. A process that can't read that file gets `401`, and any request naming a browser `Origin` gets `403`, on the hook listener, the local gate, and myko's own listener. myko's listener admits only requests a gate forwarded, through a request filter in the patched myko-server under `vendor/myko-server` (MUS-59).
+To accept sessions from other machines, turn TLS on, set `MUSTER_BIND=0.0.0.0:6255` (or a LAN/mesh address), and pair each machine (below). Tools running on the daemon's own host, like the shim and the TUI, connect to `ws://localhost:6255` in either mode. With TLS on they add the **local token**: the daemon writes it owner-only to `~/.config/muster/local-token` (under `$XDG_CONFIG_HOME` if set) on first start, and the shim and TUI read it from there. A process that can't read that file gets `401`, and any request naming a browser `Origin` gets `403`, on the hook listener, the gate's local path, and myko's own listener. myko's listener admits only requests a gate forwarded, through a request filter in the patched myko-server under `vendor/myko-server` (MUS-59). Loopback isn't the trust boundary: a reverse proxy on the host forwards from loopback too. The local token is. The web UI needs TLS off for now.
 
-**Limits (MUS-9).** Each session may send a burst of 20 messages, then 30 a minute; past that, a send gets "too many messages from this session" and says when to retry. A broadcast counts as one. Connections are capped per listener, and a refused connection gets `503`:
+**Limits (MUS-9), with TLS on.** Each session may send a burst of 20 messages, then 30 a minute; past that, a send gets "too many messages from this session" and says when to retry. A broadcast counts as one. Connections are capped per listener, and a refused connection gets `503`:
 
 | Variable | Default | Caps |
 |---|---|---|
@@ -106,7 +115,7 @@ To accept sessions from other machines, set `MUSTER_BIND=0.0.0.0:6255` (or a LAN
 | `MUSTER_MAX_CONN_LOCAL` | 256 | connections on the local gate |
 | `MUSTER_MAX_CONN_HOOKS` | 256 | connections on the hook listener |
 
-**The operator's controls (MUS-10).** Run these on the daemon's host. The running daemon applies a change within 2 seconds.
+**The operator's controls (MUS-10).** Run these on the daemon's host. `pause` and `resume` work in both modes; the sender allowlist applies only with TLS on, since without pairing there are no machine names to check. The running daemon applies a change within 2 seconds.
 
 ```bash
 muster-daemon pause              # no message wakes any session; mail is kept, and seen when someone types
@@ -122,7 +131,7 @@ The daemon keeps its TLS certificate and the paired machines' token hashes in `M
 
 ### 2b. Pair each machine
 
-Every machine other than the daemon's own host needs a pairing. (On the daemon's host, an unpaired shim connects to the local gate on 6257 with the local token, so it works without one. Pair it too if other people can log in to that machine.) On the daemon's host:
+Pairing needs TLS on. Every machine other than the daemon's own host needs a pairing. (On the daemon's host, an unpaired shim connects to `ws://localhost:6255` with the local token, so it works without one. Pair it too if other people can log in to that machine.) On the daemon's host:
 
 ```bash
 muster-daemon pair --name a1 --address 192.0.2.10:6255
@@ -238,7 +247,7 @@ the hooks when you don't.
 
 ### Pi: native extension
 
-Pi, Prime Agent and opencode connect over plain WebSocket, so they need to run on the daemon's own host, using `ws://localhost:6257`. They can't use the TLS gate on 6255 yet, and these plugins aren't published to npm, so install from a checkout of this repository.
+Pi, Prime Agent and opencode connect over plain WebSocket, so they need to run on the daemon's own host, using `ws://localhost:6255`. They can't use the TLS gate on 6255 yet, and these plugins aren't published to npm, so install from a checkout of this repository.
 
 After starting a reachable daemon, install the published
 [`muster-pi`](plugins/muster-pi)
@@ -254,10 +263,10 @@ Incoming messages are inserted into the visible transcript as steering input
 and start a turn when the recipient is idle. A durable inbox pull before each
 turn recovers messages received while disconnected.
 
-No MCP shim or launcher wrapper is required. The default address is `ws://localhost:6257`. To set it explicitly:
+No MCP shim or launcher wrapper is required. The default address is `ws://localhost:6255`. To set it explicitly:
 
 ```bash
-export MUSTER_DAEMON_ADDRESS=ws://localhost:6257
+export MUSTER_DAEMON_ADDRESS=ws://localhost:6255
 pi
 ```
 
@@ -283,10 +292,10 @@ the recipient is idle. Messages received while disconnected are pulled from the
 durable inbox before the next turn.
 
 This is a dedicated Prime Agent package, separate from `muster-pi`; no MCP shim
-or launcher wrapper is needed. The default address is `ws://localhost:6257`. To set it explicitly:
+or launcher wrapper is needed. The default address is `ws://localhost:6255`. To set it explicitly:
 
 ```bash
-export MUSTER_DAEMON_ADDRESS=ws://localhost:6257
+export MUSTER_DAEMON_ADDRESS=ws://localhost:6255
 prime-agent
 ```
 
@@ -311,7 +320,7 @@ binaries yet (MUS-14). Setup is idempotent, so rerun it to refresh the hooks or 
 
 ```bash
 cargo install --git https://github.com/Castor-o7/muster muster-shim
-muster-shim codex-setup --daemon ws://localhost:6257
+muster-shim codex-setup --daemon ws://localhost:6255
 ```
 
 A normal `codex` launch now gets the Muster tools and pulls direct messages
@@ -471,7 +480,7 @@ a burst can join the active turn.
 Claude Code ── muster-shim (MCP + hooks) ──┐        paired machines:
 Codex ──────── muster-shim hooks/bridge ───┤        TLS gate on :6255
 opencode ───── muster-opencode plugin ─────┼─────►  or, on the daemon's own host:
-Pi ─────────── muster-pi extension ────────┤        myko :6257 and hooks :6256
+Pi ─────────── muster-pi extension ────────┤        daemon :6255 and hooks :6256
 Prime Agent ── muster-prime-agent ─────────┘                 │
                                                        muster-daemon
                                                   (roster + messages, in memory
@@ -488,7 +497,7 @@ Prime Agent ── muster-prime-agent ─────────┘            
 ## Configuring the daemon address
 
 A paired machine finds the daemon from its pairing (step 2b), so most setups need nothing
-here. An unpaired shim on the daemon's own host defaults to `ws://localhost:6257`. To point
+here. An unpaired shim on the daemon's own host defaults to `ws://localhost:6255`. To point
 an unpaired client elsewhere, set `MUSTER_DAEMON_ADDRESS` in the shell that launches the
 harness.
 

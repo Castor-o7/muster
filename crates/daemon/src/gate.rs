@@ -11,6 +11,14 @@
 //! 3. The token is stripped, `/hook/*` is routed to the hook listener and
 //!    everything else to myko, and from then on bytes are copied both ways.
 //!    WebSocket upgrades and plain request/response work the same way.
+//!
+//! The gate runs only in TLS mode (MUS-64, see `mode`). It tells clients apart
+//! by their first byte, so local and remote tools share one port: a TLS
+//! ClientHello (`0x16`) takes the path above, plain HTTP from a loopback peer
+//! takes the local gate's path (the host's local token, no browser `Origin`),
+//! and plain HTTP from anywhere else is told to pair. Loopback is not the trust
+//! boundary: a reverse proxy on the host forwards from loopback too. The local
+//! token is.
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -163,6 +171,31 @@ async fn handle_local(
     filter_websocket(tcp, upstream, credentials::LOCAL_MACHINE, &config.state_dir).await
 }
 
+/// The first byte of a TLS handshake record.
+const TLS_HANDSHAKE: u8 = 0x16;
+
+/// Which path a new connection on the gate's port takes.
+#[derive(Debug, PartialEq, Eq)]
+enum Route {
+    Tls,
+    Local,
+    NeedsPairing,
+}
+
+fn route(first_byte: u8, peer: SocketAddr) -> Route {
+    if first_byte == TLS_HANDSHAKE {
+        Route::Tls
+    } else if peer.ip().is_loopback() {
+        Route::Local
+    } else {
+        Route::NeedsPairing
+    }
+}
+
+/// The answer to plain HTTP from another machine.
+const NEEDS_PAIRING: &str = "this daemon requires pairing; on its host run \
+`muster-daemon pair --name <machine>`, then `muster-shim pair <code>` here\n";
+
 /// Bind and serve forever. Spawn on a tokio task.
 pub async fn run(config: GateConfig) -> std::io::Result<()> {
     let listener = TcpListener::bind(config.bind).await?;
@@ -209,7 +242,30 @@ pub async fn serve(listener: TcpListener, config: GateConfig) -> std::io::Result
             (acceptor.clone(), config.clone(), per_machine.clone());
         tokio::spawn(async move {
             let _place = place;
-            if let Err(e) = handle(tcp, peer, acceptor, &config, &per_machine).await {
+            let mut first = [0u8; 1];
+            let peeked = tokio::time::timeout(HANDSHAKE_TIMEOUT, tcp.peek(&mut first)).await;
+            let result = match peeked {
+                Ok(Ok(1)) => match route(first[0], peer) {
+                    Route::Tls => handle(tcp, peer, acceptor, &config, &per_machine).await,
+                    Route::Local => {
+                        let local = LocalGateConfig {
+                            bind: config.bind,
+                            myko: config.myko,
+                            state_dir: config.state_dir.clone(),
+                            local_token: config.local_token.clone(),
+                        };
+                        handle_local(tcp, peer, &local).await
+                    }
+                    Route::NeedsPairing => {
+                        log::warn!("[gate] refused {peer}: plain HTTP from another machine");
+                        let mut tcp = tcp;
+                        respond_with(&mut tcp, "426 Upgrade Required", NEEDS_PAIRING).await
+                    }
+                },
+                // Closed before sending anything, or never sent a byte.
+                _ => Ok(()),
+            };
+            if let Err(e) = result {
                 log::debug!("[gate] {peer}: {e}");
             }
         });
@@ -443,7 +499,19 @@ async fn read_head<S: AsyncRead + Unpin>(stream: &mut S) -> std::io::Result<(Str
 }
 
 async fn respond<S: AsyncWrite + Unpin>(stream: &mut S, status: &str) -> std::io::Result<()> {
-    let response = format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+    respond_with(stream, status, "").await
+}
+
+async fn respond_with<S: AsyncWrite + Unpin>(
+    stream: &mut S,
+    status: &str,
+    body: &str,
+) -> std::io::Result<()> {
+    let response = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\n\
+         Connection: close\r\n\r\n{body}",
+        body.len()
+    );
     stream.write_all(response.as_bytes()).await?;
     stream.shutdown().await
 }
@@ -649,6 +717,19 @@ mod tests {
                 "{line:?}"
             );
         }
+    }
+
+    #[test]
+    fn the_first_byte_picks_the_path() {
+        let lan: SocketAddr = "192.0.2.10:5000".parse().unwrap();
+        let v4: SocketAddr = "127.0.0.1:5000".parse().unwrap();
+        let v6: SocketAddr = "[::1]:5000".parse().unwrap();
+        assert_eq!(route(0x16, lan), Route::Tls);
+        assert_eq!(route(0x16, v4), Route::Tls);
+        assert_eq!(route(b'G', v4), Route::Local);
+        assert_eq!(route(b'G', v6), Route::Local);
+        assert_eq!(route(b'G', lan), Route::NeedsPairing);
+        assert_eq!(route(b'P', lan), Route::NeedsPairing);
     }
 
     #[test]

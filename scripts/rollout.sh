@@ -38,6 +38,9 @@ for kv in shlex.split(sys.stdin.read()):
         break' "$1"
 }
 port_of() { print -r -- "${1##*:}"; }
+# Whether the unit turns the TLS gate on (MUS-64). A binary from MUS-64 on runs
+# plain without it, and refuses to start at all while it has paired machines.
+unit_tls() { [[ ${$(unit_env MUSTER_TLS):l} == (1|true|on|yes) ]]; }
 listening() { ss -Hltn "sport = :$1" | grep -q .; }
 
 # The daemon is healthy when the unit is active, hasn't restarted since `$1`,
@@ -55,8 +58,14 @@ healthy() {
   local bind
   # Unset, each takes the daemon's default port.
   local gate=$(unit_env MUSTER_BIND) hook=$(unit_env MUSTER_HOOK_BIND) internal=$(unit_env MUSTER_INTERNAL_BIND)
-  local -a binds=("${gate:-127.0.0.1:6255}" "${hook:-127.0.0.1:6256}" "${internal:-127.0.0.1:6257}")
-  if grep -qa MUSTER_MYKO_BIND "$expected"; then
+  local -a binds=("${gate:-127.0.0.1:6255}" "${hook:-127.0.0.1:6256}")
+  # A plain daemon (MUS-64) has no local gate and no separate myko port.
+  if grep -qa MUSTER_TLS "$expected" && ! unit_tls; then
+    :
+  else
+    binds+=("${internal:-127.0.0.1:6257}")
+  fi
+  if grep -qa MUSTER_MYKO_BIND "$expected" && { ! grep -qa MUSTER_TLS "$expected" || unit_tls; }; then
     local myko=$(unit_env MUSTER_MYKO_BIND)
     binds+=("${myko:-127.0.0.1:6258}")
   fi
@@ -103,6 +112,11 @@ preflight() {
   if [[ -n $url ]]; then
     zsh "$REPO/scripts/restart-preview.sh" "$url" >"$area/restart-preview.txt" 2>&1 || say "restart-preview failed: $area/restart-preview.txt"
     say "restart preview:"; sed 's/^/  /' "$area/restart-preview.txt"
+  fi
+  if grep -qa MUSTER_TLS "$area/stage/muster-daemon" && ! unit_tls; then
+    say "WARNING: $UNIT doesn't set MUSTER_TLS=1. This daemon runs plain without it (MUS-64),"
+    say "  and refuses to start while it has paired machines. To keep the gate, add"
+    say "  Environment=MUSTER_TLS=1 to the unit (systemctl --user edit $UNIT) before applying."
   fi
   say "staged in $area/stage; nothing installed. To deploy, with the operator's OK:"
   say "  $SELF apply $sha --operator-approved"

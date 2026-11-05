@@ -7,6 +7,8 @@ BIN=$(cd "$(dirname "$0")/.." && pwd)/target/debug
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/muster-gate-e2e.XXXX")
 export MUSTER_STATE_DIR=$WORK/state
 export MUSTER_ACK_LEASE_SECS=2
+# Everything down to the plain-mode section runs with the gate on (MUS-64).
+export MUSTER_TLS=1
 export MUSTER_BIND=127.0.0.1:16255 MUSTER_HOOK_BIND=127.0.0.1:16256 MUSTER_INTERNAL_BIND=127.0.0.1:16257 MUSTER_MYKO_BIND=127.0.0.1:16258
 # A small per-machine cap, so the flood check below can reach it (MUS-9).
 export MUSTER_MAX_CONN_PER_MACHINE=8
@@ -39,7 +41,7 @@ check "a used code is refused" '! T $BIN/muster-shim pair "$CODE" >/dev/null 2>&
 EXPIRING=$(T $BIN/muster-daemon pair --name expiring --expires 1s 2>/dev/null | awk '{print $3}')
 sleep 2
 mkdir -p $WORK/expiring
-check "an expired code is refused" '! env XDG_CONFIG_HOME=$WORK/expiring HOME=$WORK/expiring T $BIN/muster-shim pair "$EXPIRING" >/dev/null 2>&1 && [[ ! -e $WORK/expiring/muster/pairing ]]'
+check "an expired code is refused" '! T env XDG_CONFIG_HOME=$WORK/expiring HOME=$WORK/expiring $BIN/muster-shim pair "$EXPIRING" >/dev/null 2>&1 && [[ ! -e $WORK/expiring/muster/pairing ]]'
 check "and gets no token" '! T $BIN/muster-daemon pairs | grep -qx expiring'
 check "pairing stored owner-only" '[[ $(python3 -I -c "import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777))" $WORK/client/muster/pairing) == 0o600 ]]'
 
@@ -48,7 +50,10 @@ OUT=$(echo $HOOK | T $BIN/muster-shim claude-hook session-start)
 check "paired hook gets its session block over TLS" '[[ $OUT == *muster_session* ]]'
 
 # Raw requests straight at the gate.
-check "plain HTTP (no TLS) is refused" '! curl -s -m 3 http://127.0.0.1:16255/hook/session-start -d x | grep -q .'
+check "plain HTTP without the local token is refused (401)" '[[ $(curl -s -m 3 -o /dev/null -w %{http_code} http://127.0.0.1:16255/hook/session-start -d x) == 401 ]]'
+UPGRADE=(-H "Connection: Upgrade" -H "Upgrade: websocket" -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==")
+check "the gate's port takes a local websocket with the local token (101)" '[[ $(curl -s -m 3 -o /dev/null -w %{http_code} --http1.1 $UPGRADE "http://127.0.0.1:16255/myko?token=$LOCAL_TOKEN") == 101 ]]'
+check "but not one from a browser (403)" '[[ $(curl -s -m 3 -o /dev/null -w %{http_code} --http1.1 -H "Origin: https://evil.example" $UPGRADE "http://127.0.0.1:16255/myko?token=$LOCAL_TOKEN") == 403 ]]'
 check "TLS without a token gets 401" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_code} -X POST https://127.0.0.1:16255/hook/session-start -d "$HOOK") == 401 ]]'
 check "TLS with a wrong token gets 401" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_code} -H "Authorization: Bearer nope" -X POST https://127.0.0.1:16255/hook/session-start -d "$HOOK") == 401 ]]'
 
@@ -375,6 +380,56 @@ mkdir -p $WORK/unpaired/muster && cp $WORK/daemon/muster/local-token $WORK/unpai
 (sleep 4) | env HOME=$WORK/unpaired XDG_CONFIG_HOME=$WORK/unpaired MUSTER_DAEMON_ADDRESS=ws://127.0.0.1:16257 CLAUDE_CODE_SESSION_ID=e2e-local RUST_LOG=info perl -e "alarm 8; exec @ARGV" $BIN/muster-shim >/dev/null 2>$WORK/local.log
 check "unpaired shim on the daemon host connects through the local gate" 'grep -q "connected to ws://127.0.0.1:16257/myko" $WORK/local.log'
 check "and its log never shows the local token" '! grep -qF "$LOCAL_TOKEN" $WORK/local.log'
+(sleep 4) | env HOME=$WORK/unpaired XDG_CONFIG_HOME=$WORK/unpaired MUSTER_DAEMON_ADDRESS=ws://127.0.0.1:16255 CLAUDE_CODE_SESSION_ID=e2e-local2 RUST_LOG=info perl -e "alarm 8; exec @ARGV" $BIN/muster-shim >/dev/null 2>$WORK/local2.log
+check "and through the gate's own port (MUS-64)" 'grep -q "connected to ws://127.0.0.1:16255/myko" $WORK/local2.log'
+check "with TLS on, the startup line says so" 'grep -q "TLS gate: on" $WORK/daemon.log'
+
+# Plain mode (MUS-64): no MUSTER_TLS, fresh state, as upstream Marshal runs.
+unset MUSTER_TLS
+mkdir -p $WORK/plain-cfg
+PLAIN_ENV=(XDG_CONFIG_HOME=$WORK/plain-cfg MUSTER_STATE_DIR=$WORK/plain-state MUSTER_BIND=127.0.0.1:16555 MUSTER_HOOK_BIND=127.0.0.1:16556 MUSTER_INTERNAL_BIND=127.0.0.1:16557 MUSTER_MYKO_BIND=127.0.0.1:16558)
+env $PLAIN_ENV RUST_LOG=info $BIN/muster-daemon >$WORK/plain.log 2>&1 &
+PLAIN_PID=$!
+trap 'kill $DPID $PLAIN_PID 2>/dev/null; wait $DPID $PLAIN_PID 2>/dev/null' EXIT
+for i in {1..50}; do nc -z 127.0.0.1 16556 2>/dev/null && nc -z 127.0.0.1 16555 2>/dev/null && break; sleep 0.2; done
+check "plain is the default, and the startup line says so" 'grep -q "TLS gate: off" $WORK/plain.log'
+check "plain: myko takes a websocket without any token (101)" '[[ $(curl -s -m 3 -o /dev/null -w %{http_code} --http1.1 $UPGRADE http://127.0.0.1:16555/myko) == 101 ]]'
+check "plain: TLS isn't served" '! curl -sk -m 3 -o /dev/null https://127.0.0.1:16555/myko'
+check "plain: the hooks need no token" '[[ $(curl -s -m 3 -o /dev/null -w %{http_code} -X POST http://127.0.0.1:16556/hook/session-start -d "{\"session_id\":\"a0000000-0000-4000-8000-0000000000e1\",\"cwd\":\"/tmp/plain\"}") == 200 ]]'
+check "plain: but still refuse a browser origin" '[[ $(curl -s -m 3 -o /dev/null -w %{http_code} -H "Origin: https://evil.example" -X POST http://127.0.0.1:16556/hook/session-start -d x) == 403 ]]'
+check "plain: no local gate and no separate myko port" '! nc -z 127.0.0.1 16557 2>/dev/null && ! nc -z 127.0.0.1 16558 2>/dev/null'
+check "plain: no certificate and no local token are made" '[[ ! -e $WORK/plain-state/gate-cert.der && ! -e $WORK/plain-cfg/muster/local-token ]]'
+mkdir -p $WORK/plain-client
+(sleep 6) | env HOME=$WORK/plain-client XDG_CONFIG_HOME=$WORK/plain-client MUSTER_DAEMON_ADDRESS=ws://127.0.0.1:16555 CLAUDE_CODE_SESSION_ID=a0000000-0000-4000-8000-0000000000e2 RUST_LOG=info perl -e "alarm 10; exec @ARGV" $BIN/muster-shim >/dev/null 2>$WORK/plain-shim.log &
+PLAIN_SHIM=$!
+for i in {1..50}; do grep -q "(re)sending session" $WORK/plain-shim.log 2>/dev/null && break; sleep 0.2; done
+OUT=$(T env HOME=$WORK/plain-client XDG_CONFIG_HOME=$WORK/plain-client MUSTER_DAEMON_ADDRESS=ws://127.0.0.1:16555 $BIN/muster-shim tell a0000000-0000-4000-8000-0000000000e2 hello in plain mode 2>&1); RC=$?
+check "plain: a message is sent with no pairing or token" '[[ $RC == 0 && $OUT == *" sent, 0 not sent"* ]]'
+MAIL=$(curl -s -m 5 -X POST "http://127.0.0.1:16556/hook/wait?timeout=2" -d "{\"session_id\":\"a0000000-0000-4000-8000-0000000000e2\",\"cwd\":\"/tmp/plain\"}")
+check "plain: and the recipient's wait gets it" '[[ $MAIL == *"hello in plain mode"* ]]'
+wait $PLAIN_SHIM 2>/dev/null
+# A machine still paired with a daemon that now runs plain is told so, not left retrying.
+python3 -I -c 'import sys,json,base64; s=sys.argv[1].strip().split(":",2)[2]; d=json.loads(base64.urlsafe_b64decode(s+"="*(-len(s)%4))); d["address"]="127.0.0.1:16555"; print("muster-pair:v1:"+base64.urlsafe_b64encode(json.dumps(d).encode()).decode().rstrip("="))' "$(<$WORK/client/muster/pairing)" > $WORK/plain-pairing.code
+mkdir -p $WORK/stale/muster && cp $WORK/plain-pairing.code $WORK/stale/muster/pairing
+OUT=$(echo "{\"session_id\":\"a0000000-0000-4000-8000-0000000000e3\",\"cwd\":\"/tmp/stale\"}" | perl -e 'alarm 20; exec @ARGV' env HOME=$WORK/stale XDG_CONFIG_HOME=$WORK/stale $BIN/muster-shim claude-hook wait 2>&1); RC=$?
+check "plain: a paired machine is told the daemon isn't serving TLS" '[[ $RC == 2 && $OUT == *"isn'"'"'t serving TLS"* ]]'
+kill $PLAIN_PID 2>/dev/null; wait $PLAIN_PID 2>/dev/null
+
+# The switch's refusals.
+OUT=$(T env $PLAIN_ENV MUSTER_TLS=0 $BIN/muster-daemon --tls 2>&1); RC=$?
+check "--tls with MUSTER_TLS=0 refuses to start and names both" '[[ $RC != 0 && $RC != 142 && $OUT == *"--tls and MUSTER_TLS=0 disagree; set one"* ]]'
+OUT=$(T env $PLAIN_ENV MUSTER_TLS=maybe $BIN/muster-daemon 2>&1); RC=$?
+check "an unknown MUSTER_TLS value refuses to start" '[[ $RC != 0 && $RC != 142 && $OUT == *"MUSTER_TLS=maybe"* ]]'
+# The TLS run's state has paired machines: plain without an explicit off must refuse.
+OUT=$(T env $PLAIN_ENV MUSTER_STATE_DIR=$WORK/state $BIN/muster-daemon 2>&1); RC=$?
+check "paired machines and no MUSTER_TLS: refuses to run plain" '[[ $RC != 0 && $RC != 142 && $OUT == *"paired machines"* ]]'
+env $PLAIN_ENV MUSTER_STATE_DIR=$WORK/state MUSTER_TLS=0 RUST_LOG=info $BIN/muster-daemon >$WORK/plain-off.log 2>&1 &
+OFF_PID=$!
+for i in {1..50}; do grep -q "TLS gate: off" $WORK/plain-off.log 2>/dev/null && break; sleep 0.2; done
+check "but MUSTER_TLS=0 runs plain anyway" 'grep -q "TLS gate: off" $WORK/plain-off.log'
+kill $OFF_PID 2>/dev/null; wait $OFF_PID 2>/dev/null
+OUT=$(T env $PLAIN_ENV MUSTER_STATE_DIR=$WORK/plain-state $BIN/muster-daemon pair --name later --address 127.0.0.1:16555 2>&1 >/dev/null)
+check "pair in a shell without MUSTER_TLS says pairing needs TLS" '[[ $OUT == *"pairing takes effect only when the daemon runs with TLS"* ]]'
 
 echo "--- $pass passed, $fail failed"
 rm -rf "$WORK/client" "$WORK/state"
