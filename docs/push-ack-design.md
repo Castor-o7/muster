@@ -46,6 +46,23 @@ too, except Prime Agent's.
    has been handed over but not yet acked could also turn up in the next pull.
    The push path holds its message id, in the same held set #136 uses between
    pulls, until its ack lands or fails. A held message isn't pulled.
+6. **A hold has a deadline.** A handover that never resolves, because the
+   harness API hangs or the plugin is connected but wedged, would leave the
+   message unread *and* held, so no pull would ever show it: the same loss,
+   only slower. So every hold carries a lease, 60 s by default to match the
+   daemon's ack lease for hooks (`MUSTER_ACK_LEASE_SECS`). When it lapses, the
+   message is released to the next pull, and a late resolution of that
+   handover no longer acks it, since the pull now owns it.
+
+## The gate
+
+With TLS on, `gate_filter.rs` lets a client write only its own `Session` row
+(`require_owned`), and rewrites only `host` and `operator` on it. So
+`acks_pushes` passes the gate on a client's own row and can't be set on anyone
+else's. The field can only hurt the session that sets it: a client that sets it
+and then never acks keeps its own pushes unread, which its next pull shows
+anyway. The daemon PR adds a gate test for both cases. In plain mode there's no
+gate, as for every other `Session` field.
 
 Mixed versions are safe both ways, as #140 notes. An old daemon ignores the
 field and marks the push read itself, so the plugin's ack comes back as
@@ -62,11 +79,17 @@ already acked. An old plugin never sets the field.
   push comes for that message. The next turn's pull must show it exactly once
   and ack it, and the turn after must not show it again. The plugin fakes gain
   a driver command to drop and restore the plugin's daemon connection.
+- **A handover that never resolves:** the fake's harness API hangs on a push.
+  After the hold's lease (shortened for the test), the next pull shows the
+  message once, and the hung handover resolving late doesn't ack it twice or
+  show it again. Both a conformance case and a unit test cover it.
 - **Unit tests:** the plugins' own `bun test` gets #136's `inbox-pull` tests
-  and #134's `live-push` tests, plus one for the held set between a push and a
-  pull.
+  and #134's `live-push` tests, plus ones for the held set between a push and
+  a pull, and for its lease.
 - **Rust:** #140's `send_message_e2e` cases, where a session with
-  `acks_pushes` keeps a push unread until it acks.
+  `acks_pushes` keeps a push unread until it acks, and a `gate_filter` test
+  that a client can set `acks_pushes` on its own `Session` row and not on
+  another's.
 
 ## Order
 
@@ -84,3 +107,7 @@ already acked. An old plugin never sets the field.
 - **A push the plugin received but never handled**, because it died first,
   stays unread and comes back at the next pull. That's the point of the
   change.
+- **#140's Claude-shim half is left for the upstream catch-up.** Muster's
+  Claude sessions are delivered by hooks, so they don't need it. A channels-on
+  Claude session would, and it belongs to MUS-82's gap, which has no
+  conformance fake yet.
