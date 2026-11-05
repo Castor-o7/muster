@@ -47,7 +47,7 @@ refuses to start plain while its state directory has paired machines, unless
 |---|---|---|---|
 | 6255 | TLS gate | the LAN (Murph's firewall, MUS-56) | TLS with a pinned certificate; a per-machine token; the frame filter; per-IP and per-machine connection caps. Plain HTTP from loopback takes the local gate's path (below); plain HTTP from anywhere else gets `426` |
 | 6256 | hook listener | the daemon's host | the local token; refuses any `Origin` or upgrade; a connection cap |
-| 6255 (plain, loopback) and 6257 | local gate | the daemon's host | the local token; refuses any `Origin`; only myko's WebSocket route; the frame filter as `(local)`; a connection cap. 6257 is the old port, kept for one release |
+| 6255 (plain, loopback) | local gate | the daemon's host | the local token; refuses any `Origin`; only myko's WebSocket route; the frame filter as `(local)`; a connection cap. The old 6257 port was retired in MUS-70 |
 | 6258 | myko's own listener | the daemon's host | admits only requests a gate forwarded (the local token), refuses any `Origin`, via the patched myko-server |
 
 **Loopback is not a trust boundary.** The gate sends plain HTTP from a loopback

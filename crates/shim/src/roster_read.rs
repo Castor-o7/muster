@@ -159,6 +159,7 @@ mod tests {
             }),
             project: None,
             channels_enabled: None,
+            acks_pushes: None,
         })
     }
 

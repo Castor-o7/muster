@@ -14,13 +14,13 @@ evidence from a real run by the person or team named.
 
 ## Status
 
-2026-11-05: 39 of 81 stories ticked, about 48%, not counting the 3 moved to Rally. Live on
+2026-11-05: 41 of 82 stories ticked, about 50%, not counting the 3 moved to Rally. Live on
 Murph since 2026-11-05 08:48: `edf5ea8` (PID 3759037), applied by the operator with
 `MUSTER_TLS=1` and checked by checksum. Besides everything before, it brings MUS-8, MUS-9,
 MUS-10, MUS-60, MUS-11's rustls and tokio updates, MUS-62 (upstream v0.54.1), MUS-64 (the
 optional TLS mode), MUS-66 (daemon links), and MUS-71, MUS-72, MUS-73, MUS-75, MUS-78 and MUS-79.
-Merged and waiting for the next daemon restart: MUS-74. Sessions pick up a rebuilt shim
-when they restart, and no keyed send (MUS-29) has been seen live yet. Verified live on 2026-11-04:
+Merged and waiting for the next daemon restart: MUS-74, MUS-84 and MUS-85. Sessions pick up a
+rebuilt shim when they restart, and no keyed send (MUS-29) has been seen live yet. Verified live on 2026-11-04:
 MUS-4, MUS-7, MUS-34, MUS-35, MUS-54 and MUS-57. Verified live on 2026-11-05: MUS-66, MUS-71,
 MUS-75 and MUS-78. Merged, live and not yet verified: MUS-46, MUS-48, MUS-50 (its live half
 needs a session that loses its binding), MUS-55 and MUS-59.
@@ -476,13 +476,14 @@ Rally.
   recorded with the file it came from (the local token, or the pairing), and writes fail at once
   with that reason instead of waiting out the timeout. Covered by `crates/shim/tests/token_refused.rs`.
   Still needs a live run once a session runs the rebuilt shim.
-- [ ] **MUS-84: Keep `unpair` from revoking a machine and a link together.** Found by
+- [x] **MUS-84: Keep `unpair` from revoking a machine and a link together.** Found by
   tangerine-wombat cleaning up after the MUS-66 run: on Murph, `unpair a1` removes both a1's
   machine pairing (which every a1 session uses) and the link token `link:a1`, and `unlink a1`
   on the dialed side does nothing, because it edits only the dialer's `links` file. Done when:
   `unpair` takes `--machine` or `--link`, a bare name that matches both is refused with both
   forms named, `unlink` on the dialed side removes `link:<name>`, and an e2e covers each case.
-- [ ] **MUS-85: Fail closed when the paired machines can't be read.** From the watchman's
+  Merged as #109, with `unpair --machine` refusing a link's name after the watchman's review.
+- [x] **MUS-85: Fail closed when the paired machines can't be read.** From the watchman's
   review of the upstream Gate port: `run_daemon` decides whether machines are paired with
   `token_names(&state_dir).unwrap_or_default()`, so a tokens file that exists but can't be read
   (permissions, an I/O error, invalid UTF-8) reads as no pairings, and a daemon whose unit lost
@@ -490,6 +491,7 @@ Rally.
   skipped the same way. Done when: an unreadable tokens file stops the daemon with the error
   named, any non-blank line counts as a pairing for this check, and a test covers both. The
   upstream port (port/gate-v2) does this as `mode::has_pairings`.
+  Merged as #119.
 - [ ] **MUS-86: Log client acks and lease re-offers.** Found by tangerine-wombat verifying
   MUS-75 live: the daemon writes nothing at `info` when a hook acks its mail (`/hook/ack`) or when
   a lapsed lease offers un-acked mail again, so the event log's `MessageRead` rows were the only
@@ -604,16 +606,17 @@ Rally.
   all 8 were delivered, with no "no session on the roster" refusal in the daemon log.
 - [ ] **MUS-81: A pushed message is lost if the harness loses it after the push.** From MUS-69,
   the push-side twin of MUS-75. `SendMessage` writes `MessageRead` as soon as the live push reaches
-  the recipient's connection. A plugin harness (Pi and opencode, and probably Prime Agent) then
+  the recipient's connection. A plugin harness (Pi, opencode or Prime Agent) then
   hands it to the model, and if that fails, the next turn's inbox drain finds nothing unread. The
-  conformance suite's `pi` and `opencode` × `dropped-ack-redelivers` cells show it. Done when: a pushed message
+  conformance suite's `pi`, `opencode` and `prime-agent` × `dropped-ack-redelivers` cells show it. Done when: a pushed message
   that the harness didn't take stays unread (the plugin acks after handing it over, or another
   design), and those cells pass.
 - [ ] **MUS-82: Resuming wakes doesn't wake a push session with held mail.** From MUS-69. While
   wakes are paused, the live push is skipped and the mail stays unread. On resume, Claude's waiter
   and the Codex bridge (MUS-74) wake for it, but nothing pushes it again, so a push session (a
-  plugin, or Claude with channels on) waits for its next turn. The suite's `pi` and `opencode` ×
-  `resume-wakes-held-mail` cells show it. A channels-on Claude session likely has the same gap,
+  plugin, or Claude with channels on) waits for its next turn. The suite's plugin cells (`pi`,
+  `opencode` and `prime-agent` ×
+  `resume-wakes-held-mail`) show it. A channels-on Claude session likely has the same gap,
   but no conformance fake models one yet. Done when: unread direct mail held by a pause is pushed
   when wakes resume, and those cells pass.
 

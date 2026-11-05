@@ -54,10 +54,12 @@ const KNOWN_FAILURES: &[(&str, &str, &str)] = &[
     ("pi", "resume-wakes-held-mail", "MUS-82"),
     ("opencode", "dropped-ack-redelivers", "MUS-81"),
     ("opencode", "resume-wakes-held-mail", "MUS-82"),
+    ("prime-agent", "dropped-ack-redelivers", "MUS-81"),
+    ("prime-agent", "resume-wakes-held-mail", "MUS-82"),
 ];
 
 /// Harnesses in the grid that have no fake yet, with the stage that adds one.
-const NOT_YET: &[(&str, &str)] = &[("prime-agent", "MUS-69 stage 3")];
+const NOT_YET: &[(&str, &str)] = &[];
 
 // ---------------------------------------------------------------------------
 // The daemon
@@ -103,7 +105,6 @@ struct Daemon {
     mode: Mode,
     bind: u16,
     hook: u16,
-    internal: u16,
     myko: u16,
     child: Option<Child>,
 }
@@ -115,7 +116,6 @@ impl Daemon {
             mode,
             bind: free_port(),
             hook: free_port(),
-            internal: free_port(),
             myko: free_port(),
             child: None,
         };
@@ -142,7 +142,6 @@ impl Daemon {
             ("MUSTER_ACK_LEASE_SECS".into(), ACK_LEASE_SECS.to_string()),
             ("MUSTER_BIND".into(), addr(self.bind)),
             ("MUSTER_HOOK_BIND".into(), addr(self.hook)),
-            ("MUSTER_INTERNAL_BIND".into(), addr(self.internal)),
             ("MUSTER_MYKO_BIND".into(), addr(self.myko)),
         ]
     }
@@ -1590,6 +1589,13 @@ const HARNESSES: &[Harness] = &[
         name: "opencode",
         mode: Mode::Plain,
         make: || Box::new(FakePlugin::new("muster-opencode")),
+        not_applicable: PUSH_PLUGIN_NOT_APPLICABLE,
+        needs_bun: true,
+    },
+    Harness {
+        name: "prime-agent",
+        mode: Mode::Plain,
+        make: || Box::new(FakePlugin::new("muster-prime-agent")),
         not_applicable: PUSH_PLUGIN_NOT_APPLICABLE,
         needs_bun: true,
     },

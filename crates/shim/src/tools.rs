@@ -1203,6 +1203,7 @@ mod tests {
             host: None,
             project: None,
             channels_enabled: None,
+            acks_pushes: None,
         })
     }
 
