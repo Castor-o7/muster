@@ -36,6 +36,17 @@ plan on 2026-11-05. It supersedes the landing order below wherever the two disag
   are created), which is near Other's empty-`to` and room code, and trevorsargent's
   **#59** (TUI session nicknames and agents-pane grouping), which is worth checking
   against our nickname and roster changes before M2.
+- **What v0.58.0 (#166) overlaps.** It's mostly CI (`ci.yml` +80, `release.yml`,
+  actionlint, workflow validation) plus embedding-agent metadata (#104's idea,
+  `entities/src/session.rs` +52, `docs/embedding-agent-id.md`). It also edits
+  `daemon/src/hooks.rs` (+54 −45), `shim/src/main.rs` (+118 −29),
+  `shim/src/tools.rs` and `shim/src/codex_hook.rs`. So it touches **M2**
+  (`shim/src/main.rs`), **Other's `cargo-deny` audit** (`ci.yml`, which now
+  validates workflows and pins action references, so the audit job must follow
+  those rules), the **Codex bridge items** (`codex_hook.rs`), and anything that
+  adds Session fields (the Gate's machine fields). `docs/pr-followups.md` shows
+  upstream keeps ideas from closed PRs and reimplements them itself. Expect the
+  same with ours.
 - **Reference checkout:** `~/src/marshal` on Murph is a clean checkout of
   ignition-is-go/marshal main, with remotes `upstream` and `castor` (the
   Castor-o7/marshal fork that PR heads come from). Use it for upstream code.
