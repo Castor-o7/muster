@@ -105,7 +105,7 @@ pub async fn run() -> Result<()> {
     let nicknames = client.watch_query::<GetAllSessionNicknames>(GetAllSessionNicknames {});
     let watchers = client.watch_query::<GetAllWakeWatchers>(GetAllWakeWatchers {});
     let pauses = client.watch_query::<GetAllWakePauses>(GetAllWakePauses {});
-    client.set_address(Some(crate::daemon_address().await?));
+    client.set_address(Some(crate::daemon_address().await?.0));
 
     // An empty result can't be told from one that hasn't arrived, so never report
     // an empty roster as a fact.

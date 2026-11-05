@@ -16,6 +16,7 @@ mod codex_hook;
 mod codex_setup;
 mod link;
 mod mcp;
+mod refusal;
 mod roster_read;
 mod session_discovery;
 mod statusline;
@@ -269,8 +270,9 @@ pub(crate) fn with_local_token(address: String) -> String {
     }
 }
 
-/// Where to reach the daemon; see the resolution order at the call in `serve`.
-async fn daemon_address() -> Result<String> {
+/// Where to reach the daemon, and where the credential it checks comes from
+/// (for MUS-83's refusal message); see the resolution order at the call in `serve`.
+async fn daemon_address() -> Result<(String, refusal::Credential)> {
     Ok(match link::load_pairing() {
         Some(pairing) => {
             let port = link::start_tunnel(&pairing)
@@ -281,7 +283,13 @@ async fn daemon_address() -> Result<String> {
                 pairing.name,
                 pairing.address
             );
-            format!("ws://127.0.0.1:{port}/myko?token={}", pairing.token)
+            let file = config_file_candidates("pairing")
+                .into_iter()
+                .find(|p| p.exists());
+            (
+                format!("ws://127.0.0.1:{port}/myko?token={}", pairing.token),
+                refusal::Credential::Pairing(file),
+            )
         }
         None => {
             let address = read_address_from_config_file()
@@ -289,7 +297,12 @@ async fn daemon_address() -> Result<String> {
                 .or_else(|| std::env::var(ADDRESS_ENV_LEGACY).ok())
                 .unwrap_or_else(|| DEFAULT_DAEMON_ADDRESS.to_string());
             log::info!("[muster-shim] not paired: connecting to {address} without TLS");
-            with_local_token(address)
+            let file = muster_entities::pairing::config_dir()
+                .map(|d| d.join(muster_entities::pairing::LOCAL_TOKEN_FILE));
+            (
+                with_local_token(address),
+                refusal::Credential::LocalToken(file),
+            )
         }
     })
 }
@@ -327,7 +340,7 @@ async fn serve() -> Result<()> {
     // A pairing (`muster-shim pair`) wins over all of these: myko's client
     // dials a loopback tunnel that carries the connection over pinned TLS to
     // the daemon's gate, with the access token in the URL.
-    let daemon_address = daemon_address().await?;
+    let (daemon_address, credential) = daemon_address().await?;
 
     let client = Arc::new(MykoClient::new());
 
@@ -524,10 +537,15 @@ async fn serve() -> Result<()> {
     // the moment the WebSocket opens.
     let session_for_resend = Arc::clone(&session);
     let client_for_resend = Arc::clone(&client);
+    // While disconnected, ask the daemon once why (MUS-83): myko's client
+    // doesn't say that the handshake was refused for the token.
+    let runtime = tokio::runtime::Handle::current();
+    let probe_url = daemon_address.clone();
     let conn_guard = client.connection_status().subscribe(move |signal| {
         if let hyphae::Signal::Value(status) = signal {
             match &**status {
                 ConnectionStatus::Connected(addr) => {
+                    refusal::clear();
                     // The paired address carries the access token in its
                     // query; Claude Code keeps MCP stderr on disk.
                     let addr = addr.split('?').next().unwrap_or_default();
@@ -546,6 +564,7 @@ async fn serve() -> Result<()> {
                 }
                 ConnectionStatus::Disconnected => {
                     log::warn!("[muster-shim] disconnected");
+                    runtime.spawn(refusal::probe(probe_url.clone(), credential.clone()));
                 }
                 _ => {}
             }

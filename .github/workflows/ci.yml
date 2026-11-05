@@ -80,6 +80,11 @@ jobs:
           for plugin in muster-pi muster-opencode muster-prime-agent; do
             (cd "plugins/$plugin" && npm ci --workspaces=false --no-audit --no-fund --ignore-scripts)
           done
+      # The pi plugin's own unit tests (MUS-81: the inbox pull, the push
+      # hold and its lease). The other plugins' suites aren't run here yet.
+      - name: Pi plugin unit tests
+        working-directory: plugins/muster-pi
+        run: '"$MUSTER_BUN" test'
       # MUS-69: every harness against one scenario table, with the real
       # binaries; prints the harness × scenario grid. Known failures are listed
       # in the test and reported as such.

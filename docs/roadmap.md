@@ -480,6 +480,10 @@ Rally.
   tool call only reported "command timed out after 10000 ms (daemon unresponsive?)". Done
   when: a shim whose connection is refused for its token says so, and names the token file,
   and a test covers it.
+  Built: while disconnected, the shim repeats the handshake once (`refusal.rs`); a `401` is
+  recorded with the file it came from (the local token, or the pairing), and writes fail at once
+  with that reason instead of waiting out the timeout. Covered by `crates/shim/tests/token_refused.rs`.
+  Still needs a live run once a session runs the rebuilt shim.
 - [x] **MUS-84: Keep `unpair` from revoking a machine and a link together.** Found by
   tangerine-wombat cleaning up after the MUS-66 run: on Murph, `unpair a1` removes both a1's
   machine pairing (which every a1 session uses) and the link token `link:a1`, and `unlink a1`
@@ -496,6 +500,11 @@ Rally.
   named, any non-blank line counts as a pairing for this check, and a test covers both. The
   upstream port (port/gate-v2) does this as `mode::has_pairings`.
   Merged as #119.
+- [ ] **MUS-86: Log client acks and lease re-offers.** Found by tangerine-wombat verifying
+  MUS-75 live: the daemon writes nothing at `info` when a hook acks its mail (`/hook/ack`) or when
+  a lapsed lease offers un-acked mail again, so the event log's `MessageRead` rows were the only
+  evidence. Done when: the daemon logs one `info` line per client ack (session, message count) and
+  one per re-offer after a lease lapses, with no bodies, and a test checks both lines.
 - [x] **MUS-72: Hold a session's first writes until it's registered.** Found by tangerine-wombat
   in the G5 run on Murph: a tool call right after `initialize` reached the daemon before the
   shim's Session SET and failed "caller has no session on the roster". A real agent's first
@@ -610,6 +619,9 @@ Rally.
   conformance suite's `pi`, `opencode` and `prime-agent` × `dropped-ack-redelivers` cells show it. Done when: a pushed message
   that the harness didn't take stays unread (the plugin acks after handing it over, or another
   design), and those cells pass.
+  Progress: the daemon half is in (#118, `acks_pushes`). Pi opts in and passes `dropped-ack-redelivers`
+  and the two new scenarios, `mail-waiting-at-reconnect` and `hung-handover-released`; opencode
+  and Prime Agent are next.
 - [ ] **MUS-82: Resuming wakes doesn't wake a push session with held mail.** From MUS-69. While
   wakes are paused, the live push is skipped and the mail stays unread. On resume, Claude's waiter
   and the Codex bridge (MUS-74) wake for it, but nothing pushes it again, so a push session (a
@@ -618,6 +630,17 @@ Rally.
   `resume-wakes-held-mail`) show it. A channels-on Claude session likely has the same gap,
   but no conformance fake models one yet. Done when: unread direct mail held by a pause is pushed
   when wakes resume, and those cells pass.
+- [ ] **MUS-88: Tests pick ports without races.** From MUS-69 and an e2e run on Murph. Two
+  causes. First, the conformance suite and the daemon's e2e tests (9 files) pick a free port by
+  binding port 0, reading the port and closing the socket, then hand the number to a daemon that
+  binds it later; in between, another process can take it. The suite hit that once on 2026-11-05
+  (`claude-tls` × `duplicate-shown-at-most-once`: the daemon's hook listener got "Address already
+  in use" and the daemon didn't come up), and it passed on rerun. Second, the gate and links e2e
+  scripts (`scripts/test-gate-e2e.sh`, `scripts/test-links-e2e.sh`) use fixed ports, 16255 to
+  16758, so two runs on one host collide, as peppy-skate's did on Murph the same night. Done when:
+  a test's daemon binds its own ports (port 0) and reports them, or the tests retry a bind that
+  loses the race; the e2e scripts take free ports per run, so two can run at once on one host;
+  and no test fails on a port another process took.
 
 ## Moved to Rally
 

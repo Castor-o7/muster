@@ -132,7 +132,7 @@ fn terminal_id() -> Result<String> {
 
 pub async fn run(target: Target, body: String) -> Result<()> {
     muster_entities::link();
-    let address = crate::daemon_address().await?;
+    let (address, _) = crate::daemon_address().await?;
     let machine = crate::link::load_pairing()
         .map(|p| p.name)
         .unwrap_or_else(|| crate::detect_host().name);
