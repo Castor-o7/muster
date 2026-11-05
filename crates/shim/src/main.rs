@@ -457,6 +457,13 @@ async fn serve() -> Result<()> {
         project: project.clone(),
         channels_enabled,
         acks_pushes: None,
+        // MUS-3: the same harness and identity the hooks report, since this
+        // SET replaces the row the hooks wrote.
+        harness: Some(if is_codex { "codex" } else { "claude" }.to_string()),
+        identity: std::env::var("MUSTER_IDENTITY")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty()),
     };
     let session = Arc::new(Mutex::new(session));
 
@@ -1564,6 +1571,8 @@ mod tests {
                 project: None,
                 channels_enabled: None,
                 acks_pushes: None,
+                harness: None,
+                identity: None,
             })
         };
         assert!(registered_on_roster(&[row("me", Some("c"))], &me));
