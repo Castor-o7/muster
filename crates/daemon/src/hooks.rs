@@ -131,6 +131,7 @@ pub fn dispatch(
         "/hook/prompt-submit" => Some(handle_prompt_submit(query, body, ctx)),
         "/hook/session-end" => Some(handle_session_end(body, ctx)),
         "/hook/ack" => Some(handle_ack(body, ctx)),
+        "/hook/bridge-watch" => Some(handle_bridge_watch(body, ctx)),
         _ => None,
     }
 }
@@ -180,6 +181,43 @@ fn handle_ack(body: &[u8], ctx: &Arc<MykoServerContext>) -> HookOutcome {
         ack_surfaced(ctx, &session, ids);
     }
     HookOutcome::text(String::new())
+}
+
+/// A Codex app-server bridge saying it can wake a thread (MUS-77). Codex holds
+/// no `/hook/wait`, so without this the roster calls a bridge-watched thread
+/// `wake: none` though its bridge will start a turn. Body:
+/// `{"session_id": …, "watching": true|false}`. `true` refreshes the session's
+/// `WakeWatcher` (written only when due, as a held wait's is); `false` ends it.
+///
+/// The listener's `machine_may_act` has already checked that the caller may act
+/// for this session. A session that isn't on the roster gets no record, and
+/// while wakes are paused none is kept, since the bridge starts no turns then.
+fn handle_bridge_watch(body: &[u8], ctx: &Arc<MykoServerContext>) -> HookOutcome {
+    let parsed = parse_body(body);
+    let Some(sid) = parsed
+        .as_ref()
+        .and_then(|b| b.get("session_id")?.as_str())
+        .filter(|s| !s.is_empty())
+    else {
+        return HookOutcome::text(String::new());
+    };
+    let watching = parsed
+        .as_ref()
+        .and_then(|b| b.get("watching")?.as_bool())
+        .unwrap_or(false);
+    let cmd_ctx = internal_cmd_ctx(ctx);
+    let on_roster = cmd_ctx
+        .exec_query(GetAllSessions {})
+        .unwrap_or_default()
+        .iter()
+        .any(|s| s.id.0.as_ref() == sid);
+    if watching && on_roster && !muster_entities::controls::wakes_paused() {
+        mark_waiting_now(&cmd_ctx, sid);
+        HookOutcome::text("watching".to_string())
+    } else {
+        end_wait(&cmd_ctx, sid);
+        HookOutcome::text("not watching".to_string())
+    }
 }
 
 /// Register or refresh a hook-owned session without surfacing its inbox.
