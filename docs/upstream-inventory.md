@@ -83,7 +83,7 @@ cell says which part).
 | 25 | #19 `12a603f` | `muster-shim send`: message the muster from a terminal | port | Other | `shim/src/main.rs` U-CG; `tools.rs` U-RR, U-CG |
 | 26 | #20 `5024ae4` | A terminal message is never the operator's approval (wording) | port with #19 | Other | none |
 | 27 | #21 `7e7869b` | Say why a watcher can't reach the daemon | port | Hooks | `daemon/src/main.rs` U-CG |
-| 28 | #22 `865f01b` | Ack mail only after the client has handed it on | port | Durability (it touches the hook path; land after Hooks) | `hooks.rs` U-RR |
+| 28 | #22 `865f01b` | Ack mail only after the client has handed it on | port | Hooks (moved from Durability: the waiter's `ack=client`, `/hook/ack` and `X-Muster-Ack` come from here) | `hooks.rs` U-RR |
 | 29 | #23 `58c584a` | Tell a Monitor watcher about a refusal on stdout | port | Hooks | none |
 | 30 | #24 `d85b289` | Gate hardening (rest of the review); keep a session's os/arch across a wait hook | port | Gate (the os/arch part goes with Hooks) | `hooks.rs`, `message.rs`, `send_message.rs`, `broadcast_message.rs` U-RR |
 | 31 | #25 `665d6c1` | Gate e2e: clear mail and the open WS after unpair | port | Gate | none |
@@ -116,7 +116,7 @@ cell says which part).
 | 58 | #52 `8bf207c` | Tests: keep a refusing port reserved in the `connect_any` tests | port with #1 | Hooks | `Cargo.lock`, `shim/Cargo.toml` U-REL |
 | 59 | #54 `5a19735` | Comment: clock skew in the kept-session check | port with #51 | Durability | `cleanup.rs` U-RR |
 | 60 | #55 `b92523a` | Roadmap: MUS-55 | drop | — | none |
-| 61 | #56 `1e4d0e0` | End held waits cleanly on SIGTERM | port | Durability | `daemon/src/main.rs` U-CG |
+| 61 | #56 `1e4d0e0` | End held waits cleanly on SIGTERM | port | Hooks (moved from Durability: the waiter handles its `X-Muster-Restarting` reply) | `daemon/src/main.rs` U-CG |
 | 62 | #57 `cd7fc14` | Keep mail to a reaped session until the 14-day sweep | port | Durability | `cleanup.rs`, `message.rs` U-RR |
 | 63 | #58 `0e76849` | restart-preview fixes | drop | — | none |
 | 64 | #60 `74385c5` | `scripts/rollout.sh`: roll out a daemon commit with rollback | drop (Muster ops) | — | none |
@@ -150,16 +150,29 @@ cell says which part).
 
 | Upstream PR | Entries |
 |---|---|
-| Hooks | 1, 3, 7, 10–12, 27, 29, 42, 44, 46, 48, 50, 58 (and the os/arch part of 30) |
+| Hooks | 1, 3, 7, 10–12, 27, 28, 29, 42, 44, 46, 48, 50, 58, 61 (and the os/arch part of 30) |
 | Gate | 4, 17–19, 22, 30–32, 51, 73, 74, 77–81, part of 83 |
-| Durability | 28, 37–39, 49, 55, 59, 61, 62, 65 |
+| Durability | 37–39, 49, 55, 59, 62, 65 |
 | Other | 6, 21, 25, 26, 35, 47, part of 56, part of 83 |
 
-Suggested order: Hooks, then Durability (#22 and #45 edit the same hook
-code), then Gate (the largest, and #72 waits on myko), then Other. Each
+Suggested order: Hooks, then Durability, then Gate (the largest, and #72 waits on myko), then Other. Each
 needs U-RR and U-CG folded in first. The cleanest way is to do this on top
 of modest-roach's G1 catch-up merge, rather than cherry-picking onto
 `94ecc24` and resolving the same conflicts twice.
+
+**Correction (port/hooks prep).** The Hooks entries can't be cherry-picked
+cleanly onto upstream: they are entangled with the Gate.
+
+- `crates/shim/src/link.rs` was created by the gate commit `5c05690`. The
+  hooks then added `connect_any`, `PostFailure` and `Reply` to it.
+- At `ea472f6` the hook code also calls pairing (`https_post`), the local
+  token, `machine_may_act`, `ConnLimiter` (#74), `wakes_paused` (#76) and
+  `attested()` (#16).
+
+The port therefore renames each commit with `scripts/rename-to-marshal.sh`,
+cherry-picks it onto upstream main, and drops the gate hunks as it goes. The
+PR lists every dropped hunk. Entries 28 (#22) and 61 (#56) moved into Hooks
+because the waiter depends on both.
 
 ## Renames to restore for upstream
 
