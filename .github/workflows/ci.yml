@@ -79,6 +79,9 @@ jobs:
         env:
           RESTART_E2E_POSTGRES_URL: postgres://conformance:conformance@127.0.0.1:5432/conformance
         run: ./scripts/test-restart-e2e.sh
+      # MUS-17: the same with no database and the store in a file.
+      - name: Restart with the store in a file end-to-end (MUS-17)
+        run: ./scripts/test-restart-file-e2e.sh
       # The TypeScript plugins' fakes run under bun (MUS-69 stage 3). Download
       # the pinned release from bun's GitHub releases and check it against the
       # SHA-256 below, from that release's SHASUMS256.txt. No third-party

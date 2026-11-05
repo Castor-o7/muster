@@ -38,6 +38,7 @@ checked as well as what the recipient sees.
 | 5 | `daemon-restart-mid-wait` | The daemon restarts (SIGTERM, as systemd stops it) while the session waits, in memory, so the roster empties. The session still wakes on mail sent after the restart. |
 | 5 (pg) | `daemon-restart-mid-wait-pg` | The same, with the daemon persisting to Postgres. |
 | 5b (pg) | `restart-keeps-unread-mail` | Mail sent while the session is busy, then a restart against Postgres: the mail is kept, and wakes the session once it goes idle. n/a for the push plugins, which take the push into their running turn. |
+| 5c (file) | `restart-keeps-unread-mail-file` | The same with no Postgres and `MUSTER_PERSIST=file` (MUS-17): the store is the file in the daemon's state directory. Needs no database, so it always runs. n/a for the push plugins, as 5b. |
 | 6 | `operator-pause-stops-wakes` | With `muster-daemon pause`, mail doesn't wake an idle session but still arrives at the next hook. |
 | 6b | `resume-wakes-held-mail` | Mail sent while wakes are paused doesn't wake the session, and resuming alone wakes it with that mail, with no new message. |
 | 7 | `broadcast-never-wakes` | A room broadcast neither wakes the session nor is injected. |
