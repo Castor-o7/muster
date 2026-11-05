@@ -168,6 +168,27 @@ and #57's test lives in `hook_wait_e2e.rs`, so both need Hooks. That matches
 the landing order. Entry 6 (`6d55631`) is folded in, because its reap reasons
 run through the same sweep code. Entry 39's doc is not ported.
 
+**Other (port/other).** It's stacked on port/hooks-v2, because the roster
+command reads `WakeWatcher` and `wake_state`. One commit per item, so the ones
+that don't need Hooks (35, 21, part of 56, part of 83) can be cherry-picked
+onto upstream main on their own:
+
+- 35 (#30): old operator rooms, as is.
+- 25, 26, 47 (#19, #20, #40): terminal send and the roster command, in one
+  commit, since they share the shim's `main.rs` and README changes. Without the
+  gate nothing is attested, so roster rows have `observed` and `declared`
+  only, with machine and operator under `declared`. No `wakes_paused`.
+- 21 (#15): only the plugin README's two upstream errors (nicknames, and
+  `mcpServers` in `settings.json`). The rest is about the gate, ports or
+  releases.
+- Part of 56 (#48): the AGPL disclosure in the README. The chacha20 bump goes
+  with 83's lockfile updates.
+- Part of 83 (#78): `deny.toml` and the CI job. On upstream's lockfile the
+  audit found the same advisories #78 fixed, so the same in-range updates are
+  applied, changing only those lock entries.
+
+The #16 mention-banner fix isn't on this branch.
+
 **Correction (port/hooks prep).** The Hooks entries can't be cherry-picked
 cleanly onto upstream: they are entangled with the Gate.
 
