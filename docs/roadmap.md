@@ -14,7 +14,7 @@ evidence from a real run by the person or team named.
 
 ## Status
 
-2026-11-05: 41 of 82 stories ticked, about 50%, not counting the 3 moved to Rally. Live on
+2026-11-05: 43 of 84 stories ticked, about 51%, not counting the 3 moved to Rally. Live on
 Murph since 2026-11-05 08:48: `edf5ea8` (PID 3759037), applied by the operator with
 `MUSTER_TLS=1` and checked by checksum. Besides everything before, it brings MUS-8, MUS-9,
 MUS-10, MUS-60, MUS-11's rustls and tokio updates, MUS-62 (upstream v0.54.1), MUS-64 (the
@@ -331,7 +331,7 @@ Merged and needing a live run: MUS-36 and MUS-37.
 - [ ] **MUS-13: Run CI on macOS.** Done when: CI runs on macOS and passes,
   including `recovery_tracks_codex_effective_working_directory`, which fails on
   macOS today.
-- [ ] **MUS-87: Keep CI from running out of disk or failing on a download.** Found on #113's
+- [x] **MUS-87: Keep CI from running out of disk or failing on a download.** Found on #113's
   run (42043766050): the `check` job builds the workspace, runs the gate and links e2e, installs
   bun and the plugins' `node_modules`, and builds again for conformance, and the ubuntu runner
   ran out of space (`rustc-LLVM ERROR: IO failure on output stream: No space left on device`).
@@ -339,6 +339,9 @@ Merged and needing a live run: MUS-36 and MUS-37.
   Done when: the job frees the runner SDKs it doesn't use and builds with line tables only,
   shows `df -h` before, after and at the end, retries the bun download with its SHA-256
   check kept, and CI passes on the PR with the headroom shown.
+  Merged as #121, whose CI passed (run 42049155521): `/` had 88G free at the start, 114G after the
+  free step (about 2 minutes) and 104G at the end, with `target/` at 8.4G. Runner images vary, so
+  that margin is the one this run had.
 - [ ] **MUS-14: Publish prebuilt binaries.** There are no releases yet, so
   `scripts/install-codex.sh` can't work and the plugins aren't on npm. Done when: macOS and Linux can
   install without a Rust toolchain.
@@ -507,11 +510,15 @@ Rally.
   named, any non-blank line counts as a pairing for this check, and a test covers both. The
   upstream port (port/gate-v2) does this as `mode::has_pairings`.
   Merged as #119.
-- [ ] **MUS-86: Log client acks and lease re-offers.** Found by tangerine-wombat verifying
+- [x] **MUS-86: Log client acks and lease re-offers.** Found by tangerine-wombat verifying
   MUS-75 live: the daemon writes nothing at `info` when a hook acks its mail (`/hook/ack`) or when
   a lapsed lease offers un-acked mail again, so the event log's `MessageRead` rows were the only
   evidence. Done when: the daemon logs one `info` line per client ack (session, message count) and
   one per re-offer after a lease lapses, with no bodies, and a test checks both lines.
+  Built by tangerine-wombat: `/hook/ack` logs `[hook] <session>: client acked N message(s)`, and
+  a lease that lapsed without an ack logs `offering N message(s) again` when its mail is offered
+  again (a lapsed lease is remembered for an hour to tell the two apart). `scripts/test-gate-e2e.sh`
+  checks both lines and that neither carries a body; `hooks.rs` unit tests cover the counting.
 - [x] **MUS-72: Hold a session's first writes until it's registered.** Found by tangerine-wombat
   in the G5 run on Murph: a tool call right after `initialize` reached the daemon before the
   shim's Session SET and failed "caller has no session on the roster". A real agent's first
