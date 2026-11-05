@@ -14,7 +14,7 @@ evidence from a real run by the person or team named.
 
 ## Status
 
-2026-11-04: 30 of 65 stories ticked, about 46%, not counting the 3 moved to Rally. Live on
+2026-11-04: 32 of 66 stories ticked, about 48%, not counting the 3 moved to Rally. Live on
 Murph since 2026-11-04 16:02:18: `14e2d1a`, deployed by Lamplighter on the operator's word, with
 every port check passing. It carries MUS-7 (first live at `3746864`, 14:28) and MUS-59, besides
 everything before. Merged and waiting for the next daemon restart: MUS-8 (which also needs a
@@ -439,16 +439,26 @@ ignition-is-go/marshal, or to the Castor-o7/marshal fork, until these goals are 
 operator decides each upstream PR. The goal numbers are the watchman's board's; G6 belongs to
 Rally.
 
-- [ ] **MUS-62: Catch up with upstream Marshal (G1).** Merge upstream/main (v0.54.1, `94ecc24`)
+- [x] **MUS-62: Catch up with upstream Marshal (G1).** Merge upstream/main (v0.54.1, `94ecc24`)
   into Muster and keep Muster's features. Done when: build, tests and clippy are green, and the
-  Zoo sandbox builds. In review as #84; `vendor/myko-server` moves to 6.11.5 with it.
+  Zoo sandbox builds. Merged as #84; `vendor/myko-server` moved to 6.11.5 with it. Live on Murph
+  only after a daemon restart.
 - [x] **MUS-63: Inventory Muster's changes against upstream (G2).** A table of Muster's commits:
   already upstream, to port, to drop, and the names to restore for upstream (`marshal-shim`,
   the 6155 ports, `MARSHAL_*`). Merged as #79.
-- [ ] **MUS-64: Make the TLS gate optional (G3).** Plain WebSocket by default, like upstream, and
+- [x] **MUS-64: Make the TLS gate optional (G3).** Plain WebSocket by default, like upstream, and
   a switch ("cert mode") that turns on the gate, pinning, tokens and pairing. Done when: tests
   cover both modes. Offer both a `--tls` flag and a `MUSTER_TLS=1` variable, and check upstream's
-  daemon for which it uses; the operator asks upstream which it wants. Design draft in #82.
+  daemon for which it uses; the operator asks upstream which it wants. Design in #82. Built with
+  both, one port for local and remote, and a refusal to run plain while pairings exist unless
+  `MUSTER_TLS=0` says so; the gate e2e covers both modes. **Murph's unit needs
+  `Environment=MUSTER_TLS=1` before the restart that brings this in**, or the daemon refuses to
+  start and the rollout rolls back.
+- [ ] **MUS-69: Retire the 6257 alias.** From MUS-64. With TLS on, the daemon still binds the
+  old local-gate port (`MUSTER_INTERNAL_BIND`, 6257) so sessions configured for it survive one
+  restart. Done when: no machine's config names 6257 (a1's and Murph's `.mcp.json`, the TUI,
+  the TS plugins), and the alias, its variable and its rollout check are removed. The upstream
+  Gate PR ships without it.
 - [x] **MUS-65: Document live delivery without the channels flag (G4).** How hooks give live
   delivery and wake, checked against the code, and how that differs from Marshal's channel
   push. Merged as #80.
