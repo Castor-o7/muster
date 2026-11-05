@@ -49,12 +49,16 @@ Muster isn't published to crates.io; install from the repository (or from a
 local checkout with `--path crates/shim` and so on):
 
 ```bash
-cargo install --git https://github.com/Castor-o7/muster muster-shim muster-daemon
+cargo install --locked --git https://github.com/Castor-o7/muster muster-shim muster-daemon
 # optional but recommended for visibility into the live roster
-cargo install --git https://github.com/Castor-o7/muster muster-tui
+cargo install --locked --git https://github.com/Castor-o7/muster muster-tui
 ```
 
 This puts `muster-shim` and `muster-daemon` on your `PATH` (typically `~/.cargo/bin`).
+`--locked` builds the dependency versions the repository was tested with. Without it,
+cargo picks the newest compatible ones. While installing both, cargo prints `patch
+myko-server … was not used in the crate graph`. That's expected: `muster-shim` doesn't use
+myko-server, and `muster-daemon` is still built with the patched copy.
 
 On a machine that only runs sessions (not the daemon), `muster-shim setup` does steps 2b
 and 3 in one go: it pairs, then installs the plugin through Claude Code's own `claude plugin`
@@ -271,6 +275,14 @@ If you wired the MCP server by hand (step 3) instead of installing the plugin, a
 }
 ```
 
+To see each session's nickname, the name peers address it by, in Claude Code's status line,
+add this too (`muster-shim setup` does it for you). If you already have a `statusLine`,
+`muster-shim setup` prints a command that runs yours and Muster's side by side:
+
+```json
+{ "statusLine": { "type": "command", "command": "muster-shim statusline" } }
+```
+
 The hooks find the daemon from this machine's pairing (step 2b), the same way the shim does. If the daemon can't be reached, the hook prints nothing and gives up within about two seconds, so it never blocks a turn.
 
 #### The channels flag
@@ -284,9 +296,9 @@ the hooks when you don't.
 
 Pi, Prime Agent and opencode connect over plain WebSocket, so they need to run on the daemon's own host, using `ws://localhost:6255`. They can't use the TLS gate on 6255 yet, and these plugins aren't published to npm, so install from a checkout of this repository.
 
-After starting a reachable daemon, install the published
+After starting a reachable daemon, install the
 [`muster-pi`](plugins/muster-pi)
-package:
+package from your checkout:
 
 ```bash
 pi install ./plugins/muster-pi
