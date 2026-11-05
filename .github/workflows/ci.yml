@@ -128,13 +128,15 @@ jobs:
           du -sh target 2>/dev/null || true
 
   # The workspace tests on macOS (MUS-13), where operators run Muster day to day:
-  # Apple Silicon, the system's TLS (Security.framework rather than OpenSSL) and
+  # Apple Silicon (macos-15 is arm64), the system's TLS (Security.framework rather than OpenSSL) and
   # /var -> /private/var paths are all things the Linux job can't see. It runs
   # beside the Linux job, not after it, and caches cargo, so CI takes no longer.
   # The end-to-end scripts and conformance stay on Linux, which has their
   # Postgres service.
   macos:
-    runs-on: macos-14
+    # macos-14 is retired: GitHub answers "The configuration
+    # 'macos-14-arm64-us-default' is not supported" (#163's first run).
+    runs-on: macos-15
     timeout-minutes: 30
     env:
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
