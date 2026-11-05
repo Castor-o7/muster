@@ -595,6 +595,7 @@ async fn serve_until_stopped(
         while !server.is_ready() {
             tokio::time::sleep(SWEEPER_READY_POLL).await;
         }
+        log::info!("muster-daemon: the store is loaded; starting the cleanup sweeper");
         tokio::spawn(daemon::cleanup::run_sweeper(server.ctx()));
         std::future::pending::<()>().await;
     };
