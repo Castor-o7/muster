@@ -44,6 +44,11 @@ jobs:
         run: cargo build --workspace && ./scripts/test-gate-e2e.sh
       - name: Links between daemons end-to-end (MUS-66)
         run: ./scripts/test-links-e2e.sh
+      # MUS-69: every harness against one scenario table, with the real
+      # binaries; prints the harness × scenario grid. Known failures are listed
+      # in the test and reported as such.
+      - name: Delivery conformance
+        run: cargo build --workspace && cargo test -p muster-shim --test conformance -- --ignored --nocapture
       - name: Test simulation fixture and scoring contracts
         run: python3 -m unittest discover -s scripts/sandbox -v
 
