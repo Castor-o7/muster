@@ -914,7 +914,22 @@ fn broadcast_never_wakes(c: &mut Cell) -> Result<(), String> {
 /// sender as `wake: expected` (MUS-71). Here the session's MCP shim is
 /// connected, but no waiter runs and it isn't busy, so nothing can wake it.
 fn wake_none_not_expected(c: &mut Cell) -> Result<(), String> {
-    let row = c.recipient_on_roster()?;
+    let mut row = c.recipient_on_roster()?;
+    // A hook-registered row has pid 0; the session's MCP shim fills it in when
+    // it attaches. Until then the roster says `none` for a different reason,
+    // and the bug can't show.
+    let id = c.recipient();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while row["pid"].as_u64().unwrap_or(0) == 0 {
+        if Instant::now() >= deadline {
+            return Err("precondition: the session's MCP shim never attached".into());
+        }
+        thread::sleep(Duration::from_millis(250));
+        row = c
+            .sender
+            .row(&id, Duration::from_secs(5))
+            .unwrap_or_default();
+    }
     if row["wake"] != json!("none") {
         return Err(format!(
             "precondition: the roster should say wake none, says {}",
