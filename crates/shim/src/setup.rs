@@ -1,7 +1,9 @@
-//! `muster-shim setup [--pair CODE] [--apply]`: set this machine up as a
+//! `muster-shim setup [--pair-file PATH] [--apply]`: set this machine up as a
 //! Muster client in one command (MUS-15).
 //!
 //! It pairs with the daemon if given a code and not yet paired, and wires
+//! (the code comes from a file, or stdin with `--pair-file -`, never the command
+//! line, where shell history, `ps` and agent transcripts would keep it),
 //! Claude Code to Muster by installing the `muster-shim` plugin through Claude
 //! Code's own `claude plugin` commands, so Muster never rewrites Claude's
 //! config files itself. Without `--apply` it only prints what it would do.
@@ -27,7 +29,7 @@ const PLUGIN: &str = "muster-shim@muster";
 /// One thing setup would do.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Step {
-    /// Run `muster-shim pair <code>`.
+    /// Pair in this process, with the code read from the file.
     Pair,
     /// Run `claude` with these arguments.
     Claude(Vec<&'static str>),
@@ -60,7 +62,8 @@ pub fn plan(
         (false, true) => steps.push(Step::Pair),
         (false, false) => notes.push(
             "not paired: fine on the daemon's own host. Elsewhere, run `muster-daemon pair \
-             --name <this machine>` on the daemon's host and pass the code with --pair"
+             --name <this machine>` on the daemon's host, save the code to a file and \
+             pass it with --pair-file"
                 .into(),
         ),
     }
@@ -152,22 +155,40 @@ pub fn backup(path: &Path, stamp: &str) -> Result<Option<PathBuf>> {
 
 fn describe(step: &Step) -> String {
     match step {
-        Step::Pair => "muster-shim pair <the code>".into(),
+        Step::Pair => "pair with the code from --pair-file".into(),
         Step::Claude(args) => format!("claude {}", args.join(" ")),
     }
 }
 
 pub async fn run(args: &[String]) -> Result<()> {
     let mut apply = false;
-    let mut code = None;
+    let mut code_file = None;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--apply" => apply = true,
-            "--pair" => code = Some(it.next().context("--pair needs the pairing code")?.clone()),
-            _ => bail!("usage: muster-shim setup [--pair CODE] [--apply]"),
+            "--pair-file" => {
+                code_file = Some(
+                    it.next()
+                        .context("--pair-file needs a path, or - for stdin")?,
+                )
+            }
+            a if a == "--pair" || a.starts_with("--pair=") => bail!(
+                "a pairing code on the command line stays in shell history and `ps`: save it \
+                 to a file and pass --pair-file PATH (delete the file afterwards), or pipe it \
+                 in with --pair-file -"
+            ),
+            _ => bail!("usage: muster-shim setup [--pair-file PATH|-] [--apply]"),
         }
     }
+    // Read now, so a bad path fails before anything changes.
+    let code = match code_file {
+        None => None,
+        Some(p) if p == "-" => Some(crate::read_code(std::io::stdin())?),
+        Some(p) => Some(crate::read_code(
+            std::fs::File::open(p).with_context(|| format!("opening {p}"))?,
+        )?),
+    };
     let dir = claude_dir().context("HOME isn't set")?;
     let settings_path = dir.join("settings.json");
     let settings = read_json(&settings_path);
@@ -200,18 +221,26 @@ pub async fn run(args: &[String]) -> Result<()> {
         {
             println!("backed up {} to {}", settings_path.display(), b.display());
         }
-        let me = std::env::current_exe().context("finding this binary")?;
         for step in &plan.steps {
             println!("running: {}", describe(step));
-            let status = match step {
-                Step::Pair => Command::new(&me)
-                    .args(["pair", code.as_deref().unwrap_or_default()])
-                    .status(),
-                Step::Claude(args) => Command::new("claude").args(args).status(),
-            }
-            .with_context(|| format!("starting `{}`", describe(step)))?;
-            if !status.success() {
-                bail!("`{}` failed ({status}); stopped there", describe(step));
+            match step {
+                Step::Pair => {
+                    let said = crate::pair_with_code(code.as_deref().unwrap_or_default())
+                        .context("pairing failed; stopped there")?;
+                    println!("{said}");
+                    if let Some(p) = code_file.filter(|p| *p != "-") {
+                        println!("the code is used up now; you can delete {p}");
+                    }
+                }
+                Step::Claude(args) => {
+                    let status = Command::new("claude")
+                        .args(args)
+                        .status()
+                        .with_context(|| format!("starting `{}`", describe(step)))?;
+                    if !status.success() {
+                        bail!("`{}` failed ({status}); stopped there", describe(step));
+                    }
+                }
             }
         }
         println!("done. Restart Claude Code sessions to pick it up.");
@@ -287,6 +316,13 @@ mod tests {
         let p = plan(true, true, Some(&settings), None, true);
         assert!(p.steps.is_empty(), "{p:?}");
         assert!(p.notes.iter().any(|n| n.contains("code isn't used")));
+    }
+
+    #[test]
+    fn a_code_is_read_from_its_first_non_empty_line() {
+        let code = crate::read_code("\n  muster-pair:v2:abc  \n".as_bytes()).unwrap();
+        assert_eq!(code, "muster-pair:v2:abc");
+        assert!(crate::read_code("\n \n".as_bytes()).is_err());
     }
 
     #[test]
