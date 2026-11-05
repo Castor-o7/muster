@@ -69,6 +69,10 @@ def roster():
     r = rpc("resources/read", {"uri": "muster://roster"})
     return json.loads(r["result"]["contents"][0]["text"])
 rpc("initialize", {"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "e2e", "version": "0"}})
+# Wait for this session's own row, as an agent's first turn would (MUS-72).
+end = time.time() + 15
+while time.time() < end and not any(r.get("is_self") for r in roster().get("sessions", [])):
+    time.sleep(0.2)
 for a in actions:
     if a[0] == "wait_remote":
         end = time.time() + 20
