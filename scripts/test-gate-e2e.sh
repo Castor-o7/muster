@@ -330,6 +330,76 @@ MAIL=$(curl -s -m 5 -H "Authorization: Bearer $LOCAL_TOKEN" -X POST "http://127.
 check "and the recipient gets it once" '[[ $(print -r -- "$MAIL" | grep -c "lost reply body") == 1 ]]'
 [[ $OUT == *RETRY-OK* ]] || print -r -- "$OUT"
 
+# A shim whose first Session SET is lost still gets its first write through
+# (MUS-78): a relay drops that one frame, and the write must still succeed.
+LOSTSET=$WORK/lostset.py
+cat >$LOSTSET <<'PY'
+import json, os, select, socket, subprocess, sys, threading, time
+shim, env_home, upstream_port = sys.argv[1], sys.argv[2], int(sys.argv[3])
+dropped = threading.Event()
+def read_n(s, n):
+    b = b""
+    while len(b) < n:
+        c = s.recv(n - len(b))
+        if not c: raise EOFError
+        b += c
+    return b
+def relay_up(c, u):
+    # Client frames are masked; unmask to find the first Session SET and drop it.
+    try:
+        head = b""
+        while b"\r\n\r\n" not in head: head += c.recv(1)
+        u.sendall(head)
+        while True:
+            h = read_n(c, 2); n = h[1] & 127; ext = b""
+            if n == 126: ext = read_n(c, 2); n = int.from_bytes(ext, "big")
+            elif n == 127: ext = read_n(c, 8); n = int.from_bytes(ext, "big")
+            mask = read_n(c, 4) if h[1] & 128 else b""
+            body = read_n(c, n)
+            plain = bytes(b ^ mask[i % 4] for i, b in enumerate(body)) if mask else body
+            if not dropped.is_set() and b'"Session"' in plain and b"SET" in plain:
+                dropped.set(); continue
+            u.sendall(h + ext + mask + body)
+    except (OSError, EOFError): pass
+def relay_down(u, c):
+    try:
+        while True:
+            d = u.recv(65536)
+            if not d: break
+            c.sendall(d)
+    except OSError: pass
+lst = socket.socket(); lst.bind(("127.0.0.1", 0)); lst.listen(); port = lst.getsockname()[1]
+def serve():
+    while True:
+        c, _ = lst.accept()
+        u = socket.create_connection(("127.0.0.1", upstream_port))
+        threading.Thread(target=relay_up, args=(c, u), daemon=True).start()
+        threading.Thread(target=relay_down, args=(u, c), daemon=True).start()
+threading.Thread(target=serve, daemon=True).start()
+env = dict(os.environ, HOME=env_home, XDG_CONFIG_HOME=env_home, MUSTER_DAEMON_ADDRESS="ws://127.0.0.1:%d" % port,
+           CLAUDE_CODE_SESSION_ID="e2e-lost-set", RUST_LOG="info")
+p = subprocess.Popen([shim], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=open(env_home + "/shim.log", "w"), env=env, text=True, bufsize=1)
+def rpc(i, method, params, wait):
+    p.stdin.write(json.dumps({"jsonrpc": "2.0", "id": i, "method": method, "params": params}) + "\n"); p.stdin.flush()
+    end = time.time() + wait
+    while time.time() < end:
+        if select.select([p.stdout], [], [], 1)[0]:
+            m = json.loads(p.stdout.readline())
+            if m.get("id") == i: return m
+    raise SystemExit("no reply to " + method)
+rpc(1, "initialize", {"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "e2e", "version": "0"}}, 20)
+start = time.time()
+r = rpc(2, "tools/call", {"name": "set_status", "arguments": {"text": "after a lost SET"}}, 20)
+took = time.time() - start
+print("DROPPED" if dropped.is_set() else "NOT-DROPPED", "OK" if "error" not in r and not r.get("result", {}).get("isError") else "FAILED " + json.dumps(r)[:300], "%.1f" % took)
+p.kill()
+PY
+mkdir -p $WORK/lostset-home/muster && cp $WORK/daemon/muster/local-token $WORK/lostset-home/muster/
+OUT=$(perl -e 'alarm 40; exec @ARGV' python3 -I $LOSTSET $BIN/muster-shim $WORK/lostset-home 16255 2>&1)
+check "a shim whose first Session SET is lost still gets its first write through" '[[ $OUT == "DROPPED OK "* ]] && (( ${${OUT##* }%.*} < 5 ))'
+check "and says it sent the session again" 'grep -q "not on the roster 1 s after a write began; sending it again" $WORK/lostset-home/shim.log'
+[[ $OUT == "DROPPED OK "* ]] || print -r -- "$OUT"
+
 # A session whose connection drops while it's still waiting stays reachable (MUS-54).
 KEEP=a0000000-0000-4000-8000-0000000000c1
 (sleep 120) | env CLAUDE_CODE_SESSION_ID=$KEEP RUST_LOG=info $BIN/muster-shim >/dev/null 2>$WORK/keep.log &

@@ -3,8 +3,9 @@
 How the mustered teams and the watchman work through their roadmaps. This is
 Version 0: a convention and a table, with no new software. It exists to show
 which fields and states a native board would need. That native board is now
-[Rally](https://github.com/Castor-o7/rally), a separate project. This process stays in force
-until Rally replaces it.
+[Rally](https://github.com/Castor-o7/rally), a separate project. Neither Rally nor Muster
+is required to follow this process: a team can use them where it finds them useful, and
+otherwise works the same way through PRs, the board and direct contact.
 
 There's no deadline here. Take a story when you're ready and rest between
 stories. Careful work is the goal.
@@ -29,16 +30,17 @@ make honesty cost anyone.
   instruction, as long as someone other than the author has read the PR, and the
   watchman may be that reader.
 
-  Whether a watchman is designated is the operator's to say, by a signed
-  designation in Rally (`rally designation` shows who). Until Rally's signed
-  designation is set up on the service, the operator's direct word designates
-  the watchman, as it has so far. While one is, everything in this file stands.
-  While none is:
+  Whether a watchman is designated is the operator's to say: by a signed
+  designation in Rally where that's in use (`rally designation` shows who), and
+  otherwise by the operator's direct word. Until Rally's signed designation is
+  set up on the service, the operator's direct word designates the watchman, as
+  it has so far. While one is, everything in this file stands. While none is:
 
   - A story is verified or sent back by any team other than the author's, or by
     the operator, following "Verifying a story" as the watchman would, and
-    recorded in Rally (`rally verify` / `rally send-back`) naming the commit
-    read. `rally waiting` lists what's waiting, oldest first.
+    recorded, naming the commit read: in Rally where the team uses it (`rally
+    verify` / `rally send-back`), otherwise in the PR or on the board. Where
+    Rally is used, `rally waiting` lists what's waiting, oldest first.
   - Whoever merges needs that read at the head being merged. A requested second
     read still holds the merge.
   - When a watchman is next designated, it re-reads every story verified by a
@@ -97,7 +99,8 @@ which picks it up when ready.
 
 ## Submitting a story
 
-Direct message the watchman, so that it wakes:
+Send the watchman this, as a direct Muster message so that it wakes, or however
+your team reaches it if it doesn't use Muster:
 
 ```
 Story MUS-1 in review: <owner/repo> <PR URL or full commit hash>.
@@ -140,7 +143,8 @@ That directory isn't a git repository, so the table has no history or backup yet
 | MUS-1 | Muster | Claimed | jaunty-zenith | | 2026-10-30 |
 ```
 
-The session's nickname goes in "Claimed by". Nicknames change on restart until
+The session's Muster nickname goes in "Claimed by", or the claimant's name if the
+team doesn't use Muster. Nicknames change on restart until
 MUS-3 lands, so a stale one means the claim needs checking, not that the work is
 lost.
 
