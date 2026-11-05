@@ -1,7 +1,9 @@
 # Design: the TLS gate as an option (G3)
 
-Status: **draft for the watchman's review. No code yet.** modest-roach
-implements it once G1 lands. Names are Marshal's, since this is for the
+Status: **approved by the watchman (grand-photon), 2026-11-04.** modest-roach
+implements it once G1 lands. The decisions on the open questions are under
+"Decisions" below; the operator still picks between `--tls` and
+`MARSHAL_TLS`. Names are Marshal's, since this is for the
 upstream Gate PR (see [muster-vs-marshal.md](muster-vs-marshal.md)).
 
 ## How upstream's daemon is configured today
@@ -34,8 +36,9 @@ The operator turns it on with either of these:
 - `MARSHAL_TLS=1` (also `true`/`on`; `0`/`false`/`off`/unset mean off)
 
 Both are implemented, and the operator chooses which one to document. If both
-are given and disagree, the flag wins, and the daemon logs that it overrode
-the environment. The env var matches upstream's existing style and works in
+are given and disagree (e.g. `--tls` with `MARSHAL_TLS=0`), the daemon
+**refuses to start** and names both values:
+`--tls and MARSHAL_TLS=0 disagree; set one`. Agreeing values are fine. The env var matches upstream's existing style and works in
 systemd units and launchd plists without editing `ExecStart`. The flag is
 visible in `ps` and in the unit file.
 
@@ -57,7 +60,7 @@ features that don't depend on the gate (Hooks, Durability, Other):
 | Local token | not created, not required. A token a client sends anyway (from an old file) is ignored, not rejected |
 | myko request filter | not installed |
 | Frame filter, host/operator attestation, session binding | off: `asSession` stays trust-on-assert, as today |
-| Rate and connection limits (MUS-9/60) | off. Turning them on without TLS is a separate decision, because it changes today's behaviour |
+| Rate and connection limits (MUS-9/60) | off, for parity with today, in the first Gate PR. Turning them on in plain mode is a separate proposal |
 | `pause` / `resume` | **work.** They don't depend on the gate |
 | `allow` / `disallow` / `senders` | inert: with no pairing there are no machine identities. They print `sender allow-list applies only with TLS on` |
 | `pair` / `unpair` / `pairs` | edit the state dir as usual, and print `pairing takes effect when the daemon runs with TLS (--tls or MARSHAL_TLS=1)` |
@@ -134,7 +137,49 @@ The hooks (`codex_hook::http_post` / `https_post`) follow the same rules:
 paired → through the gate; otherwise plain, with the bearer token if the file
 exists.
 
-## Open questions
+## Daemon to daemon (G5) is TLS-only
+
+Linking two daemons (G5) works only with TLS on, on both. A daemon link
+carries other machines' sessions and mail, so it needs what only the gate
+provides: a pinned certificate, a per-machine token, and the frame filter
+limiting what the far side may claim. With TLS off the daemon refuses to
+start a link, and refuses an incoming one, with
+`daemon links need TLS on both daemons (--tls or MARSHAL_TLS=1)`. There is no
+plain-mode fallback.
+
+## Threat model changes
+
+`docs/threat-model.md` gets this when the code lands:
+
+- **A reverse proxy on the daemon's host makes remote traffic look like
+  loopback.** The single-port design sends plaintext from a loopback peer to
+  the local path. A proxy on the same host, such as an HTTPS front end for the
+  web UI (#163), forwards remote requests from `127.0.0.1`, so the gate can't
+  tell them from a local tool by address. This is still safe: the local path
+  requires the local token, which a remote client doesn't have, and refuses
+  any `Origin`, which a browser behind the proxy sends. But the loopback
+  check alone is not a trust boundary, and the docs must not call it one.
+  The token is.
+- With TLS off, the threat model doesn't apply: the daemon is upstream's
+  trust-on-assert design, protected only by where it is bound. The docs say
+  so, and the startup line names the mode.
+
+## Decisions (watchman, 2026-11-04)
+
+1. **One port with first-byte multiplexing:** yes. The fallback is dropped.
+2. **Flag and env conflict:** refuse to start, naming both values. The
+   operator decides whether `--tls` or `MARSHAL_TLS` is the documented form.
+3. **Rate limits:** off in plain mode in the first Gate PR, for parity, and
+   proposed separately.
+4. **The web UI:** the first Gate PR documents "the UI requires TLS off". A
+   UI route through the gate comes later.
+5. **The myko filter:** myko is ignition-is-go's own crate
+   (ignition-is-go/myko), so the natural route is a request-filter hook
+   there. Asking for one is an upstream PR, and therefore the operator's call,
+   later. Until then Muster keeps the vendored patch, rebased on 6.11.5.
+6. **G5:** TLS mode only (above).
+
+## Open questions (as first raised)
 
 1. **The web UI with TLS on.** The Marshal UI is a browser page. Under the
    gate it would need its own route: say, the gate serving the UI and
