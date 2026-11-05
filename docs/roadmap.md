@@ -489,6 +489,27 @@ Rally.
   simulation, imported into Marshal Zoo, for every change to behaviour or agent-facing
   instructions (`scripts/sandbox/README.md`, upstream `8563800`). Done when: each change bound
   for upstream has its simulation. Plan for the hooks change in #83.
+- [ ] **MUS-69: A delivery conformance suite.** Prove live delivery works for every harness
+  (Claude Code hooks, the Codex app-server bridge, opencode, Pi, Prime Agent) without running their
+  TUIs or any model: the real `muster-daemon` and `muster-shim` binaries against a fake harness for
+  each, all passing one scenario table. The table: an idle session wakes on a DM; a busy session gets
+  it at its next hook or turn; a dropped ack means redelivery; a duplicate is shown at most once; a
+  daemon restart in the middle of a wait; operator pause stops wakes; broadcasts never wake anyone;
+  and a session the roster calls `wake: none` isn't told `wake: expected` (MUS-71). Each fake is
+  pinned to a harness version, uses recorded fixtures, and says which TUI behaviour it assumes. Claude
+  runs in plain and TLS modes. Done when: it runs in CI with a harness × scenario grid, gaps are
+  listed openly, and there's a short doc on re-recording fixtures
+  ([delivery-conformance.md](delivery-conformance.md)). Stage 1: the suite and Claude in both modes.
+  Stage 2: Codex. Stage 3: the TypeScript plugins, with bun in CI from its GitHub release, checked
+  against a committed SHA-256.
+- [ ] **MUS-71: Don't report `wake: expected` for a session that can't wake.** From MUS-69. The
+  roster's `wake_state` counts a live client as a wake path only with channels on, but
+  `SendMessage` reports `wake: expected` for any recipient with a live `client_id`
+  (`crates/entities/src/send_message.rs`). So a Claude session whose MCP shim is connected, with no
+  waiter and channels off, reads `wake: none` on the roster while a sender is told `wake: expected`.
+  Done when: the send result agrees with the roster, a Codex bridge's session still counts as a
+  wake path, and the conformance suite's `wake-none-not-expected` cells pass and leave
+  `KNOWN_FAILURES`.
 
 ## Moved to Rally
 
