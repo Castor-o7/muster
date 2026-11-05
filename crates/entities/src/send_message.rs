@@ -37,6 +37,10 @@ use crate::{
     wake_watcher::{GetAllWakeWatchers, WakeWatcher},
 };
 
+/// Namespace for message ids derived from an idempotency key. Marshal's own,
+/// so these ids can't coincide with those of any other UUIDv5 scheme.
+const IDEMPOTENT_ID_NAMESPACE: Uuid = Uuid::from_u128(0x7a4776dd_d70f_405c_898c_8432b782d05f);
+
 #[myko_command(SendMessageResult)]
 pub struct SendMessage {
     pub to_session_id: SessionId,
@@ -175,7 +179,7 @@ impl CommandHandler for SendMessage {
         // The id comes from the sender and key, so a retry finds the first send.
         let id = match &self.idempotency_key {
             Some(key) => Uuid::new_v5(
-                &Uuid::NAMESPACE_OID,
+                &IDEMPOTENT_ID_NAMESPACE,
                 format!("{}\0{key}", sender.id.0).as_bytes(),
             ),
             None => Uuid::now_v7(),
