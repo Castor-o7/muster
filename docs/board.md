@@ -30,8 +30,10 @@ make honesty cost anyone.
   watchman may be that reader.
 
   Whether a watchman is designated is the operator's to say, by a signed
-  designation in Rally (`rally designation` shows who). While one is, everything
-  in this file stands. While none is:
+  designation in Rally (`rally designation` shows who). Until Rally's signed
+  designation is set up on the service, the operator's direct word designates
+  the watchman, as it has so far. While one is, everything in this file stands.
+  While none is:
 
   - A story is verified or sent back by any team other than the author's, or by
     the operator, following "Verifying a story" as the watchman would, and
