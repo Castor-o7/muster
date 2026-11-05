@@ -45,6 +45,19 @@ pub fn parse_env(value: Option<&str>) -> Result<Option<bool>, String> {
     }
 }
 
+/// Whether the state dir holds any pairings (MUS-85). A tokens file that exists
+/// but can't be read is an error, not "none", and a line that doesn't parse
+/// counts as a pairing: reading either as none would let a daemon that lost
+/// `MUSTER_TLS=1` start plain without the refusal in [`resolve`].
+pub fn has_pairings(state_dir: &std::path::Path) -> Result<bool, String> {
+    crate::credentials::any_token_entries(state_dir).map_err(|e| {
+        format!(
+            "can't read the paired machines in {}: {e}; fix or remove the file before starting",
+            state_dir.display()
+        )
+    })
+}
+
 /// Decide the mode from the `--tls` flag, `MUSTER_TLS`, and whether the state
 /// dir holds any pairings.
 pub fn resolve(flag: bool, env: Option<&str>, has_pairings: bool) -> Result<Mode, String> {
@@ -112,5 +125,31 @@ mod tests {
         assert!(err.contains("paired machines"), "{err}");
         assert_eq!(resolve(true, None, true), Ok(Mode::Tls));
         assert_eq!(resolve(false, Some("1"), true), Ok(Mode::Tls));
+    }
+
+    #[test]
+    fn no_tokens_file_means_no_pairings() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(has_pairings(dir.path()), Ok(false));
+        crate::credentials::add_token(dir.path(), "a1").unwrap();
+        assert_eq!(has_pairings(dir.path()), Ok(true));
+    }
+
+    #[test]
+    fn an_unreadable_tokens_file_refuses_rather_than_reading_as_none() {
+        let dir = tempfile::tempdir().unwrap();
+        // A directory where the file should be: it exists, but can't be read.
+        std::fs::create_dir(dir.path().join("tokens")).unwrap();
+        let err = has_pairings(dir.path()).unwrap_err();
+        assert!(err.contains("can't read the paired machines"), "{err}");
+    }
+
+    #[test]
+    fn a_line_that_does_not_parse_still_counts_as_paired() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("tokens"), "garbled\n").unwrap();
+        assert_eq!(has_pairings(dir.path()), Ok(true));
+        std::fs::write(dir.path().join("tokens"), "\n  \n").unwrap();
+        assert_eq!(has_pairings(dir.path()), Ok(false));
     }
 }

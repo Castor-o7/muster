@@ -310,6 +310,17 @@ pub fn unpair(dir: &Path, name: &str, kind: UnpairKind) -> io::Result<Unpaired> 
     }
 }
 
+/// Whether the tokens file holds anything at all, counting lines that don't
+/// parse. For the start-up check that refuses to run plain with machines
+/// paired, which should err towards "paired" (MUS-85).
+pub fn any_token_entries(dir: &Path) -> io::Result<bool> {
+    match std::fs::read_to_string(dir.join(TOKENS_FILE)) {
+        Ok(text) => Ok(text.lines().any(|l| !l.trim().is_empty())),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
 /// The paired machine names, in pairing order.
 pub fn token_names(dir: &Path) -> io::Result<Vec<String>> {
     Ok(read_tokens(dir)?.into_iter().map(|(n, _)| n).collect())
