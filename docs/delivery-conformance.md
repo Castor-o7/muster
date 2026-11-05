@@ -35,7 +35,9 @@ checked as well as what the recipient sees.
 | 3b | `lost-hook-reply-redelivers` | When the reply to a busy session's prompt hook is lost after the daemon sent it, as when a harness kills a hook at its timeout, the message comes again at the next hook. |
 | 4 | `duplicate-shown-at-most-once` | A send retried with the same idempotency key is one message, shown once. A wake shows its message once, not once from the push and again from the woken turn's drain. Mail a wake delivered isn't injected again by the next hook. |
 | 4b | `burst-both-delivered` | Two messages sent back to back to an idle session both reach the model, between the wake and the next delivery point. A harness that drains the inbox while handling the first must show what it drains. |
-| 5 | `daemon-restart-mid-wait` | The daemon restarts (SIGTERM, as systemd stops it) while the session waits. The session still wakes on mail sent after the restart. |
+| 5 | `daemon-restart-mid-wait` | The daemon restarts (SIGTERM, as systemd stops it) while the session waits, in memory, so the roster empties. The session still wakes on mail sent after the restart. |
+| 5 (pg) | `daemon-restart-mid-wait-pg` | The same, with the daemon persisting to Postgres. |
+| 5b (pg) | `restart-keeps-unread-mail` | Mail sent while the session is busy, then a restart against Postgres: the mail is kept, and wakes the session once it goes idle. n/a for the push plugins, which take the push into their running turn. |
 | 6 | `operator-pause-stops-wakes` | With `muster-daemon pause`, mail doesn't wake an idle session but still arrives at the next hook. |
 | 6b | `resume-wakes-held-mail` | Mail sent while wakes are paused doesn't wake the session, and resuming alone wakes it with that mail, with no new message. |
 | 7 | `broadcast-never-wakes` | A room broadcast neither wakes the session nor is injected. |
@@ -49,7 +51,6 @@ passing, the suite fails until it's taken off the list.
 |---|---|---|
 | `pi`, `opencode` × 3 | MUS-81 | A pushed message is marked read when the push reaches the plugin's connection. If the harness then loses it, the next turn's inbox drain finds nothing unread, and the message is gone: the push-side twin of MUS-75. |
 | `pi`, `opencode` × 6b | MUS-82 | While wakes are paused, the push is skipped and the mail stays unread, but resuming pushes nothing again, so a push session isn't woken until its next turn. |
-| `codex` × 5 | MUS-76 | After a restart without Postgres, an idle Codex session is off the roster until its next hook: the bridge registers a thread only on `thread/started`. |
 
 ## The harnesses
 
@@ -182,9 +183,10 @@ These are listed so nobody reads the grid as more than it is.
   written. Recording both is below. The shim reads only a few fields from each
   (the ids and cwd), so the risk is small.
 - **Codex runs in plain mode only.** It has no `codex-tls` column yet.
-- **Restarts are tested without Postgres** (MUS-76). Mail sent before a
-  restart and not yet delivered lives only in memory, and is lost with it.
-  Scenario 5 sends after the restart. The durable case needs a database in CI.
+- **The Postgres cells need a database** (MUS-76): `CONFORMANCE_POSTGRES_URL`,
+  in which each daemon gets its own events table (`conformance_…`) and leaves it
+  behind. Without one they show `no postgres`. CI runs a `postgres:16` service
+  and sets `CONFORMANCE_REQUIRE_POSTGRES`, so there a missing database fails.
 - **Pause is only checked on the waiter.** With channels on, `SendMessage`'s
   live push also checks the pause. No harness here uses channels, because the
   fakes run without the flag, as Muster's sessions do.
