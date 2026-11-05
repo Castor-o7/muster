@@ -162,7 +162,7 @@ them, and they override anything the rest of this doc says:
 What follows from these:
 - M2 (`port/terminal-cmds-v3`) needs no Zoo run, and doesn't wait on fork CI.
   Squash it to one commit before opening if its history is noisy.
-- The default changes go up as a single issue. A draft is to be written (owner:
+- The default changes go up as a single issue. Draft: [upstream-issue-defaults.md](upstream-issue-defaults.md) (owner:
   the commissioner).
 - Other's room and `to` work and our roster and nickname work are built on top of
   #143 and #59, not held for them.
