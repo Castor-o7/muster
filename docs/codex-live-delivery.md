@@ -59,6 +59,11 @@ acknowledges it only after the daemon successfully writes the
 thread is busy, or `turn/start` fails, the durable message stays unread and the
 ordinary prompt/tool-boundary path remains intact.
 
+While the operator has paused wakes (`muster-daemon pause`, MUS-10), the
+bridge starts no turns: it reads the daemon's `WakePause` record and skips its
+wake pass (MUS-74). The mail stays unread, so the next hook still delivers it,
+and once wakes resume the bridge wakes for whatever is still unread.
+
 Only unread direct messages are wake candidates. Room broadcasts are ambient,
 and the hook continues to frame peer content as untrusted coordination input:
 a peer cannot expand the operator's task or authority merely by waking a turn.

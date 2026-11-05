@@ -168,8 +168,9 @@ MCP shim of a session without the flag can't wake it (MUS-71).
   wake.
 - **Operator pause.** `controls::wakes_paused()` (MUS-10) stops both. The
   push is skipped (`push_to_client` returns false, so the result reads
-  `failed`), and `/hook/wait` hands out nothing. The prompt hooks still
-  deliver, because they don't wake a session.
+  `failed`), and `/hook/wait` hands out nothing. The Codex bridge also starts
+  no turns while the daemon's `WakePause` record says paused (MUS-74). The
+  prompt hooks still deliver, because they don't wake a session.
 - **Codex.** Codex can't take a push or an `asyncRewake`. It uses the same
   pull hooks plus the app-server bridge's `turn/start`
   ([codex-live-delivery.md](codex-live-delivery.md)).

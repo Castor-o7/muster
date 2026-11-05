@@ -57,7 +57,8 @@ use anyhow::{Context, Result};
 use futures_util::{SinkExt, StreamExt};
 use hyphae::Gettable;
 use muster_entities::{
-    GetAllMessageReads, GetAllMessages, GetAllSessions, Message, MessageRead, Session, SessionId,
+    GetAllMessageReads, GetAllMessages, GetAllSessions, GetAllWakePauses, Message, MessageRead,
+    Session, SessionId,
 };
 use myko::client::MykoClient;
 use serde::{Deserialize, Serialize};
@@ -1164,6 +1165,10 @@ pub async fn run(args: &[String]) -> Result<()> {
     let sessions = client.watch_query::<GetAllSessions>(GetAllSessions {});
     let messages = client.watch_query::<GetAllMessages>(GetAllMessages {});
     let reads = client.watch_query::<GetAllMessageReads>(GetAllMessageReads {});
+    // The operator's pause (MUS-10), which the daemon publishes as one
+    // `WakePause` record. Claude's waiter honours it at `/hook/wait`; the
+    // bridge has to honour it here (MUS-74).
+    let pauses = client.watch_query::<GetAllWakePauses>(GetAllWakePauses {});
     client.set_address(Some(args.daemon.clone()));
 
     log::info!(
@@ -1207,6 +1212,14 @@ pub async fn run(args: &[String]) -> Result<()> {
             }
         }
 
+        // While wakes are paused, start no turns. The mail stays unread, so
+        // the next hook still delivers it, and once wakes resume the bridge
+        // wakes for whatever is still unread.
+        if wakes_paused(&pauses.get()) {
+            log::debug!("[codex-bridge] wakes are paused; not waking");
+            continue;
+        }
+
         let session_snapshot = sessions.get();
         let message_snapshot = messages.get();
         let read_snapshot = reads.get();
@@ -1245,7 +1258,7 @@ pub async fn run(args: &[String]) -> Result<()> {
 
     registration_task.abort();
     // Keep the client and watched cells live until the loop exits.
-    drop((reads, messages, sessions, client));
+    drop((pauses, reads, messages, sessions, client));
     Ok(())
 }
 
@@ -2131,6 +2144,13 @@ fn strip_muster_thread_name_prefix<'a>(name: &'a str, nickname: &str) -> &'a str
     base
 }
 
+/// Whether the operator has paused wakes. No record yet (the daemon hasn't
+/// published one, or the view hasn't loaded) reads as not paused, as the
+/// roster reads it.
+fn wakes_paused(pauses: &[Arc<muster_entities::WakePause>]) -> bool {
+    pauses.iter().any(|p| p.paused)
+}
+
 /// Direct, unread, hook-owned sessions on this host. Hook-owned Codex sessions
 /// have no WS `client_id`; Claude shims do. The app-server itself is the final
 /// authority: a plain Codex thread is not present there and the wake request
@@ -2379,6 +2399,20 @@ mod tests {
     use muster_entities::{HostInfo, MessageId, MessageReadId};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio_tungstenite::{accept_async, connect_async};
+
+    #[test]
+    fn wakes_are_paused_only_by_a_paused_record() {
+        let pause = |paused| {
+            Arc::new(muster_entities::WakePause {
+                id: muster_entities::WakePauseId(Arc::from(muster_entities::WAKE_PAUSE_ID)),
+                paused,
+                since: if paused { 1 } else { 0 },
+            })
+        };
+        assert!(!wakes_paused(&[]), "no record yet reads as not paused");
+        assert!(!wakes_paused(&[pause(false)]));
+        assert!(wakes_paused(&[pause(true)]));
+    }
 
     #[test]
     fn detects_explicit_codex_working_directory_arguments() {
