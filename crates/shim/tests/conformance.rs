@@ -104,7 +104,6 @@ struct Daemon {
     mode: Mode,
     bind: u16,
     hook: u16,
-    internal: u16,
     myko: u16,
     child: Option<Child>,
 }
@@ -116,7 +115,6 @@ impl Daemon {
             mode,
             bind: free_port(),
             hook: free_port(),
-            internal: free_port(),
             myko: free_port(),
             child: None,
         };
@@ -143,7 +141,6 @@ impl Daemon {
             ("MUSTER_ACK_LEASE_SECS".into(), ACK_LEASE_SECS.to_string()),
             ("MUSTER_BIND".into(), addr(self.bind)),
             ("MUSTER_HOOK_BIND".into(), addr(self.hook)),
-            ("MUSTER_INTERNAL_BIND".into(), addr(self.internal)),
             ("MUSTER_MYKO_BIND".into(), addr(self.myko)),
         ]
     }

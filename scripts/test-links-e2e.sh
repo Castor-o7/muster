@@ -13,9 +13,9 @@ waitfor() { for i in {1..100}; do eval "$1" && return 0; sleep 0.2; done; return
 
 # L listens (the far daemon, "lhost"); D dials it ("dhost").
 L_ENV=(XDG_CONFIG_HOME=$WORK/L MUSTER_STATE_DIR=$WORK/L/state MUSTER_HOST=lhost MUSTER_TLS=1 MUSTER_ACK_LEASE_SECS=2
-       MUSTER_BIND=127.0.0.1:16655 MUSTER_HOOK_BIND=127.0.0.1:16656 MUSTER_INTERNAL_BIND=127.0.0.1:16657 MUSTER_MYKO_BIND=127.0.0.1:16658)
+       MUSTER_BIND=127.0.0.1:16655 MUSTER_HOOK_BIND=127.0.0.1:16656 MUSTER_MYKO_BIND=127.0.0.1:16658)
 D_ENV=(XDG_CONFIG_HOME=$WORK/D MUSTER_STATE_DIR=$WORK/D/state MUSTER_HOST=dhost MUSTER_TLS=1 MUSTER_ACK_LEASE_SECS=2
-       MUSTER_BIND=127.0.0.1:16755 MUSTER_HOOK_BIND=127.0.0.1:16756 MUSTER_INTERNAL_BIND=127.0.0.1:16757 MUSTER_MYKO_BIND=127.0.0.1:16758)
+       MUSTER_BIND=127.0.0.1:16755 MUSTER_HOOK_BIND=127.0.0.1:16756 MUSTER_MYKO_BIND=127.0.0.1:16758)
 start_l() { env $L_ENV RUST_LOG=info $BIN/muster-daemon >>$WORK/L.log 2>&1 & LPID=$!; waitfor 'nc -z 127.0.0.1 16656 2>/dev/null && nc -z 127.0.0.1 16655 2>/dev/null'; }
 start_d() { env $D_ENV RUST_LOG=info $BIN/muster-daemon >>$WORK/D.log 2>&1 & DPID=$!; waitfor 'nc -z 127.0.0.1 16756 2>/dev/null && nc -z 127.0.0.1 16755 2>/dev/null'; }
 start_l; start_d
