@@ -267,3 +267,77 @@ The conflict column compares each entry's files with upstream's files, then
 reads upstream's hunks in each shared file to say whether they would really
 collide. It predicts; it was not tested with a trial merge. modest-roach's G1
 catch-up merge will show the real conflicts for the tree as a whole.
+
+## Since the baseline: entries #79 to #124
+
+Added 2026-11-05 by tangerine-wombat, against Muster `3fafe4a` (#124). The 42
+first-parent entries since `ea472f6`, with the same decisions as above. "Layer" is the
+port branch the entry belongs on (see [upstream-pr-strategy.md](upstream-pr-strategy.md)
+for the stack). "In the stack" says whether a port branch carries it yet.
+
+| PR | Entry | What it does | Decision | Layer | In the stack |
+|---|---|---|---|---|---|
+| #79 | `4f68283` | This inventory (G2) | drop | — | — |
+| #80 | `d82a867` | `docs/hook-delivery.md`: hooks deliver and wake without the flag (G4) | split: the doc, without board refs | Hooks | no |
+| #82 | `7ad45e2` | TLS-as-option design draft (G3) | split: the design, for the Gate PR description | Gate | n/a (doc) |
+| #83 | `9ab6ee3` | Zoo plan for the Hooks change (G8) | drop (it plans our evidence) | — | — |
+| #86 | `0eaa45f` | `scripts/rename-to-marshal.sh`; #22/#56 move into Hooks | drop (porting tool) | — | — |
+| #84 | `900fe1c` | Catch-up merge with Marshal v0.54.1 (MUS-62); myko-server vendored at 6.11.5 | drop (it's the base) | — | — |
+| #85 | `1bd36b2` | Roadmap: Phase 5 goals | drop | — | — |
+| #81 | `d9c35d3` | `docs/muster-vs-marshal.md` (G7) | drop (feeds the PR descriptions) | — | — |
+| #89 | `d243941` | TLS gate optional, plain by default (MUS-64, G3) | port, with the operator's `--tls`/`--plain` and no variable | Gate | yes (`a5de77c`) |
+| #90 | `07f13be` | Design for messaging between daemons (MUS-66) | split: with the links PR | later | no |
+| #91 | `ac1f849` | Daemon links (MUS-66, G5) | port if upstream wants it | later (after Gate) | no |
+| #95 | `5e22a8f` | Hold first writes until registered; refuse an empty recipient (MUS-72, MUS-73) | port | Other | yes (`d9124c1`, `d403770`) |
+| #98 | `2b8159e` | Board: who verifies with no watchman | drop | — | — |
+| #94 | `1f914db` | Conformance suite stage 1: Claude, plain and TLS (MUS-69) | port if upstream wants it | later | no |
+| #101 | `f5005dd` | Board: Rally and Muster are optional | drop | — | — |
+| #99 | `0364722` | A prompt hook acks only after printing (MUS-75) | port | Hooks | yes (`3202b04`) |
+| #102 | `9c74679` | Re-send the session if it isn't registered 1 s into a write (MUS-78) | port | Other | yes (`55c5868`) |
+| #96 | `59db0a0` | Conformance stage 2: Codex; MUS-74–76 found | port with #94 | later | no |
+| #103 | `9bb206a` | MUS-78's re-send gets a daemon-free test | port with #102 | Other | yes (`hold_until` and its tests, in `5717e22`'s layer) |
+| #97 | `14c2b25` | `wake: expected` only when a waiter can wake (MUS-71) | port | Hooks | **no**: forward-port |
+| #104 | `4199d2e` | Retry once a write refused as unregistered (MUS-79) | port | Other | yes (`5717e22`) |
+| #105 | `edf5ea8` | Roadmap: file MUS-80 | drop | — | — |
+| #100 | `7e75534` | The Codex bridge starts no turns while wakes are paused (MUS-74) | port (needs `WakePause`) | after Gate | no |
+| #106 | `97b0f2c` | Conformance stage 3a: Pi; MUS-81/82 found | port with #94 | later | no |
+| #107 | `bb1b164` | Roadmap: tick MUS-66 | drop | — | — |
+| #109 | `61c94fd` | `unpair` can't revoke a machine and a link together (MUS-84) | port with #91 | later | no |
+| #108 | `deae551` | Conformance stage 3b: opencode | port with #94 | later | no |
+| #112 | `bdd2e70` | Roadmap: tick MUS-71/75/78 | drop | — | — |
+| #114 | `e02f826` | Roadmap: file MUS-85 | drop | — | — |
+| #92 | `6a89e29` | Docs: the operator chose `--tls` for upstream, `--plain` as the escape | split: the decision goes in the Gate PR description | Gate | yes (in the code) |
+| #115 | `d17448f` | A stable code for the unregistered refusal, and retry on it (MUS-80) | port | Other | **no**: the port matches the text; forward-port |
+| #110 | `a97e274` | Board: the watchman keeps the rally moving | drop | — | — |
+| #119 | `37ad00d` | Fail closed when the paired machines can't be read (MUS-85) | port | Gate | yes (`mode::has_pairings`) |
+| #111 | `d44ef24` | Conformance stage 3c: Prime Agent, the grid complete | port with #94 | later | no |
+| #118 | `24fcc2d` | A session can ack its own pushes (`acks_pushes`, MUS-81) | port if upstream wants it; overlaps lobo235's #140 | Durability or later | no |
+| #113 | `61a8152` | Design: ack a push only once it's shown (MUS-81) | split: with #118 | Durability or later | no |
+| #120 | `8549500` | Retire the 6257 local-gate alias (MUS-70) | port (already so: the port never had it) | Gate | yes |
+| #116 | `d8e962f` | Roadmap: tick MUS-84, recount | drop | — | — |
+| #121 | `ae8de9e` | CI: free runner disk, line tables, retry the bun download (MUS-87) | drop (Muster's CI); offer separately if upstream's CI hits the same | — | — |
+| #117 | `ff2252a` | Say when the local token is refused (MUS-83) | port | Gate | **no**: forward-port |
+| #123 | `9aa2862` | Pi acks a push only once it has taken it (MUS-81) | port with #118; overlaps lobo235's #132, #134, #136 | Durability or later | no |
+| #124 | `3fafe4a` | Roadmap: file MUS-88 | drop | — | — |
+
+Open in Muster as this is written and bound for upstream if they merge: #127 (MUS-86,
+ack and re-offer logging; Hooks), #122 (MUS-76, Codex threads re-register after a
+restart), #125 (MUS-77, the bridge's wake path on the roster) and #130 (MUS-18, Codex
+through the gate; after Gate). #129 (MUS-91, Muster's Windows CI) is dropped like #121.
+
+### Upstream's open PRs that overlap the ports
+
+Upstream main is still `94ecc24`. These upstream PRs are open and touch the same files
+as a port layer. None has been reviewed, and the fork PRs among them haven't run CI,
+which needs a maintainer's "Approve and run".
+
+| Upstream PR | Author | What | Overlaps |
+|---|---|---|---|
+| #154 | Castor-o7 | Deliver direct messages to Claude Code without the channels flag (2026-10-29) | Hooks: an earlier cut that `port/hooks-v3` supersedes |
+| #141 | lobo235 | Pull the inbox into Claude Code turns with plugin hooks; escape bodies in the inbox block | Inbox-quoting and Hooks: the same goal and files |
+| #140 | lobo235 | Keep a Claude push unread until the shim has written it | Hooks (`hooks.rs`, `send_message.rs`); MUS-81 |
+| #148 | lucid-max | Keep messages and receipts across a session resume | Durability (`cleanup.rs`, `message.rs`, `message_read.rs`) |
+| #131 | lobo235 | Read-state sticky across a session reload; ahead of ignition-is-go/myko#96 | Durability (the same files) |
+| #135 | lobo235 | `--help`/`--version` for the daemon, shim and TUI | Gate's `--tls`/`--plain` and Other's terminal commands (`main.rs` argument handling) |
+| #143 | lobo235 | Validate room names and descriptions | Other (`cleanup.rs`, the room tools) |
+| #132, #134, #136, #137 | lobo235 | Pi, Prime Agent and opencode: ack only what was shown; flag truncated pushes | MUS-81's plugin work |

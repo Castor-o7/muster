@@ -199,6 +199,9 @@ kill $HELD 2>/dev/null; wait $HELD 2>/dev/null
 RAWWAIT() { curl -sk -m 5 -H "Authorization: Bearer $TOKEN" -X POST "https://127.0.0.1:16255/hook/wait?timeout=1&ack=client" -d "$HOOK"; }
 sleep 3; while [[ -n $(WAITSTATUS) ]]; do :; done
 T $BIN/muster-shim tell demo dropped path >/dev/null 2>&1
+# Both are logged, by count and session, never by body (MUS-86).
+HOOKLOG() { grep -c "\[hook\] a0000000-0000-4000-8000-000000000004: $1" $WORK/daemon.log; }
+REOFFERS=$(HOOKLOG "offering 1 message(s) again"); ACKS=$(HOOKLOG "client acked 1 message(s)")
 MAIL=$(RAWWAIT)
 check "a client-acked wait hands out the mail" '[[ $MAIL == *"dropped path"* ]]'
 MAIL=$(RAWWAIT)
@@ -206,11 +209,14 @@ check "another reader isn't offered it while that's in flight" '[[ $MAIL != *"dr
 sleep 3
 HEAD=$(curl -sk -m 5 -D - -H "Authorization: Bearer $TOKEN" -X POST "https://127.0.0.1:16255/hook/wait?timeout=1&ack=client" -d "$HOOK")
 check "with no ack the mail comes back" '[[ $HEAD == *"dropped path"* ]]'
+check "and the daemon logs the re-offer" '(( $(HOOKLOG "offering 1 message(s) again") == REOFFERS + 1 ))'
 ID=$(print -r -- "$HEAD" | tr -d '\r' | awk -F': ' 'tolower($1)=="x-muster-ack"{print $2}' | cut -d, -f1)
 curl -sk -m 5 -o /dev/null -H "Authorization: Bearer $TOKEN" -X POST https://127.0.0.1:16255/hook/ack -d "{\"session_id\":\"a0000000-0000-4000-8000-000000000004\",\"message_ids\":[\"$ID\"]}"
 sleep 3
 MAIL=$(RAWWAIT)
 check "and an ack ends it" '[[ $MAIL != *"dropped path"* ]]'
+check "and the daemon logs the client ack" '(( $(HOOKLOG "client acked 1 message(s)") == ACKS + 1 ))'
+check "with no message body in either line" '! grep -E "\[hook\].*(offering|client acked)" $WORK/daemon.log | grep -q "dropped path"'
 
 # An ack marks mail read, so a forged one would lose it.
 T $BIN/muster-shim tell demo forged ack >/dev/null 2>&1
