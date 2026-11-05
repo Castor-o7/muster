@@ -51,6 +51,7 @@ fn session(id: &str, client: &str) -> Session {
         host: None,
         project: None,
         channels_enabled: None,
+        acks_pushes: None,
     }
 }
 

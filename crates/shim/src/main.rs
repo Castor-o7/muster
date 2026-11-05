@@ -443,6 +443,7 @@ async fn serve() -> Result<()> {
         host: Some(host.clone()),
         project: project.clone(),
         channels_enabled,
+        acks_pushes: None,
     };
     let session = Arc::new(Mutex::new(session));
 
@@ -1543,6 +1544,7 @@ mod tests {
                 host: None,
                 project: None,
                 channels_enabled: None,
+                acks_pushes: None,
             })
         };
         assert!(registered_on_roster(&[row("me", Some("c"))], &me));
