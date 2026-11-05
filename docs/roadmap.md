@@ -557,6 +557,20 @@ Rally.
   plain and TLS mode (#96's CI, two cells at 5.5 s). The suite retries that one refusal in its
   MCP helper for now, naming this story. Done when: a shim's first write isn't refused while its
   registration is still on its way, and that retry is removed.
+- [ ] **MUS-81: A pushed message is lost if the harness loses it after the push.** From MUS-69,
+  the push-side twin of MUS-75. `SendMessage` writes `MessageRead` as soon as the live push reaches
+  the recipient's connection. A plugin harness (Pi, and probably opencode and Prime Agent) then
+  hands it to the model, and if that fails, the next turn's inbox drain finds nothing unread. The
+  conformance suite's `pi` × `dropped-ack-redelivers` cell shows it. Done when: a pushed message
+  that the harness didn't take stays unread (the plugin acks after handing it over, or another
+  design), and that cell passes.
+- [ ] **MUS-82: Resuming wakes doesn't wake a push session with held mail.** From MUS-69. While
+  wakes are paused, the live push is skipped and the mail stays unread. On resume, Claude's waiter
+  and the Codex bridge (MUS-74) wake for it, but nothing pushes it again, so a push session (a
+  plugin, or Claude with channels on) waits for its next turn. The suite's `pi` ×
+  `resume-wakes-held-mail` cell shows it. A channels-on Claude session likely has the same gap,
+  but no conformance fake models one yet. Done when: unread direct mail held by a pause is pushed
+  when wakes resume, and that cell passes.
 
 ## Moved to Rally
 
