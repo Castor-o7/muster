@@ -168,10 +168,13 @@ and #57's test lives in `hook_wait_e2e.rs`, so both need Hooks. That matches
 the landing order. Entry 6 (`6d55631`) is folded in, because its reap reasons
 run through the same sweep code. Entry 39's doc is not ported.
 
-**Other (port/other).** It's stacked on port/hooks-v2, because the roster
-command reads `WakeWatcher` and `wake_state`. One commit per item, so the ones
-that don't need Hooks (35, 21, part of 56, part of 83) can be cherry-picked
-onto upstream main on their own:
+**Other (port/other-v2).** It's stacked on port/durability, so it lands after
+Durability. The roster command reads `WakeWatcher` and `wake_state` from Hooks,
+and terminal send builds a `SendMessage`, which has Durability's
+`idempotency_key` field. (The first cut, port/other, sat on port/hooks-v2 and
+didn't compile once merged with Durability.) One commit per item, so the ones
+that need neither (35, 21, part of 56, part of 83) can be cherry-picked onto
+upstream main on their own:
 
 - 35 (#30): old operator rooms, as is.
 - 25, 26, 47 (#19, #20, #40): terminal send and the roster command, in one
