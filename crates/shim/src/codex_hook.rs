@@ -509,11 +509,13 @@ pub(crate) fn register_session(route: &HookRoute, session_id: &str, cwd: &str) -
 /// Tell the daemon whether the Codex bridge can wake `session_id` (MUS-77), so the roster shows
 /// its wake path. It goes the way the bridge registers its threads (`route`): through this
 /// machine's pairing when the route says so and there is one, otherwise to the hook listener.
-/// Returns whether the daemon now records it as watched.
+/// Returns whether the daemon now records it as watched. The daemon keeps one record per bridge
+/// process, named by [`bridge_instance`], so ending this bridge's watch leaves another's (MUS-94).
 pub(crate) fn bridge_watch(route: &HookRoute, session_id: &str, watching: bool) -> bool {
     let body = format!(
-        "{{\"session_id\":{},\"watching\":{watching}}}",
-        json_str(session_id)
+        "{{\"session_id\":{},\"watching\":{watching},\"bridge\":{}}}",
+        json_str(session_id),
+        json_str(bridge_instance())
     );
     let path = format!(
         "/hook/bridge-watch?host={}&operator={}&harness=codex",
@@ -528,6 +530,18 @@ pub(crate) fn bridge_watch(route: &HookRoute, session_id: &str, watching: bool) 
         None => http_post(&route.base, &path, &body, TIMEOUT),
     };
     reply.is_some_and(|reply| reply == "watching")
+}
+
+/// This bridge process's name for its wake-path records (MUS-94): its host, pid and start time,
+/// so a later bridge with a reused pid gets a name of its own.
+pub(crate) fn bridge_instance() -> &'static str {
+    static NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    NAME.get_or_init(|| {
+        let started = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis());
+        format!("{}-{}-{started}", short_host(), std::process::id())
+    })
 }
 
 /// Where a bridge registers its threads: the hook listener at `base`, or this

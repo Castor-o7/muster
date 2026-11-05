@@ -215,8 +215,12 @@ fn handle_ack(body: &[u8], ctx: &Arc<MykoServerContext>) -> HookOutcome {
 /// A Codex app-server bridge saying it can wake a thread (MUS-77). Codex holds
 /// no `/hook/wait`, so without this the roster calls a bridge-watched thread
 /// `wake: none` though its bridge will start a turn. Body:
-/// `{"session_id": …, "watching": true|false}`. `true` refreshes the session's
-/// `WakeWatcher` (written only when due, as a held wait's is); `false` ends it.
+/// `{"session_id": …, "watching": true|false, "bridge": …}`. `true` refreshes this
+/// bridge's `WakeWatcher` for the session (written only when due, as a held wait's
+/// is); `false` ends that one record. Each bridge has its own record (MUS-94), so a
+/// bridge that has handed over wake leadership can't end the new leader's, and
+/// neither can end a held `/hook/wait`'s. A bridge that names no `bridge` shares
+/// one record with any other such bridge.
 ///
 /// The listener's `machine_may_act` has already checked that the caller may act
 /// for this session. A session that isn't on the roster gets no record, and
@@ -234,6 +238,12 @@ fn handle_bridge_watch(body: &[u8], ctx: &Arc<MykoServerContext>) -> HookOutcome
         .as_ref()
         .and_then(|b| b.get("watching")?.as_bool())
         .unwrap_or(false);
+    let bridge = parsed
+        .as_ref()
+        .and_then(|b| b.get("bridge")?.as_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("bridge");
+    let record = WakeWatcher::bridge_id(sid, bridge);
     let cmd_ctx = internal_cmd_ctx(ctx);
     let on_roster = cmd_ctx
         .exec_query(GetAllSessions {})
@@ -241,10 +251,15 @@ fn handle_bridge_watch(body: &[u8], ctx: &Arc<MykoServerContext>) -> HookOutcome
         .iter()
         .any(|s| s.id.0.as_ref() == sid);
     if watching && on_roster && !muster_entities::controls::wakes_paused() {
-        mark_waiting_now(&cmd_ctx, sid);
+        mark_path(
+            &cmd_ctx,
+            &record,
+            Some(sid),
+            chrono::Utc::now().timestamp_millis(),
+        );
         HookOutcome::text("watching".to_string())
     } else {
-        end_wait(&cmd_ctx, sid);
+        end_path(&cmd_ctx, &record);
         HookOutcome::text("not watching".to_string())
     }
 }
@@ -579,22 +594,30 @@ pub fn mark_waiting_now(cmd_ctx: &CommandContext, sid: &str) {
 }
 
 fn mark_waiting(cmd_ctx: &CommandContext, sid: &str, now: i64) {
+    // A held wait's record is keyed by the session id itself (MUS-94).
+    mark_path(cmd_ctx, sid, None, now);
+}
+
+/// Refresh the wake-path record `id`, when due. `session` names the session it
+/// wakes when `id` isn't that session's id.
+fn mark_path(cmd_ctx: &CommandContext, id: &str, session: Option<&str>, now: i64) {
     let watchers: Vec<Arc<WakeWatcher>> = cmd_ctx
         .exec_query(GetAllWakeWatchers {})
         .unwrap_or_default();
     let until = watchers
         .iter()
-        .find(|w| w.id.0.as_ref() == sid)
+        .find(|w| w.id.0.as_ref() == id)
         .map(|w| w.until);
     if !wake_watcher_due(until, now) {
         return;
     }
     let watcher = WakeWatcher {
-        id: WakeWatcherId(Arc::from(sid)),
+        id: WakeWatcherId(Arc::from(id)),
         until: now + WAKE_WATCHER_TTL_MS,
+        session_id: session.map(|s| SessionId(Arc::from(s))),
     };
     if let Err(e) = cmd_ctx.emit_set(&watcher) {
-        log::warn!("[hook] wake watcher SET failed for {sid}: {e:?}");
+        log::warn!("[hook] wake watcher SET failed for {id}: {e:?}");
     }
 }
 
@@ -609,14 +632,32 @@ fn truncation_notice(message_id: &str, sent_at: i64) -> String {
 /// A wait ended with its connection dropped or its mail handed out, so stop
 /// reporting it. Any other waiter for the session puts the record back at its next
 /// inbox check. A wait that merely timed out keeps its record, because the waiter
-/// normally asks again at once.
+/// normally asks again at once. Only the held wait's record goes: a Codex bridge's
+/// record for the same session is its own (MUS-94).
 pub fn end_wait(cmd_ctx: &CommandContext, sid: &str) {
+    end_path(cmd_ctx, sid);
+}
+
+/// Remove the wake-path record `id`.
+fn end_path(cmd_ctx: &CommandContext, id: &str) {
     let watcher = WakeWatcher {
-        id: WakeWatcherId(Arc::from(sid)),
+        id: WakeWatcherId(Arc::from(id)),
         until: 0,
+        session_id: None,
     };
     if let Err(e) = cmd_ctx.emit_del(&watcher) {
-        log::warn!("[hook] wake watcher DEL failed for {sid}: {e:?}");
+        log::warn!("[hook] wake watcher DEL failed for {id}: {e:?}");
+    }
+}
+
+/// The session ended, so every wake path to it goes: its held wait's and any
+/// bridge's.
+fn end_all_waits(cmd_ctx: &CommandContext, sid: &str) {
+    let watchers: Vec<Arc<WakeWatcher>> = cmd_ctx
+        .exec_query(GetAllWakeWatchers {})
+        .unwrap_or_default();
+    for w in watchers.iter().filter(|w| w.session() == sid) {
+        end_path(cmd_ctx, w.id.0.as_ref());
     }
 }
 
@@ -667,7 +708,7 @@ fn handle_session_end(body: &[u8], ctx: &Arc<MykoServerContext>) -> HookOutcome 
         // MUS-3: an ended session can be taken over by its successor.
         crate::succession::record_removed(sid, chrono::Utc::now().timestamp_millis());
     }
-    end_wait(&cmd_ctx, sid);
+    end_all_waits(&cmd_ctx, sid);
     HookOutcome::text(String::new())
 }
 
