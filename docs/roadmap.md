@@ -14,13 +14,13 @@ evidence from a real run by the person or team named.
 
 ## Status
 
-2026-11-05: 39 of 81 stories ticked, about 48%, not counting the 3 moved to Rally. Live on
+2026-11-05: 41 of 82 stories ticked, about 50%, not counting the 3 moved to Rally. Live on
 Murph since 2026-11-05 08:48: `edf5ea8` (PID 3759037), applied by the operator with
 `MUSTER_TLS=1` and checked by checksum. Besides everything before, it brings MUS-8, MUS-9,
 MUS-10, MUS-60, MUS-11's rustls and tokio updates, MUS-62 (upstream v0.54.1), MUS-64 (the
 optional TLS mode), MUS-66 (daemon links), and MUS-71, MUS-72, MUS-73, MUS-75, MUS-78 and MUS-79.
-Merged and waiting for the next daemon restart: MUS-74. Sessions pick up a rebuilt shim
-when they restart, and no keyed send (MUS-29) has been seen live yet. Verified live on 2026-11-04:
+Merged and waiting for the next daemon restart: MUS-74, MUS-84 and MUS-85. Sessions pick up a
+rebuilt shim when they restart, and no keyed send (MUS-29) has been seen live yet. Verified live on 2026-11-04:
 MUS-4, MUS-7, MUS-34, MUS-35, MUS-54 and MUS-57. Verified live on 2026-11-05: MUS-66, MUS-71,
 MUS-75 and MUS-78. Merged, live and not yet verified: MUS-46, MUS-48, MUS-50 (its live half
 needs a session that loses its binding), MUS-55 and MUS-59.
@@ -472,13 +472,14 @@ Rally.
   tool call only reported "command timed out after 10000 ms (daemon unresponsive?)". Done
   when: a shim whose connection is refused for its token says so, and names the token file,
   and a test covers it.
-- [ ] **MUS-84: Keep `unpair` from revoking a machine and a link together.** Found by
+- [x] **MUS-84: Keep `unpair` from revoking a machine and a link together.** Found by
   tangerine-wombat cleaning up after the MUS-66 run: on Murph, `unpair a1` removes both a1's
   machine pairing (which every a1 session uses) and the link token `link:a1`, and `unlink a1`
   on the dialed side does nothing, because it edits only the dialer's `links` file. Done when:
   `unpair` takes `--machine` or `--link`, a bare name that matches both is refused with both
   forms named, `unlink` on the dialed side removes `link:<name>`, and an e2e covers each case.
-- [ ] **MUS-85: Fail closed when the paired machines can't be read.** From the watchman's
+  Merged as #109, with `unpair --machine` refusing a link's name after the watchman's review.
+- [x] **MUS-85: Fail closed when the paired machines can't be read.** From the watchman's
   review of the upstream Gate port: `run_daemon` decides whether machines are paired with
   `token_names(&state_dir).unwrap_or_default()`, so a tokens file that exists but can't be read
   (permissions, an I/O error, invalid UTF-8) reads as no pairings, and a daemon whose unit lost
@@ -486,6 +487,7 @@ Rally.
   skipped the same way. Done when: an unreadable tokens file stops the daemon with the error
   named, any non-blank line counts as a pairing for this check, and a test covers both. The
   upstream port (port/gate-v2) does this as `mode::has_pairings`.
+  Merged as #119.
 - [x] **MUS-72: Hold a session's first writes until it's registered.** Found by tangerine-wombat
   in the G5 run on Murph: a tool call right after `initialize` reached the daemon before the
   shim's Session SET and failed "caller has no session on the roster". A real agent's first
