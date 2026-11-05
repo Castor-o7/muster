@@ -70,11 +70,16 @@ export type RoomMemberItem = RoomMember;
 export interface NotifyChannelMeta {
   source?: string;
   kind?: string;
+  /** The pushed message's id, for acking it once it's shown (MUS-81). */
+  message_id?: string;
   from_session?: string;
   from_nickname?: string;
   to_session?: string;
   response_required?: boolean;
+  /** A preview capped by the daemon; see `body_truncated`. */
   body?: string;
+  /** Set when `body` was clipped. The durable message keeps the full body. */
+  body_truncated?: boolean;
   sent_at?: number;
 }
 

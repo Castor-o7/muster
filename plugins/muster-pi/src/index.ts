@@ -28,6 +28,8 @@ import { Type } from "typebox";
 import { MusterDaemon } from "./daemon.ts";
 import { resolveIdentity, type Identity } from "./identity.ts";
 import type { NotifyChannelMeta, SessionItem } from "./entities.ts";
+import { pullForTurn } from "./inbox-pull.ts";
+import { deliverLivePush } from "./live-push.ts";
 
 const DEFAULT_ADDRESS = "ws://localhost:6255";
 type MusterToolResult = AgentToolResult<Record<string, unknown>>;
@@ -101,27 +103,15 @@ async function init(pi: ExtensionAPI) {
       sessionCtx.ui.notify(`muster: new message from ${who}`, "info");
     }
 
-    const text = meta.body ? `new message from ${who} [response_required=${meta.response_required ?? false}]: ${meta.body}` : undefined;
-    void (async () => {
-      try {
-        if (text) {
-          await pi.sendMessage(
-            { customType: "muster-channel", content: text, display: true },
-            { deliverAs: "steer", triggerTurn: true },
-          );
-          if (daemon) await daemon.drainInbox(sid).catch(() => {});
-        } else {
-          const inbox = await daemon!.drainInbox(sid).catch(() => null);
-          if (!inbox) return;
-          await pi.sendMessage(
-            { customType: "muster-channel", content: inbox, display: true },
-            { deliverAs: "steer", triggerTurn: true },
-          );
-        }
-      } catch (e) {
-        log(`live push injection failed: ${String(e)}`);
-      }
-    })();
+    deliverLivePush(meta, who, {
+      inject: (content) =>
+        pi.sendMessage(
+          { customType: "muster-channel", content, display: true },
+          { deliverAs: "steer", triggerTurn: true },
+        ),
+      hold: (messageId) => (daemon ? daemon.holdPush(sid, messageId) : null),
+      pull: () => (daemon ? daemon.pullInbox(sid) : Promise.resolve(null)),
+    }).catch((e) => log(`live push injection failed: ${String(e)}`));
   }
 
   // ── Status helpers ────────────────────────────────────────────────────
@@ -309,19 +299,21 @@ async function init(pi: ExtensionAPI) {
     // Add muster system prompt context (once per turn, before the LLM call).
     result.systemPrompt = event.systemPrompt + "\n\n" + SYSTEM_PROMPT_BLOCK;
 
-    // Drain any missed inbox messages — only if the daemon is connected.
-    if (daemon && sessionId && daemon.isConnected()) {
-      daemon.registerSession(sessionId); // self-heal a dropped roster row
-      const inbox = await Promise.race([
-        daemon.drainInbox(sessionId).catch(() => null),
-        new Promise<null>((r) => setTimeout(() => r(null), 2000)),
-      ]);
-      if (inbox) {
+    // Pull any missed inbox messages — only if the daemon is connected. The
+    // pull is acked only once its text goes into this turn; one that misses
+    // the deadline is released, so its messages stay unread for the next turn.
+    const d = daemon;
+    const sid = sessionId;
+    if (d && sid && d.isConnected()) {
+      d.registerSession(sid); // self-heal a dropped roster row
+      const pull = await pullForTurn(() => d.pullInbox(sid), 2000);
+      if (pull) {
         result.message = {
           customType: "muster-inbox",
-          content: inbox,
+          content: pull.text,
           display: true,
         };
+        void pull.commit().catch(() => log("inbox ack failed"));
       }
     }
 

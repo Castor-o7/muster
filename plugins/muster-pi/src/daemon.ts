@@ -41,6 +41,7 @@ import {
   type SessionNicknameItem,
 } from "./entities.ts";
 import type { Identity } from "./identity.ts";
+import { InboxPuller, holdLeaseFromEnv, type InboxPull, type PushHold } from "./inbox-pull.ts";
 
 const LIVENESS_INTERVAL_MS = 5_000;
 const INBOX_PULL_LIMIT = 20;
@@ -82,7 +83,14 @@ export class MusterDaemon {
   private roster: SessionItem[] = [];
   private nicknames: SessionNicknameItem[] = [];
 
-  private readonly draining = new Map<string, Promise<string | null>>();
+  private readonly inbox = new InboxPuller<MessageView>(
+    {
+      read: (sessionId) => this.readUnread(sessionId),
+      ack: async (sessionId, messageIds) => { await this.sendForInbox(ackMessages(sessionId, messageIds)); },
+      render: (messages) => this.renderInbox(messages),
+    },
+    { leaseMs: holdLeaseFromEnv() },
+  );
   private notifyHandler: NotifyHandler | null = null;
   private livenessTimer: ReturnType<typeof setInterval> | null = null;
   private started = false;
@@ -162,6 +170,9 @@ export class MusterDaemon {
       // Pi can render custom messages and start/steer turns through its
       // extension API, so identify the harness and advertise that capability.
       channelsEnabled: true,
+      // Leave each push unread until this extension acks it, once pi has
+      // taken it (MUS-81), so a push pi fails to take isn't lost.
+      acksPushes: true,
       kind: "pi",
     } as SessionItem;
     (item as any).lastActivityAt = now;
@@ -254,13 +265,19 @@ export class MusterDaemon {
     return `- [${m.messageId}] ${this.senderLabel(m.fromSessionId)} [response_required=${m.responseRequired ?? false}]: ${m.body}`;
   }
 
-  drainInbox(sessionId: string): Promise<string | null> {
+  /**
+   * Read the unread inbox without acking it. Commit the pull once its text is
+   * in the conversation, or release it if it never gets there, so a message is
+   * never marked read without having been shown.
+   */
+  pullInbox(sessionId: string): Promise<InboxPull | null> {
     if (!this.connected) return Promise.resolve(null);
-    const prev = this.draining.get(sessionId) ?? Promise.resolve<string | null>(null);
-    const next = prev.catch(() => null).then(() => this.drainInboxInner(sessionId));
-    this.draining.set(sessionId, next);
-    void next.finally(() => { if (this.draining.get(sessionId) === next) this.draining.delete(sessionId); });
-    return next;
+    return this.inbox.pull(sessionId).catch(() => null);
+  }
+
+  /** Hold a pushed message while pi takes it; see `InboxPuller.holdPush`. */
+  holdPush(sessionId: string, messageId: string): PushHold | null {
+    return this.inbox.holdPush(sessionId, messageId);
   }
 
   nicknameFor(sessionId: string): string {
@@ -275,7 +292,7 @@ export class MusterDaemon {
 
   // ── Internals ──────────────────────────────────────────────────────────
 
-  private async drainInboxInner(sessionId: string): Promise<string | null> {
+  private async readUnread(sessionId: string): Promise<MessageView[] | null> {
     let result: ReadMessagesResult | undefined;
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
@@ -293,13 +310,7 @@ export class MusterDaemon {
       if (result.messages && result.messages.length > 0) break;
       if (attempt < 2) await new Promise((r) => setTimeout(r, 100 * (attempt + 1)));
     }
-    if (!result?.messages?.length) return null;
-
-    const block = this.renderInbox(result.messages);
-    try {
-      await this.sendForInbox(ackMessages(sessionId, result.messages.map((m) => m.messageId)));
-    } catch { this.log("inbox ack failed"); }
-    return block;
+    return result?.messages?.length ? result.messages : null;
   }
 
   private renderInbox(messages: MessageView[]): string {
