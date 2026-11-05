@@ -51,6 +51,17 @@ const WAKE_WITHIN: Duration = Duration::from_secs(10);
 /// How long to watch for a wake that must not happen.
 const QUIET_FOR: Duration = Duration::from_secs(4);
 
+/// Cells that pass or fail from run to run, each with its story and why it's
+/// listed. They're reported as `flaky` and never fail the suite either way,
+/// and they're checked before `KNOWN_FAILURES`, which may list them too.
+const FLAKY: &[(&str, &str, &str, &str)] = &[(
+    "pi",
+    "daemon-restart-mid-wait-pg",
+    "MUS-90",
+    "passed once in CI in 2.2 s (#126 at e47c7e0), but failed 3 of 3 runs on a1 both on main \
+     (1fe3c02) and on #126, each at the full 26 s wait",
+)];
+
 /// Cells expected to fail today, each with the story that fixes it. The
 /// suite reports them as known failures, and fails if one passes.
 const KNOWN_FAILURES: &[(&str, &str, &str)] = &[
@@ -2032,6 +2043,8 @@ enum Outcome {
     Pass,
     Fail(String),
     KnownFailure(&'static str),
+    /// A cell in `FLAKY`, with its story and whether it passed this time.
+    Flaky(&'static str, bool),
     UnexpectedPass(&'static str),
     NotApplicable,
     NoBun,
@@ -2056,6 +2069,10 @@ fn run_cell(harness: &Harness, scenario: Scenario, name: &str) -> Outcome {
     } else {
         None
     };
+    let flaky = FLAKY
+        .iter()
+        .find(|(h, s, _, _)| *h == harness.name && *s == name)
+        .map(|(_, _, story, _)| *story);
     let known = KNOWN_FAILURES
         .iter()
         .find(|(h, s, _)| *h == harness.name && *s == name)
@@ -2071,11 +2088,29 @@ fn run_cell(harness: &Harness, scenario: Scenario, name: &str) -> Outcome {
             .or_else(|| panic.downcast_ref::<&str>().map(|s| s.to_string()))
             .unwrap_or_else(|| "panicked".into()))
     });
+    if let Some(story) = flaky {
+        return Outcome::Flaky(story, result.is_ok());
+    }
     match (result, known) {
         (Ok(()), None) => Outcome::Pass,
         (Ok(()), Some(story)) => Outcome::UnexpectedPass(story),
         (Err(_), Some(story)) => Outcome::KnownFailure(story),
         (Err(e), None) => Outcome::Fail(e),
+    }
+}
+
+/// A `FLAKY` entry must name a real cell, or it quietly covers nothing.
+#[test]
+fn every_flaky_cell_is_in_the_grid() {
+    for (harness, scenario, story, _) in FLAKY {
+        assert!(
+            HARNESSES.iter().any(|h| h.name == *harness),
+            "{harness} ({story})"
+        );
+        assert!(
+            SCENARIOS.iter().any(|(name, _)| name == scenario),
+            "{scenario} ({story})"
+        );
     }
 }
 
@@ -2098,6 +2133,9 @@ fn delivery_conformance() {
             let cell = match &outcome {
                 Outcome::Pass => "pass".to_string(),
                 Outcome::KnownFailure(story) => format!("known ({story})"),
+                Outcome::Flaky(story, passed) => {
+                    format!("flaky ({story}, {})", if *passed { "pass" } else { "fail" })
+                }
                 Outcome::Fail(_) => "FAIL".to_string(),
                 Outcome::UnexpectedPass(story) => format!("PASS? ({story})"),
                 Outcome::NotApplicable => "n/a".to_string(),
