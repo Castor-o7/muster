@@ -110,7 +110,17 @@ pub fn run_for(harness: Harness, ep: &str, base_override: Option<&str>) {
         harness.name()
     );
 
-    let Ok(reply) = http_post_why(&base, &path, &body, harness.timeout()) else {
+    // A paired machine reaches the hooks through the daemon's TLS gate,
+    // unless an explicit base URL (argument or `MARSHAL_BASE_URL`) says
+    // otherwise.
+    let explicit = base_override.is_some_and(|b| !b.is_empty())
+        || std::env::var("MARSHAL_BASE_URL").is_ok_and(|b| !b.is_empty());
+    let pairing = crate::link::load_pairing().filter(|_| !explicit);
+    let post = |path: &str, body: &str, timeout: Duration| match &pairing {
+        Some(pairing) => crate::link::https_post_why(pairing, path, body, timeout),
+        None => http_post_why(&base, path, body, timeout),
+    };
+    let Ok(reply) = post(&path, &body, harness.timeout()) else {
         return;
     };
     let resp = reply.body.trim_end_matches(['\n', '\r', ' ']);
@@ -131,7 +141,7 @@ pub fn run_for(harness: Harness, ep: &str, base_override: Option<&str>) {
     if !reply.ack_ids.is_empty() {
         let ack =
             serde_json::json!({ "session_id": sid, "message_ids": reply.ack_ids }).to_string();
-        let _ = http_post_why(&base, "/hook/ack", &ack, ACK_TIMEOUT);
+        let _ = post("/hook/ack", &ack, ACK_TIMEOUT);
     }
 }
 
@@ -241,6 +251,8 @@ fn wait_for_mail(
         wait.as_secs()
     );
     let base = resolve_base(base_override);
+    let explicit = base_override.is_some_and(|b| !b.is_empty())
+        || std::env::var("MARSHAL_BASE_URL").is_ok_and(|b| !b.is_empty());
     // The daemon answers within `WATCH_WAIT`; the read timeout only has to
     // outlast it, so a daemon that vanished mid-wait is noticed.
     let timeout = wait + Duration::from_secs(30);
@@ -255,7 +267,12 @@ fn wait_for_mail(
         if parent_pid() != parent {
             return false;
         }
-        let post = |path: &str, body: &str, timeout| http_post_why(&base, path, body, timeout);
+        let post = |path: &str, body: &str, timeout| match crate::link::load_pairing()
+            .filter(|_| !explicit)
+        {
+            Some(pairing) => crate::link::https_post_why(&pairing, path, body, timeout),
+            None => http_post_why(&base, path, body, timeout),
+        };
         match post(&path, &body, timeout) {
             Ok(reply) => {
                 failing = None;
@@ -559,9 +576,15 @@ fn http_post_why(
     stream
         .set_write_timeout(Some(timeout))
         .map_err(unreachable)?;
+    // On the daemon's host the hook listener requires the local token when TLS
+    // is on. A paired machine posts through its tunnel, which carries its own
+    // token, and has no local token file.
+    let auth = marshal_entities::pairing::read_local_token()
+        .map(|t| format!("Authorization: Bearer {t}\r\n"))
+        .unwrap_or_default();
     let req = format!(
         "POST {path} HTTP/1.1\r\nHost: {hostport}\r\nContent-Type: application/json\r\n\
-         Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+         Content-Length: {}\r\n{auth}Connection: close\r\n\r\n{body}",
         body.len()
     );
     stream.write_all(req.as_bytes()).map_err(unreachable)?;

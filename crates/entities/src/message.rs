@@ -12,6 +12,21 @@ use crate::session::SessionId;
 /// available through `marshal://messages`.
 pub const CONTEXT_BODY_MAX_CHARS: usize = 2_000;
 
+/// Largest body a message may have. Bodies are stored whole and returned whole by
+/// `ReadMessages`, so without a limit one sender could make a recipient's reads
+/// too large to deliver.
+pub const MESSAGE_BODY_MAX_BYTES: usize = 64 * 1024;
+
+/// The refusal for a body over [`MESSAGE_BODY_MAX_BYTES`], if this one is.
+pub fn body_too_large(body: &str) -> Option<String> {
+    (body.len() > MESSAGE_BODY_MAX_BYTES).then(|| {
+        format!(
+            "message body is {} bytes, over the {MESSAGE_BODY_MAX_BYTES} byte limit; put it in a file or a commit and send the reference",
+            body.len()
+        )
+    })
+}
+
 /// Shared agent guidance for setup and MCP initialization.
 pub const COORDINATION_GUIDANCE: &str = "Coordinate when work shares resources, has dependencies, or could interfere. \
 Check ownership before conflicting use; agree on access and disruptive changes, and notify affected peers of release or failure. \

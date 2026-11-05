@@ -13,7 +13,12 @@
 //! per connection, `Connection: close`. Hook bodies are a few hundred
 //! bytes; anything fancier would be a dependency we don't need.
 
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{
+    net::SocketAddr,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 use tokio::sync::watch;
 
 use myko::server::MykoServerContext;
@@ -22,7 +27,7 @@ use tokio::{
     net::{TcpListener, TcpStream},
 };
 
-use crate::hooks;
+use crate::{credentials, hooks};
 
 /// Hard cap on a hook request body. Claude Code hook payloads are small;
 /// this only exists so a malformed/hostile `Content-Length` can't make us
@@ -39,32 +44,64 @@ const WAIT_POLL: Duration = Duration::from_millis(500);
 /// back off quietly rather than report the daemon unreachable.
 pub const RESTARTING_HEADER: &str = "X-Marshal-Restarting";
 
-/// Run the hook listener forever. Spawn on a tokio task.
-pub async fn run(bind: SocketAddr, ctx: Arc<MykoServerContext>) -> std::io::Result<()> {
-    run_until(bind, ctx, watch::channel(false).1).await
+/// What the daemon's real listener checks on every request: the local
+/// token it must carry, as `Authorization: Bearer` or a `token` query parameter
+/// (the gate adds it when forwarding for a paired machine), and the session
+/// bindings behind the gate's `machine` mark. Tests run without it.
+pub struct Access {
+    pub state_dir: PathBuf,
+    pub local_token: String,
 }
 
-/// [`run`], ending every held wait once `stopping` turns true, with an empty
-/// reply marked by [`RESTARTING_HEADER`].
+/// Run the hook listener forever. Spawn on a tokio task.
+pub async fn run(bind: SocketAddr, ctx: Arc<MykoServerContext>) -> std::io::Result<()> {
+    run_until(bind, ctx, None, watch::channel(false).1).await
+}
+
+/// [`run`], refusing requests the gate marked as coming from a machine that
+/// doesn't own the session they name. The session bindings live in `state_dir`.
+/// Requests from the daemon's own host carry no machine and aren't checked.
+pub async fn run_bound(
+    bind: SocketAddr,
+    ctx: Arc<MykoServerContext>,
+    access: Option<Arc<Access>>,
+) -> std::io::Result<()> {
+    run_until(bind, ctx, access, watch::channel(false).1).await
+}
+
+/// [`run_bound`], ending every held wait once `stopping` turns true, with an
+/// empty reply marked by [`RESTARTING_HEADER`].
 pub async fn run_until(
     bind: SocketAddr,
     ctx: Arc<MykoServerContext>,
+    access: Option<Arc<Access>>,
     stopping: watch::Receiver<bool>,
 ) -> std::io::Result<()> {
     let listener = TcpListener::bind(bind).await?;
     log::info!("marshal hook listener on http://{bind} (/hook/*)");
+    let limiter =
+        crate::limits::ConnLimiter::from_env(crate::limits::HOOKS.0, crate::limits::HOOKS.1);
     loop {
-        let (stream, _peer) = match listener.accept().await {
+        let (mut stream, peer) = match listener.accept().await {
             Ok(pair) => pair,
             Err(e) => {
                 log::warn!("[hook] accept error: {e}");
                 continue;
             }
         };
+        let Some(place) = limiter.try_acquire("hooks") else {
+            log::warn!("[hook] refused {peer}: {} connections open", limiter.max());
+            tokio::spawn(async move {
+                let _ = write_response(&mut stream, 503, "too many connections").await;
+            });
+            continue;
+        };
         let ctx = ctx.clone();
+        let access = access.clone();
         let stopping = stopping.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_conn(stream, ctx, stopping).await {
+            let _place = place;
+            if let Err(e) = handle_conn(stream, ctx, access, stopping).await {
                 log::debug!("[hook] connection error: {e}");
             }
         });
@@ -74,6 +111,7 @@ pub async fn run_until(
 async fn handle_conn(
     mut stream: TcpStream,
     ctx: Arc<MykoServerContext>,
+    access: Option<Arc<Access>>,
     stopping: watch::Receiver<bool>,
 ) -> std::io::Result<()> {
     let mut buf: Vec<u8> = Vec::with_capacity(2048);
@@ -102,10 +140,19 @@ async fn handle_conn(
     let method = rl.next().unwrap_or("");
     let target = rl.next().unwrap_or("");
 
-    let content_length = lines
+    let headers: Vec<(String, String)> = lines
         .filter_map(|l| l.split_once(':'))
-        .find(|(k, _)| k.trim().eq_ignore_ascii_case("content-length"))
-        .and_then(|(_, v)| v.trim().parse::<usize>().ok())
+        .map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().to_string()))
+        .collect();
+    let header = |name: &str| {
+        headers
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.as_str())
+    };
+
+    let content_length = header("content-length")
+        .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(0)
         .min(MAX_BODY);
 
@@ -130,8 +177,34 @@ async fn handle_conn(
         None => (target, ""),
     };
 
+    // A browser names its page in `Origin` on every cross-origin request, and
+    // nothing but a browser opens a WebSocket here, so both are refused before
+    // anything else is looked at.
+    if header("origin").is_some() {
+        return write_response(&mut stream, 403, "browser origins are refused").await;
+    }
+    if header("upgrade").is_some() || header("sec-websocket-key").is_some() {
+        return write_response(&mut stream, 403, "no websocket here").await;
+    }
+
     if method != "POST" {
         return write_response(&mut stream, 405, "method not allowed").await;
+    }
+
+    let (query, presented) = strip_token(query);
+    let query = query.as_str();
+    if let Some(access) = &access {
+        let presented = presented.or_else(|| {
+            header("authorization")
+                .and_then(|v| v.strip_prefix("Bearer "))
+                .map(|t| t.trim().to_string())
+        });
+        if !presented.is_some_and(|t| credentials::local_token_matches(&access.local_token, &t)) {
+            return write_response(&mut stream, 401, "local token required").await;
+        }
+        if !machine_may_act(&access.state_dir, query, &body) {
+            return write_response(&mut stream, 403, "forbidden").await;
+        }
     }
 
     if path == "/hook/wait" {
@@ -167,6 +240,55 @@ async fn handle_conn(
     }
 }
 
+/// Split a `token` parameter out of the query, as the gate does.
+fn strip_token(query: &str) -> (String, Option<String>) {
+    let mut token = None;
+    let kept: Vec<&str> = query
+        .split('&')
+        .filter(|p| !p.is_empty())
+        .filter(|p| match p.strip_prefix("token=") {
+            Some(t) => {
+                token = Some(t.to_string());
+                false
+            }
+            None => true,
+        })
+        .collect();
+    (kept.join("&"), token)
+}
+
+/// Whether the machine the gate named in `query` may act for the session in
+/// `body`. Without a session id the handlers have nothing to act on. Without a
+/// machine the request came from the daemon's own host, which is always allowed
+/// and claims the session, so a paired machine can't take it by getting there
+/// first.
+fn machine_may_act(state_dir: &Path, query: &str, body: &[u8]) -> bool {
+    let session = serde_json::from_slice::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("session_id")?.as_str().map(str::to_string));
+    let Some(session) = session else {
+        return true;
+    };
+    let Some(machine) = query.split('&').find_map(|kv| kv.strip_prefix("machine=")) else {
+        if let Err(e) = credentials::claim_session(state_dir, credentials::LOCAL_MACHINE, &session)
+        {
+            log::warn!("[hook] can't record local session {session}: {e}");
+        }
+        return true;
+    };
+    match credentials::claim_machine_session(state_dir, machine, &session) {
+        Ok(true) => true,
+        Ok(false) => {
+            log::warn!("[hook] refused {machine}: session {session} isn't its own");
+            false
+        }
+        Err(e) => {
+            log::warn!("[hook] refused {machine}: can't read session bindings: {e}");
+            false
+        }
+    }
+}
+
 /// `/hook/wait`: hold the request until the session has an unread direct
 /// message (respond with it, then ack) or `timeout` seconds pass (respond
 /// empty). The caller sends nothing after its request, so the socket turning
@@ -199,7 +321,14 @@ async fn handle_wait(
             return write_response_with(&mut stream, 200, &restarting, "").await;
         }
         hooks::mark_waiting_now(&cmd_ctx, &sid);
-        if let Some(outcome) = hooks::poll_wait(&cmd_ctx, &sid) {
+        // While the operator has paused wake-ups, a wait hands out nothing;
+        // the mail stays unread for the next prompt.
+        let outcome = if marshal_entities::controls::wakes_paused() {
+            None
+        } else {
+            hooks::poll_wait(&cmd_ctx, &sid)
+        };
+        if let Some(outcome) = outcome {
             hooks::end_wait(&cmd_ctx, &sid);
             // A client that says it will ack does so once it has handed the
             // mail on, which a written response alone can't tell us.
@@ -241,6 +370,7 @@ async fn write_response_with(
 ) -> std::io::Result<()> {
     let reason = match status {
         200 => "OK",
+        403 => "Forbidden",
         404 => "Not Found",
         405 => "Method Not Allowed",
         413 => "Payload Too Large",

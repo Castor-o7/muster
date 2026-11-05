@@ -3,12 +3,14 @@
 //!
 //! Sends go through myko like any other, so the sender has to be on the roster.
 //! The terminal registers a short-lived `Session` of kind `terminal`, under one id
-//! kept per machine, and removes it on exit. Each recipient gets a direct message rather than a room broadcast,
+//! kept per machine so the gate's binding file doesn't grow, and removes it on
+//! exit. Each recipient gets a direct message rather than a room broadcast,
 //! because only direct mail wakes an idle session.
 //!
 //! Any process on this account can run this command, so the label says which
-//! machine it came from and carries no authority. It is never the operator's
-//! approval for a restart or anything similar.
+//! machine it came from and carries no authority. With TLS on, the gate attests
+//! the machine, not the person. It is never the operator's approval for a
+//! restart or anything similar.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -131,8 +133,10 @@ fn terminal_id() -> Result<String> {
 
 pub async fn run(target: Target, body: String) -> Result<()> {
     marshal_entities::link();
-    let address = crate::daemon_address();
-    let machine = crate::detect_host().name;
+    let address = crate::daemon_address().await?;
+    let machine = crate::link::load_pairing()
+        .map(|p| p.name)
+        .unwrap_or_else(|| crate::detect_host().name);
     let cwd = std::env::current_dir()
         .map(|d| d.display().to_string())
         .unwrap_or_default();
@@ -162,7 +166,8 @@ pub async fn run(target: Target, body: String) -> Result<()> {
     let nicknames = client.watch_query::<GetAllSessionNicknames>(GetAllSessionNicknames {});
     client.set_address(Some(address));
 
-    // Our row showing up proves the connection and a primed roster at once. Repeating the SET until then is harmless.
+    // Our row showing up proves the connection, the gate's consent when TLS is
+    // on, and a primed roster at once. Repeating the SET until then is harmless.
     let started = Instant::now();
     while !sessions.get().iter().any(|s| s.id == id) {
         if started.elapsed() > CONNECT_TIMEOUT {

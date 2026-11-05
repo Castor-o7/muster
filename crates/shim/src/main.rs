@@ -35,11 +35,15 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
+/// Where an unpaired shim connects: the daemon's one port. A plain daemon
+/// serves it directly; with TLS on, the gate takes plain connections from
+/// loopback with the host's local token, which the shim adds when the file
+/// exists. Other machines pair (`link`) and reach the gate over TLS.
 const DEFAULT_DAEMON_ADDRESS: &str = "ws://localhost:6155";
 
-/// Env var that overrides the daemon WebSocket URL. Set this to point
-/// the shim at a daemon other than the default `ws://localhost:6155` —
-/// e.g. a daemon on another host or a non-default port. The plugin's
+/// Env var that overrides the daemon WebSocket URL for an unpaired shim.
+/// Set this to point the shim at a daemon other than the default
+/// `ws://localhost:6155` (a pairing takes precedence). The plugin's
 /// `.mcp.json` plumbs this through with `${MARSHAL_DAEMON_ADDRESS}`
 /// substitution, so a user-shell `export` is enough to reach Claude
 /// Code's spawned shim. The legacy `MYKO_ADDRESS` name is honored as
@@ -154,6 +158,43 @@ fn main() -> Result<()> {
                 .context("building tokio runtime")?
                 .block_on(roster_read::run());
         }
+        // Store the code `marshal-daemon pair` printed, so this machine reaches
+        // the daemon through its TLS gate. See `link`.
+        Some("pair") => {
+            let code = argv
+                .next()
+                .context("usage: marshal-shim pair <pairing code>")?;
+            let pairing = match marshal_entities::pairing::Code::parse(&code)? {
+                marshal_entities::pairing::Code::Pairing(pairing) => pairing,
+                // A one-time invite: exchange it at the gate for a token.
+                marshal_entities::pairing::Code::Invite(invite) => link::redeem_invite(invite)?,
+            };
+            let path = link::save_pairing(&pairing)?;
+            println!(
+                "paired with {} as {} (saved to {}); restart Claude Code sessions to use it",
+                pairing.address,
+                pairing.name,
+                path.display()
+            );
+            return Ok(());
+        }
+        // Show this machine's pairing with the token masked, so a
+        // session can find the daemon's address without printing the secret.
+        Some("pairing") if argv.next().is_none() => {
+            match link::load_pairing() {
+                Some(pairing) => println!("{}", pairing.masked()),
+                None => println!("this machine isn't paired"),
+            }
+            return Ok(());
+        }
+        Some("unpair") if argv.next().is_none() => {
+            if link::remove_pairing()? {
+                println!("removed this machine's pairing");
+            } else {
+                println!("this machine isn't paired");
+            }
+            return Ok(());
+        }
         // One-shot cross-platform setup: wire marshal into a Codex install
         // (CLI / IDE / desktop app) by writing the config.toml + AGENTS.md
         // managed blocks. For laptops / the desktop app where there's no
@@ -207,12 +248,45 @@ fn run_terminal_send(target: terminal_send::Target, body: String) -> Result<()> 
         .block_on(terminal_send::run(target, body))
 }
 
+/// Add the host's local token to a daemon address that has none. The
+/// daemon's local gate requires it; a host without a daemon has no token file,
+/// and the address is left as it was.
+pub(crate) fn with_local_token(address: String) -> String {
+    if address.contains("token=") {
+        return address;
+    }
+    match marshal_entities::pairing::read_local_token() {
+        Some(token) => {
+            let sep = if address.contains('?') { '&' } else { '?' };
+            format!("{address}{sep}token={token}")
+        }
+        None => address,
+    }
+}
+
 /// Where to reach the daemon; see the resolution order at the call in `serve`.
-fn daemon_address() -> String {
-    read_address_from_config_file()
-        .or_else(|| std::env::var(ADDRESS_ENV).ok())
-        .or_else(|| std::env::var(ADDRESS_ENV_LEGACY).ok())
-        .unwrap_or_else(|| DEFAULT_DAEMON_ADDRESS.to_string())
+async fn daemon_address() -> Result<String> {
+    Ok(match link::load_pairing() {
+        Some(pairing) => {
+            let port = link::start_tunnel(&pairing)
+                .await
+                .context("starting the TLS tunnel to the paired daemon")?;
+            log::info!(
+                "[marshal-shim] paired as {}: connecting to {} over TLS",
+                pairing.name,
+                pairing.address
+            );
+            format!("ws://127.0.0.1:{port}/myko?token={}", pairing.token)
+        }
+        None => {
+            let address = read_address_from_config_file()
+                .or_else(|| std::env::var(ADDRESS_ENV).ok())
+                .or_else(|| std::env::var(ADDRESS_ENV_LEGACY).ok())
+                .unwrap_or_else(|| DEFAULT_DAEMON_ADDRESS.to_string());
+            log::info!("[marshal-shim] not paired: connecting to {address} without TLS");
+            with_local_token(address)
+        }
+    })
 }
 
 async fn serve() -> Result<()> {
@@ -244,9 +318,11 @@ async fn serve() -> Result<()> {
     // role-deployed per-host config file. Config-wins makes the file the
     // per-host source of truth; env becomes a deliberate one-off
     // override the operator can apply by deleting the file.
-    let daemon_address = daemon_address();
-
-    log::info!("[marshal-shim] connecting to {daemon_address}");
+    //
+    // A pairing (`marshal-shim pair`) wins over all of these: myko's client
+    // dials a loopback tunnel that carries the connection over pinned TLS to
+    // the daemon's gate, with the access token in the URL.
+    let daemon_address = daemon_address().await?;
 
     let client = Arc::new(MykoClient::new());
 
@@ -380,6 +456,8 @@ async fn serve() -> Result<()> {
     let wake_watchers_cell = client.watch_query::<marshal_entities::GetAllWakeWatchers>(
         marshal_entities::GetAllWakeWatchers {},
     );
+    let wake_pause_cell = client
+        .watch_query::<marshal_entities::GetAllWakePauses>(marshal_entities::GetAllWakePauses {});
 
     // Mirror this session's daemon-ASSIGNED nickname to a per-session config
     // file so the runtime-free statusline (a daemon-less subcommand) shows the
@@ -435,6 +513,9 @@ async fn serve() -> Result<()> {
         if let hyphae::Signal::Value(status) = signal {
             match &**status {
                 ConnectionStatus::Connected(addr) => {
+                    // The paired address carries the access token in its
+                    // query; Claude Code keeps MCP stderr on disk.
+                    let addr = addr.split('?').next().unwrap_or_default();
                     // Under Codex the shim owns no Session (the SessionStart
                     // hook registers the authoritative one) — so skip the
                     // re-SET, which would publish the placeholder id.
@@ -502,6 +583,7 @@ async fn serve() -> Result<()> {
         members_cell,
         nicknames_cell,
         wake_watchers_cell,
+        wake_pause_cell,
     });
 
     // Clone: the liveness publisher below also needs the host (for the roster
@@ -1179,6 +1261,18 @@ fn init_logging() {
     if std::env::var("RUST_LOG").is_err() {
         b.filter_level(log::LevelFilter::Info);
     }
+    // Pairing codes and bearer tokens never reach a log line.
+    b.format(|buf, record| {
+        use std::io::Write as _;
+        writeln!(
+            buf,
+            "[{} {:<5} {}] {}",
+            buf.timestamp(),
+            record.level(),
+            record.target(),
+            marshal_entities::pairing::redact(&record.args().to_string())
+        )
+    });
     b.target(env_logger::Target::Stderr).init();
 }
 

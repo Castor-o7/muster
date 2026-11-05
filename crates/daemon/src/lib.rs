@@ -9,9 +9,15 @@
 
 pub mod auto_rooms;
 pub mod cleanup;
+pub mod controls;
+pub mod credentials;
+pub mod gate;
+pub mod gate_filter;
 pub mod hooks;
 pub mod http_listener;
+pub mod limits;
 pub mod liveness_filter;
+pub mod mode;
 pub mod nickname_assign;
 
 pub fn link() {
