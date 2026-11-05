@@ -50,26 +50,32 @@ usage:
   muster-daemon allow MACHINE         let only listed machines send (and this host)
   muster-daemon disallow MACHINE      take a machine off that list
   muster-daemon senders [--clear]     show the list, or remove it so any machine may send
-  muster-daemon service [--tls] [--apply [--force]]
+  muster-daemon service [--tls] [--apply [--force [--drop-settings]]]
                                       show the systemd or launchd unit that keeps this
-                                      daemon running across reboots; --apply writes it
-                                      (--force replaces a different one, backed up first).
-                                      It never starts or restarts anything";
+                                      daemon running across reboots; --apply writes it.
+                                      --force replaces a different one, backed up first,
+                                      carrying its environment and ordering over;
+                                      --drop-settings also lets go of what can't be
+                                      carried. It never starts or restarts anything";
 
 /// `muster-daemon service` (MUS-15). See `daemon::service`.
 fn service(args: &[String]) -> Result<()> {
     use daemon::service::{self, Applied, Kind};
-    let (mut tls, mut apply, mut force) = (false, false, false);
+    let (mut tls, mut apply, mut force, mut drop_settings) = (false, false, false, false);
     for a in args {
         match a.as_str() {
             "--tls" => tls = true,
             "--apply" => apply = true,
             "--force" => force = true,
+            "--drop-settings" => drop_settings = true,
             _ => anyhow::bail!("{USAGE}"),
         }
     }
     if force && !apply {
         anyhow::bail!("--force only makes sense with --apply");
+    }
+    if drop_settings && !force {
+        anyhow::bail!("--drop-settings only makes sense with --apply --force");
     }
     let kind = Kind::for_this_os()
         .context("units are written for Linux (systemd) and macOS (launchd) only")?;
@@ -87,8 +93,32 @@ fn service(args: &[String]) -> Result<()> {
         );
     }
     let path = kind.path(&home);
-    let text = service::render(kind, &exe, tls, &home.join("Library/Logs"));
+    let fresh = service::render(kind, &exe, tls, &home.join("Library/Logs"));
+    // An existing unit's environment and ordering are carried over, so a
+    // replacement keeps its bind, Postgres URL and the rest (MUS-15).
+    let old = std::fs::read_to_string(&path).ok().filter(|o| *o != fresh);
+    let carry = old.as_deref().map(|o| service::carry(kind, &fresh, o));
+    let text = carry.as_ref().map_or(fresh.clone(), |c| c.text.clone());
+    let report = |c: &service::Carry| {
+        for l in &c.carried {
+            println!("  carried from the old unit: {l}");
+        }
+        for l in &c.dropped {
+            println!("  NOT carried (the new unit would lose it): {l}");
+        }
+        let dropins = path.with_extension("service.d");
+        if kind == Kind::Systemd && dropins.is_dir() {
+            println!(
+                "  drop-ins in {} are separate files and stay as they are",
+                dropins.display()
+            );
+        }
+    };
     if !apply {
+        if let Some(c) = &carry {
+            println!("# {} exists and differs:", path.display());
+            report(c);
+        }
         println!(
             "# {} (dry run: nothing written; add --apply to write it)\n",
             path.display()
@@ -99,6 +129,17 @@ fn service(args: &[String]) -> Result<()> {
             println!("#   {c}");
         }
         return Ok(());
+    }
+    if let Some(c) = &carry {
+        report(c);
+        if force && !c.dropped.is_empty() && !drop_settings {
+            anyhow::bail!(
+                "{} has settings the new unit can't carry (listed above). Nothing was written. \
+                 Re-run with --drop-settings to replace it anyway; the old file is backed up \
+                 first",
+                path.display()
+            );
+        }
     }
     let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
     match service::apply(&path, &text, force, &stamp)? {
