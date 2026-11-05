@@ -14,7 +14,7 @@ evidence from a real run by the person or team named.
 
 ## Status
 
-2026-11-05: 35 of 75 stories ticked, about 47%, not counting the 3 moved to Rally. Live on
+2026-11-05: 36 of 75 stories ticked, about 48%, not counting the 3 moved to Rally. Live on
 Murph since 2026-11-04 16:02:18: `14e2d1a`, deployed by Lamplighter on the operator's word, with
 every port check passing. It carries MUS-7 (first live at `3746864`, 14:28) and MUS-59, besides
 everything before. Merged and waiting for the next daemon restart: MUS-8 (which also needs a
@@ -481,7 +481,7 @@ Rally.
 - [x] **MUS-65: Document live delivery without the channels flag (G4).** How hooks give live
   delivery and wake, checked against the code, and how that differs from Marshal's channel
   push. Merged as #80.
-- [ ] **MUS-66: Message between daemons (G5).** Secure and bidirectional, on the TLS mode. The
+- [x] **MUS-66: Message between daemons (G5).** Secure and bidirectional, on the TLS mode. The
   watchman reads a design and threat model before any building. The design answers what
   configuration links two daemons (peer address, token or certificate fingerprint, and whether
   `muster-daemon pair` is reused), whether a test session needs its own shim pairing file, what
@@ -490,9 +490,11 @@ Rally.
   second daemon on Murph (loopback ports 6265–6268, its own state dir, config dir and database).
   Design merged as #90. Built: `pair --link` and `link`, the `/link` route and protocol, remote
   sessions on the roster, `nickname@link` addressing, an outbox that survives a restart (with
-  Postgres), and the threat-model checks, all covered by `scripts/test-links-e2e.sh`. Still
-  needs the two runs: Lamplighter's two-daemon test on Murph, then the real a1↔Murph run with
-  the operator's OK.
+  Postgres), and the threat-model checks, all covered by `scripts/test-links-e2e.sh`. The real
+  a1↔Murph run passed on 2026-11-05 with Murph on `edf5ea8` (`MUSTER_TLS=1`, checked by
+  checksum) and a test daemon on a1 built from the same commit: one `pair --link` code
+  redeemed, a message each way (labelled `gleaming-salamander@a1` and `tangerine-wombat@Murph`),
+  and the link back up after the a1 daemon restarted.
 - [ ] **MUS-67: Write up Muster against Marshal (G7).** What Muster adds and changes, written
   for the eventual upstream PR descriptions. Draft in #81.
 - [ ] **MUS-68: Simulate each behaviour change in Zoo (G8).** Upstream requires a real-agent
