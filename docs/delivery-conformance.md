@@ -147,9 +147,9 @@ These are listed so nobody reads the grid as more than it is.
   the workflow, and runs `npm ci` in each plugin. Locally, put bun on `PATH` or
   set `MUSTER_BUN`, and run `npm ci --workspaces=false` in the plugin's
   directory. Without bun the plugin cells read `no bun`, and CI fails them
-  (`CONFORMANCE_REQUIRE_BUN`). The TypeScript plugins' own tests don't run in
-  CI either. Stage 3 adds bun to CI, downloaded from bun's GitHub release at a
-  pinned version and checked against a SHA-256 committed in the workflow.
+  (`CONFORMANCE_REQUIRE_BUN`).
+- **The plugins' own `bun test` suites don't run in CI yet.** Only their
+  conformance drivers do.
 - **The fixtures are constructed, not recorded.** The Claude fixtures follow
   Claude Code's documented hook input. The Codex fixtures follow the frames the
   bridge's own tests use, because Codex isn't installed where they were

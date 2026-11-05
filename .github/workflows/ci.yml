@@ -44,9 +44,6 @@ jobs:
         run: cargo build --workspace && ./scripts/test-gate-e2e.sh
       - name: Links between daemons end-to-end (MUS-66)
         run: ./scripts/test-links-e2e.sh
-      # MUS-69: every harness against one scenario table, with the real
-      # binaries; prints the harness × scenario grid. Known failures are listed
-      # in the test and reported as such.
       # The TypeScript plugins' fakes run under bun (MUS-69 stage 3). Download
       # the pinned release from bun's GitHub releases and check it against the
       # SHA-256 below, from that release's SHASUMS256.txt. No third-party
@@ -68,6 +65,9 @@ jobs:
           for plugin in muster-pi; do
             (cd "plugins/$plugin" && npm ci --workspaces=false --no-audit --no-fund --ignore-scripts)
           done
+      # MUS-69: every harness against one scenario table, with the real
+      # binaries; prints the harness × scenario grid. Known failures are listed
+      # in the test and reported as such.
       - name: Delivery conformance
         env:
           # A missing bun fails the plugins' cells instead of skipping them.
