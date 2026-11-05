@@ -44,15 +44,52 @@ plan on 2026-11-05. It supersedes the landing order below wherever the two disag
   (`shim/src/main.rs`), **Other's `cargo-deny` audit** (`ci.yml`, which now
   validates workflows and pins action references, so the audit job must follow
   those rules), the **Codex bridge items** (`codex_hook.rs`), and anything that
-  adds Session fields (the Gate's machine fields). `docs/pr-followups.md` shows
-  upstream keeps ideas from closed PRs and reimplements them itself. Expect the
-  same with ours.
+  adds Session fields (the Gate's machine fields). `docs/pr-followups.md` lists
+  ideas upstream kept from **its own** closed PRs (#91, #113 and #125 are lucid-max's, and
+  #104 is the pulse-agents app's), so it doesn't show how outside PRs are treated.
+  Our #164 is the evidence for that: it merged as our 38 commits squashed into one
+  (`f47c932`, with upstream's own merge-from-main `be59701` on the PR branch). So
+  upstream does merge outside PRs, but squashed, which leaves every `port/*` branch
+  on a base whose hooks commits aren't ancestors of upstream main (see "Live cuts").
 - **Reference checkout:** `~/src/marshal` on Murph is a clean checkout of
   ignition-is-go/marshal main, with remotes `upstream` and `castor` (the
   Castor-o7/marshal fork that PR heads come from). Use it for upstream code.
   `~/src/muster` is Muster, not Marshal.
 - Levi `main` is still `aed6027` (v0.9.5), so L1–L3 are current. Castor-o7/levi now
   exists as a fork of ignition-is-go/levi, which was what held L1.
+
+### Live cuts (checked by cobalt-bream, 2026-11-05 ~16:45)
+
+Every `port/*` branch is still on `94ecc24`. The live cut of each layer is the
+newest head, and these form one stack, each containing the ones above it:
+
+| Layer | Live cut | Head | Sits on | Superseded, kept, not to be used |
+|---|---|---|---|---|
+| Hooks (merged as #164) | `port/hooks-2a-offer` | `62552e6` | `94ecc24` | `hooks`, `hooks-v2`, `hooks-v3`, `hooks-ack`, `hooks-2a` (`7f0a56c`, a sibling of the offered head) |
+| Inbox quoting (proposal only) | `port/inbox-quoting-2` | `3290e17` | hooks-2a-offer | `inbox-quoting` |
+| Durability | `port/durability-v3` | `6e63bb1` | inbox-quoting-2 | `durability`, `durability-v2` |
+| Other | `port/other-v4` | `0784ac2` | durability-v3 | `other`, `other-v2`, `other-v3` |
+| Gate | `port/gate-v3` | `36a3c11` | other-v4 | `gate`, `gate-v2` |
+| M2 | `port/terminal-cmds-v2` | `4a53e00` | hooks-2a-offer (**not** the stack above) | `terminal-cmds` |
+
+The older cuts don't contain the newer ones. Each `-vN` was rebuilt, not extended. The
+per-layer tables further down still name the older cuts. Read this table instead.
+
+**`hooks-2a-offer` is in upstream as the squash `f47c932`.** Its commits will never be
+ancestors of upstream main. So rebasing a layer means
+`git rebase --onto upstream/main <layer below> <layer>`, never a plain rebase.
+
+**M2 doesn't need Step 0.** `port/terminal-cmds-v2` has 10 commits above
+`hooks-2a-offer`, but only three are M2: `481f18a` (`tell`/`all`/`roster`), `2211da4`
+(plugin docs) and `4a53e00` (roster fix). The other seven are hooks follow-ups and the
+Zoo campaign for #164. One of them, `7208485` (a body can't forge the inbox framing), is
+the inbox-quoting default change, which goes to upstream as a proposal only. A trial
+cherry-pick of the three onto `9b00c6f` had one conflict, in `shim/src/main.rs`.
+Upstream's new `usage()` (`--help`, from #135) sits where M2 adds `run_terminal_send` and
+`daemon_address`. The fix is to keep both and list `tell`, `all` and `roster` in
+`usage()`. So M2 can be cut fresh on `9b00c6f` as `port/terminal-cmds-v3`, ahead of
+and independent of Muster's catch-up. That's the recommendation, and it's ultra-dune's
+call. The trial built nothing and pushed nothing.
 
 ### Step 0: catch up and re-inventory (nothing goes upstream)
 
@@ -109,10 +146,31 @@ as proposals, one issue each or one list, so upstream decides whether it wants t
 
 ### For the operator to raise with lucid-max
 
-- Thanks, and whether one PR per layer is still the shape they want.
-- How they'd like the Gate split, and whether they'll take vendored code.
-- Whether the Zoo run (G8) is still required. It was blocked on Codex on a1 when
-  #164 merged.
+A draft for the operator to send, in his own words:
+
+1. **Thanks** for reviewing and merging #164 and #165.
+2. **Shape.** Is one small additive PR at a time still what you want? Next is the
+   `marshal-shim tell`/`all`/`roster` terminal commands, new subcommands only, about
+   560 lines.
+3. **Squash merges.** #164 merged as a squash. Should we keep our PR branches
+   squash-friendly, or would you rather we squash before opening?
+4. **Default changes.** We have behaviour changes we won't send as PRs: inbox
+   quoting, keeping mail for reaped sessions, keep-alive for waiting sessions,
+   refusing an empty `to`, a first-write wait, and Codex re-register after a
+   restart. Would you like them as one issue listing them all, or one issue each? Or
+   would you rather pick them up yourselves, as `docs/pr-followups.md` does with your
+   own closed PRs?
+5. **Overlap with open PRs.** #143 (room validation) and #59 (TUI nicknames) are
+   near our Other and roster work. Should we wait for them, or build on them?
+6. **The Gate.** Opt-in TLS (`--tls`), plain stays the default. How would you like it
+   split (TLS, then pairing, then the myko listener)? Would you take a request-filter
+   hook in ignition-is-go/myko first, rather than a vendored myko-server copy? And is
+   port 6158 OK for myko's own listener?
+7. **Zoo (G8).** Is a Zoo run still required for additive PRs that change no
+   agent-facing text, such as the terminal commands and the dependency audit? It
+   needs Codex on a1, which isn't installed.
+8. **Fork CI.** Could fork-PR Actions be approved for our PRs, so Windows CI runs on
+   the exact head?
 
 ### Who does it
 
