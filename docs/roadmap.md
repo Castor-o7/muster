@@ -164,6 +164,10 @@ Merged and needing a live run: MUS-36 and MUS-37.
   the daemon's `[identity]` and `[hook]` lines and its warnings, with succession at debug, and
   `CONFORMANCE_DAEMON_LOG=1` prints them for a passing cell. Still to do: the cause, from the
   first CI run that fails with that log.
+  The plain `claude` form fails too, even after #156's re-check: `claude` ×
+  `restart-keeps-identity` failed at the full 20 s on main's push of 65d922b (run 42107003441)
+  and on #125 at 0adfa2c (run 42111510686), so it's on `FLAKY` for this story as well (#175). The
+  #125 run printed the daemon's `[identity]` lines for the failed cell, so it can supply that log.
 - [x] **MUS-47: Hand unread mail to a successor.** From MUS-31. Retained mail reaches
   nobody without this. Depends on MUS-3. Done when: a session taking over an identity
   receives its predecessor's unread mail, shown by a test.

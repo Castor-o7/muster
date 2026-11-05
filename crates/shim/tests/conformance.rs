@@ -56,6 +56,14 @@ const QUIET_FOR: Duration = Duration::from_secs(4);
 /// and they're checked before `KNOWN_FAILURES`, which may list them too.
 const FLAKY: &[(&str, &str, &str, &str)] = &[
     (
+        "claude",
+        "restart-keeps-identity",
+        "MUS-93",
+        "the plain form of claude-tls's takeover race, still seen after #156: failed at the full \
+         20 s on main's push of 65d922b (run 42107003441) and on #125 at 0adfa2c, where the same \
+         run's other harnesses passed it",
+    ),
+    (
         "claude-tls",
         "restart-keeps-identity",
         "MUS-93",
