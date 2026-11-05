@@ -186,6 +186,14 @@ impl CommandHandler for SendMessage {
         // callers could address by exact id alone. Accepts id / nickname /
         // operator (human-via-agent) / id-prefix; see `resolve_recipient`.
         let token = self.to_session_id.0.clone();
+        // An empty recipient would match every id by prefix and could land on
+        // the sender itself.
+        if token.trim().is_empty() {
+            return Err(err(
+                &ctx,
+                "no recipient: `to` is empty; name a session by nickname, id or operator email (see muster://roster)",
+            ));
+        }
         // `nickname@link` names a session on a linked daemon (MUS-66).
         if let Some(remote) = resolve_remote(&ctx, &token, true)? {
             return self.send_remote(&ctx, &sender, &remote);
