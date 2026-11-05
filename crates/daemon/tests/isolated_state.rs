@@ -6,16 +6,22 @@
 
 use std::path::{Path, PathBuf};
 
+/// Every `.rs` file under `dir`, at any depth (`tests/common/mod.rs`, say).
 fn rust_files(dir: &Path) -> Vec<(PathBuf, String)> {
-    std::fs::read_dir(dir)
-        .expect("read dir")
-        .map(|e| e.expect("dir entry").path())
-        .filter(|p| p.extension().is_some_and(|e| e == "rs"))
-        .map(|p| {
-            let text = std::fs::read_to_string(&p).expect("read file");
-            (p, text)
-        })
-        .collect()
+    let mut files = Vec::new();
+    let mut dirs = vec![dir.to_path_buf()];
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(&dir).expect("read dir") {
+            let path = entry.expect("dir entry").path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                let text = std::fs::read_to_string(&path).expect("read file");
+                files.push((path, text));
+            }
+        }
+    }
+    files
 }
 
 /// Where each of `patterns` appears in `files`, as `file:line: pattern`.
