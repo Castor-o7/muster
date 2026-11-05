@@ -143,6 +143,14 @@ Merged and needing a live run: MUS-36 and MUS-37.
   (`MUSTER_SUCCESSION_SETTLE_SECS`, 60 s), and taken over if it turns dead by the usual rules
   within it, while a sibling that stays live past it keeps its name. Shown by `identity_settle.rs`
   (both sides) in #134.
+- [ ] **MUS-93: A TLS restart can still miss its takeover.** From MUS-92. Main's push of #134
+  (081e389, run 42075687566) failed `claude-tls` × `unread-mail-follows-a-restart`: "the new
+  session never took over swift-chub" within the cell's 20 s. The same cell passed for `claude`
+  and `codex` in that run, and `claude-tls` passed 5 of 5 on Murph, about 9 s each. So it's
+  intermittent, and on CI's slower runner the TLS path may close the old connection late enough
+  to fall outside what MUS-92's settle re-check catches. The cell is on the conformance suite's
+  `FLAKY` list until this is fixed, so it doesn't fail CI. Done when: the cause is found from a
+  failing run's daemon log, and the cell is off `FLAKY` after passing in CI on three PRs in a row.
 - [ ] **MUS-47: Hand unread mail to a successor.** From MUS-31. Retained mail reaches
   nobody without this. Depends on MUS-3. Done when: a session taking over an identity
   receives its predecessor's unread mail, shown by a test.

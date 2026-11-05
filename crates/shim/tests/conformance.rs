@@ -54,13 +54,30 @@ const QUIET_FOR: Duration = Duration::from_secs(4);
 /// Cells that pass or fail from run to run, each with its story and why it's
 /// listed. They're reported as `flaky` and never fail the suite either way,
 /// and they're checked before `KNOWN_FAILURES`, which may list them too.
-const FLAKY: &[(&str, &str, &str, &str)] = &[(
-    "pi",
-    "daemon-restart-mid-wait-pg",
-    "MUS-90",
-    "passed once in CI in 2.2 s (#126 at e47c7e0), but failed 3 of 3 runs on a1 both on main \
-     (1fe3c02) and on #126, each at the full 26 s wait",
-)];
+const FLAKY: &[(&str, &str, &str, &str)] = &[
+    (
+        "pi",
+        "daemon-restart-mid-wait-pg",
+        "MUS-90",
+        "passed once in CI in 2.2 s (#126 at e47c7e0), but failed 3 of 3 runs on a1 both on \
+         main (1fe3c02) and on #126, each at the full 26 s wait",
+    ),
+    (
+        "opencode",
+        "daemon-restart-mid-wait-pg",
+        "MUS-90",
+        "passed in CI in 2.8 s (#139 at fabebbc, run 42075783447), where it usually fails at \
+         the full 26 s wait, like pi's",
+    ),
+    (
+        "claude-tls",
+        "unread-mail-follows-a-restart",
+        "MUS-93",
+        "failed in CI on main's push of #134 (081e389, run 42075687566): the new session never \
+         took over its nickname within 20 s. Passed 5 of 5 on Murph (#126 merged with main), \
+         each in about 9 s",
+    ),
+];
 
 /// Cells expected to fail today, each with the story that fixes it. The
 /// suite reports them as known failures, and fails if one passes.
