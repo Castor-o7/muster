@@ -1421,6 +1421,8 @@ const SCENARIOS: &[(&str, Scenario)] = &[
     ("daemon-restart-mid-wait", daemon_restart_mid_wait),
     ("daemon-restart-mid-wait-pg", daemon_restart_mid_wait),
     ("restart-keeps-unread-mail", restart_keeps_unread_mail),
+    ("restart-burst-shown-once-pg", restart_burst_shown_once),
+    ("restart-without-mail-stays-idle-pg", restart_without_mail_stays_idle),
     ("operator-pause-stops-wakes", operator_pause_stops_wakes),
     ("resume-wakes-held-mail", resume_wakes_held_mail),
     ("broadcast-never-wakes", broadcast_never_wakes),
@@ -1609,7 +1611,64 @@ fn daemon_restart_mid_wait(c: &mut Cell) -> Result<(), String> {
 
 /// Scenarios that run against Postgres (`CONFORMANCE_POSTGRES_URL`), so a restart
 /// keeps the roster and the mail (MUS-76). Every other cell runs in memory.
-const POSTGRES_SCENARIOS: &[&str] = &["daemon-restart-mid-wait-pg", "restart-keeps-unread-mail"];
+const POSTGRES_SCENARIOS: &[&str] = &[
+    "daemon-restart-mid-wait-pg",
+    "restart-keeps-unread-mail",
+    "restart-burst-shown-once-pg",
+    "restart-without-mail-stays-idle-pg",
+];
+
+/// Scenario 5c (Postgres, MUS-90): Mail sent all through a plugin's reconnect
+/// after a restart is each shown once. With Postgres the session's row is on the
+/// roster from the start, so some of these are sent while the plugin is still
+/// away, some race its reconnect, where a live push can land while the
+/// reconnect's inbox pull is in flight, and some are pushed live after it.
+fn restart_burst_shown_once(c: &mut Cell) -> Result<(), String> {
+    c.harness.arm_idle();
+    c.daemon.restart();
+    c.sender = Cell::sender(&c.daemon, &c.sender_id);
+    // Every 350 ms for about 5 s, spanning the plugin's reconnect (about 3 s),
+    // and under the daemon's limit of 20 messages at once.
+    let mut sent = Vec::new();
+    for i in 0..14 {
+        let t = token(&format!("burst{i}"));
+        c.send(&t)?;
+        sent.push(t);
+        thread::sleep(Duration::from_millis(350));
+    }
+    let woke = c.harness.wait_for_wake(Duration::from_secs(25)).unwrap_or_default();
+    thread::sleep(Duration::from_millis(500));
+    let next = c.harness.busy_boundary().unwrap_or_default();
+    // Past the hold lease, anything held but never acked would come back.
+    thread::sleep(Duration::from_secs(ACK_LEASE_SECS + 1));
+    let after = c.harness.busy_boundary().unwrap_or_default();
+    let seen = format!("{woke}\n{next}\n{after}");
+    let wrong: Vec<String> = sent
+        .iter()
+        .map(|t| (t, seen.matches(t.as_str()).count()))
+        .filter(|(_, n)| *n != 1)
+        .map(|(t, n)| format!("{t} x{n}"))
+        .collect();
+    if !wrong.is_empty() {
+        return Err(format!(
+            "not shown exactly once: {wrong:?}; the wake showed {woke:?}, then {next:?}, then {after:?}"
+        ));
+    }
+    Ok(())
+}
+
+/// Scenario 5d (Postgres, MUS-90): A restart with no mail doesn't wake an idle
+/// session. The reconnect pulls the inbox, and an empty one must stay quiet.
+fn restart_without_mail_stays_idle(c: &mut Cell) -> Result<(), String> {
+    c.harness.arm_idle();
+    c.daemon.restart();
+    // Long enough for the plugin to reconnect (about 3 s) and pull.
+    let woke = c.harness.wait_for_wake(QUIET_FOR + Duration::from_secs(4));
+    if woke.is_some() {
+        return Err(format!("woken by a restart with no mail: {woke:?}"));
+    }
+    Ok(())
+}
 
 /// Scenario 5b (Postgres): Mail sent before a restart, while the session was busy,
 /// is kept, and wakes the session once it goes idle after the restart.

@@ -77,6 +77,9 @@ export interface DaemonConfig {
 
 type NotifyHandler = (meta: NotifyChannelMeta) => void;
 
+/** How long a shown message id is remembered, to skip a second showing (MUS-90). */
+const SHOWN_FOR_MS = 10 * 60_000;
+
 export class MusterDaemon {
   private readonly client = new MykoClient();
   private readonly cfg: DaemonConfig;
@@ -109,6 +112,10 @@ export class MusterDaemon {
   private connected = false;
   /** Whether a connection has been up before, so the next one is a reconnect. */
   private everConnected = false;
+  /** Per session, the message ids a push or a drain has already shown, with
+   *  when. A live push can land while a reconnect's drain is reading the same
+   *  message as unread (MUS-90), so whichever gets it second skips it. */
+  private readonly shown = new Map<string, Map<string, number>>();
   private rosterChangedHandler: (() => void) | null = null;
   private connectionChangedHandler: ((connected: boolean) => void) | null = null;
 
@@ -358,6 +365,21 @@ export class MusterDaemon {
     return `- [${m.messageId}] ${this.senderLabel(m.fromSessionId)} [response_required=${m.responseRequired ?? false}]: ${m.body}`;
   }
 
+  /** Claim a message for showing. False if a push or a drain already showed it,
+   *  so the caller skips it. Ids are forgotten after ten minutes. */
+  claimShown(sessionId: string, messageId: string): boolean {
+    const now = Date.now();
+    let ids = this.shown.get(sessionId);
+    if (!ids) {
+      ids = new Map();
+      this.shown.set(sessionId, ids);
+    }
+    for (const [id, at] of ids) if (now - at > SHOWN_FOR_MS) ids.delete(id);
+    if (ids.has(messageId)) return false;
+    ids.set(messageId, now);
+    return true;
+  }
+
   drainInbox(sessionId: string): Promise<string | null> {
     if (!this.connected) return Promise.resolve(null);
 
@@ -399,7 +421,9 @@ export class MusterDaemon {
     if (!result) return null;
     if (!result.messages || result.messages.length === 0) return null;
 
-    const block = this.renderInbox(result.messages);
+    // A message a live push already showed is acked here but not shown again.
+    const fresh = result.messages.filter((m) => this.claimShown(sessionId, m.messageId));
+    const block = fresh.length ? this.renderInbox(fresh) : null;
 
     try {
       await this.sendForInbox(ackMessages(sessionId, result.messages.map((m) => m.messageId)));

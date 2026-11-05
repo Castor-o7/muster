@@ -229,6 +229,8 @@ export const NOTIFY_CHANNEL_COMMAND_ID = "NotifyChannel";
 export interface NotifyChannelMeta {
   source?: string;
   kind?: string;
+  /** The stored message's id, so a push and a drain don't both show it (MUS-90). */
+  message_id?: string;
   from_session?: string;
   from_nickname?: string;
   to_session?: string;

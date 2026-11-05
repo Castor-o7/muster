@@ -88,6 +88,8 @@ export const MusterPlugin: Plugin = async (input) => {
       .catch(() => {});
     const sid = meta.to_session;
     if (!sid) return;
+    // A reconnect's drain may already have shown this message (MUS-90).
+    if (meta.body && meta.message_id && !daemon.claimShown(sid, meta.message_id)) return;
     log(`muster: inbound push for session ${sid}`);
     // NotifyChannel already carries the body. Inject it immediately instead of
     // racing the daemon's eventually-consistent inbox projection. Drain after
