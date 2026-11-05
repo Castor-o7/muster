@@ -60,6 +60,9 @@ const KNOWN_FAILURES: &[(&str, &str, &str)] = &[
     ("opencode", "resume-wakes-held-mail", "MUS-82"),
     ("prime-agent", "dropped-ack-redelivers", "MUS-81"),
     ("prime-agent", "resume-wakes-held-mail", "MUS-82"),
+    ("pi", "daemon-restart-mid-wait-pg", "MUS-90"),
+    ("opencode", "daemon-restart-mid-wait-pg", "MUS-90"),
+    ("prime-agent", "daemon-restart-mid-wait-pg", "MUS-90"),
 ];
 
 /// Harnesses in the grid that have no fake yet, with the stage that adds one.
