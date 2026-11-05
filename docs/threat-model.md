@@ -30,14 +30,33 @@ Out of scope for now: other people with accounts on the operator's machines,
 the open internet (the gate stays on the LAN or a Tailscale/WireGuard network),
 and anyone with root on the daemon's host.
 
+## Which mode this covers
+
+The daemon runs plain by default, as upstream Marshal does, and with the gate
+only with `--tls` or `MUSTER_TLS=1` (MUS-64). **Everything in this document is
+about TLS mode.** In plain mode it doesn't apply: myko serves `MUSTER_BIND`
+with no authentication, `asSession` is trust-on-assert, there are no limits, and
+the daemon is protected only by where it's bound. The startup line names the
+mode. So that a gated daemon can't become an open one by losing a setting, it
+refuses to start plain while its state directory has paired machines, unless
+`MUSTER_TLS=0` says so explicitly.
+
 ## The surfaces
 
 | Port | Listener | Who can reach it | What guards it |
 |---|---|---|---|
-| 6255 | TLS gate | the LAN (Murph's firewall, MUS-56) | TLS with a pinned certificate; a per-machine token; the frame filter; per-IP and per-machine connection caps |
+| 6255 | TLS gate | the LAN (Murph's firewall, MUS-56) | TLS with a pinned certificate; a per-machine token; the frame filter; per-IP and per-machine connection caps. Plain HTTP from loopback takes the local gate's path (below); plain HTTP from anywhere else gets `426` |
 | 6256 | hook listener | the daemon's host | the local token; refuses any `Origin` or upgrade; a connection cap |
-| 6257 | local gate | the daemon's host | the local token; refuses any `Origin`; only myko's WebSocket route; the frame filter as `(local)`; a connection cap |
+| 6255 (plain, loopback) and 6257 | local gate | the daemon's host | the local token; refuses any `Origin`; only myko's WebSocket route; the frame filter as `(local)`; a connection cap. 6257 is the old port, kept for one release |
 | 6258 | myko's own listener | the daemon's host | admits only requests a gate forwarded (the local token), refuses any `Origin`, via the patched myko-server |
+
+**Loopback is not a trust boundary.** The gate sends plain HTTP from a loopback
+peer to the local path. A reverse proxy on the daemon's host, such as an HTTPS
+front end for the web UI, forwards remote requests from `127.0.0.1`, so the gate
+can't tell them from a local tool by address. That's still safe, because the
+local path requires the local token, which a remote client doesn't have, and
+refuses any `Origin`, which a browser behind the proxy sends. The token is the
+boundary, not the address.
 
 ## How each attacker is handled
 

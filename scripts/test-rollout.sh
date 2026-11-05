@@ -22,6 +22,7 @@ Description=Muster rollout test (throwaway)
 [Service]
 ExecStart=$WORK/bin/muster-daemon
 Environment=MUSTER_STATE_DIR=$WORK/state
+Environment=MUSTER_TLS=1
 Environment=MUSTER_BIND=127.0.0.1:18255
 Environment=MUSTER_HOOK_BIND=127.0.0.1:18256
 Environment=MUSTER_INTERNAL_BIND=127.0.0.1:18257

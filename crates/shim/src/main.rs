@@ -2,7 +2,7 @@
 //!
 //! On startup the shim:
 //! 1. connects MykoClient to MUSTER_DAEMON_ADDRESS (default
-//!    ws://localhost:6257),
+//!    ws://localhost:6255),
 //! 2. SETs a `Session` entity describing this Claude session,
 //! 3. registers `on_command::<NotifyChannel>` so daemon-pushed notifications
 //!    (currently: peer messages via `MessageNotifySaga`) are forwarded as
@@ -35,14 +35,15 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-/// Where an unpaired shim connects: myko's internal loopback listener, which
-/// only exists on the daemon's own host. Every other machine pairs (`link`)
-/// and goes through the TLS gate on 6255 instead.
-const DEFAULT_DAEMON_ADDRESS: &str = "ws://localhost:6257";
+/// Where an unpaired shim connects (MUS-64): the daemon's one port. A plain
+/// daemon serves it directly; with TLS on, the gate takes plain connections
+/// from loopback with the host's local token, which the shim adds when the
+/// file exists. Other machines pair (`link`) and reach the gate over TLS.
+const DEFAULT_DAEMON_ADDRESS: &str = "ws://localhost:6255";
 
 /// Env var that overrides the daemon WebSocket URL for an unpaired shim.
 /// Set this to point the shim at a daemon other than the default
-/// `ws://localhost:6257` (a pairing takes precedence). The plugin's
+/// `ws://localhost:6255` (a pairing takes precedence). The plugin's
 /// `.mcp.json` plumbs this through with `${MUSTER_DAEMON_ADDRESS}`
 /// substitution, so a user-shell `export` is enough to reach Claude
 /// Code's spawned shim. The legacy `MYKO_ADDRESS` name is honored as

@@ -36,11 +36,11 @@ Run it on the daemon's own host, because it can't use the TLS gate yet. To set t
 explicitly:
 
 ```bash
-export MUSTER_DAEMON_ADDRESS=ws://localhost:6257
+export MUSTER_DAEMON_ADDRESS=ws://localhost:6255
 prime-agent
 ```
 
-The default is `ws://localhost:6257`. `MUSTER_OPERATOR` optionally overrides the
+The default is `ws://localhost:6255`. `MUSTER_OPERATOR` optionally overrides the
 operator name shown on the roster.
 
 For development:

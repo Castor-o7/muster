@@ -10,6 +10,7 @@
 
 use std::collections::HashMap;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 /// Messages a session may send at once.
@@ -25,10 +26,20 @@ const IDLE: Duration = Duration::from_secs(10 * 60);
 
 type Buckets = HashMap<String, (f64, Instant)>;
 static BUCKETS: Mutex<Option<Buckets>> = Mutex::new(None);
+static ENABLED: AtomicBool = AtomicBool::new(true);
+
+/// Turn the limits off or on. The daemon turns them off in plain mode
+/// (MUS-64), for parity with upstream Marshal; they're on by default.
+pub fn set_enabled(enabled: bool) {
+    ENABLED.store(enabled, Ordering::SeqCst);
+}
 
 /// Take one message from `sender`'s allowance and from `machine`'s, or say how
 /// long until both have one. A session without a machine is limited per session.
 pub fn take(sender: &str, machine: Option<&str>) -> Result<(), String> {
+    if !ENABLED.load(Ordering::SeqCst) {
+        return Ok(());
+    }
     take_at(sender, machine, Instant::now())
 }
 
