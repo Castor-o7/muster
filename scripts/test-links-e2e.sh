@@ -242,8 +242,19 @@ check "a frame over 128 KiB closes the link" '[[ $(peer big) == CLOSED ]]'
 start_d
 check "the link comes back when D restarts" 'waitfor "[[ \$(grep -c \"\\[link\\] lhost: up\" $WORK/D.log) -ge 2 ]]"'
 D_LINES=$(wc -l <$WORK/D.log)
-T env $L_ENV $BIN/muster-daemon unpair dhost >/dev/null
-check "unpair on the listener closes the open link" 'waitfor "grep -q \"closing link:dhost.s connection: no longer paired\" $WORK/L.log"'
+# A machine paired under the link's name (MUS-84): a bare unpair mustn't take both.
+OUT=$(T env $L_ENV $BIN/muster-daemon pair --name dhost --address 127.0.0.1:16655 2>/dev/null)
+T env HOME=$WORK/dmachine XDG_CONFIG_HOME=$WORK/dmachine $BIN/muster-shim pair "${OUT#muster-shim pair }" >/dev/null 2>&1
+check "a machine can be paired under a linked daemon's name" 'T env $L_ENV $BIN/muster-daemon pairs | grep -qx dhost'
+OUT=$(T env $L_ENV $BIN/muster-daemon unpair dhost 2>&1); RC=$?
+check "a bare unpair of a name that is both is refused, naming both forms" '[[ $RC != 0 && $OUT == *"unpair --machine dhost"* && $OUT == *"unlink dhost"* ]]'
+check "and revokes neither" '[[ $(T env $L_ENV $BIN/muster-daemon pairs | grep -cx "dhost\|link:dhost") == 2 ]]'
+OUT=$(T env $L_ENV $BIN/muster-daemon unlink dhost 2>&1)
+check "unlink on the dialed side revokes the link" '[[ $OUT == *"revoked its link here"* ]]'
+check "and closes the open link" 'waitfor "grep -q \"closing link:dhost.s connection: no longer paired\" $WORK/L.log"'
+check "but keeps the machine" '[[ $(T env $L_ENV $BIN/muster-daemon pairs | grep -cx "dhost\|link:dhost") == 1 ]] && T env $L_ENV $BIN/muster-daemon pairs | grep -qx dhost'
+check "unpair --link finds no link left" '[[ $(T env $L_ENV $BIN/muster-daemon unpair --link dhost) == "no linked daemon named dhost" ]]'
+check "unpair --machine revokes the machine" '[[ $(T env $L_ENV $BIN/muster-daemon unpair --machine dhost) == "unpaired the machine dhost"* ]] && ! T env $L_ENV $BIN/muster-daemon pairs | grep -qx dhost'
 check "and D's next try is refused, and says why" 'waitfor "tail -n +\$((D_LINES+1)) $WORK/D.log | grep -q \"lhost: can.t connect.*refused this link.s token (401)\""'
 
 # A plain daemon keeps its stored links idle.

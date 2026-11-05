@@ -255,6 +255,59 @@ pub fn remove_token(dir: &Path, name: &str) -> io::Result<bool> {
     Ok(true)
 }
 
+/// Which token `unpair` revokes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnpairKind {
+    /// `--machine`: only a machine pairing.
+    Machine,
+    /// `--link`: only a linked daemon's token (`link:<name>`).
+    Link,
+    /// A bare name: whichever one exists, refused if both do.
+    Either,
+}
+
+/// What `unpair` did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unpaired {
+    Machine,
+    Link,
+    Nothing,
+    /// A bare name matched a machine and a link, so neither was revoked
+    /// (MUS-84): revoking a test link mustn't cut off a whole machine.
+    Ambiguous,
+}
+
+/// Revoke a machine's pairing or a daemon's link here. A bare `link:<name>`
+/// names the link exactly.
+pub fn unpair(dir: &Path, name: &str, kind: UnpairKind) -> io::Result<Unpaired> {
+    let (name, kind) = match (as_link(name), kind) {
+        (Some(bare), UnpairKind::Either | UnpairKind::Link) => (bare, UnpairKind::Link),
+        _ => (name, kind),
+    };
+    let link = link_token_name(name);
+    let revoke = |token: &str, done: Unpaired| -> io::Result<Unpaired> {
+        Ok(if remove_token(dir, token)? {
+            done
+        } else {
+            Unpaired::Nothing
+        })
+    };
+    match kind {
+        UnpairKind::Machine => revoke(name, Unpaired::Machine),
+        UnpairKind::Link => revoke(&link, Unpaired::Link),
+        UnpairKind::Either => {
+            let names = token_names(dir)?;
+            let has = |n: &str| names.iter().any(|t| t == n);
+            match (has(name), has(&link)) {
+                (true, true) => Ok(Unpaired::Ambiguous),
+                (true, false) => revoke(name, Unpaired::Machine),
+                (false, true) => revoke(&link, Unpaired::Link),
+                (false, false) => Ok(Unpaired::Nothing),
+            }
+        }
+    }
+}
+
 /// The paired machine names, in pairing order.
 pub fn token_names(dir: &Path) -> io::Result<Vec<String>> {
     Ok(read_tokens(dir)?.into_iter().map(|(n, _)| n).collect())
@@ -469,6 +522,56 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("muster-invites-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir
+    }
+
+    #[test]
+    fn unpair_never_revokes_a_machine_and_a_link_together() {
+        let dir = invite_dir("unpair");
+        add_token(&dir, "a1").unwrap();
+        add_token(&dir, &link_token_name("a1")).unwrap();
+        add_token(&dir, "b2").unwrap();
+        add_token(&dir, &link_token_name("c3")).unwrap();
+        let names = |d: &Path| token_names(d).unwrap();
+
+        // A bare name that matches both is refused, and nothing is revoked.
+        assert_eq!(
+            unpair(&dir, "a1", UnpairKind::Either).unwrap(),
+            Unpaired::Ambiguous
+        );
+        assert_eq!(names(&dir).len(), 4);
+        // --link takes only the link, --machine only the machine.
+        assert_eq!(
+            unpair(&dir, "a1", UnpairKind::Link).unwrap(),
+            Unpaired::Link
+        );
+        assert!(names(&dir).contains(&"a1".to_string()));
+        assert_eq!(
+            unpair(&dir, "a1", UnpairKind::Link).unwrap(),
+            Unpaired::Nothing
+        );
+        assert_eq!(
+            unpair(&dir, "a1", UnpairKind::Machine).unwrap(),
+            Unpaired::Machine
+        );
+        // A bare name that matches one revokes that one.
+        assert_eq!(
+            unpair(&dir, "b2", UnpairKind::Either).unwrap(),
+            Unpaired::Machine
+        );
+        assert_eq!(
+            unpair(&dir, "b2", UnpairKind::Link).unwrap(),
+            Unpaired::Nothing
+        );
+        assert_eq!(
+            unpair(&dir, "link:c3", UnpairKind::Either).unwrap(),
+            Unpaired::Link
+        );
+        assert_eq!(
+            unpair(&dir, "nobody", UnpairKind::Either).unwrap(),
+            Unpaired::Nothing
+        );
+        assert!(names(&dir).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
