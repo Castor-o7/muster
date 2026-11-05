@@ -114,19 +114,29 @@ impl Handler for CoordHandler {
             // come before the shim's registration lands, so hold it briefly
             // rather than fail it.
             wait_until_registered(&host).await;
-            match name.as_str() {
-                "set_status" => set_status(&host, &args).await,
-                "send_message" => send_message(&host, &args).await,
-                "broadcast" => broadcast(&host, &args).await,
-                "join_room" => join_room(&host, &args).await,
-                "leave_room" => leave_room(&host, &args).await,
-                "ack_messages" => ack_messages(&host, &args).await,
-                other => Err(ToolError {
-                    code: METHOD_NOT_FOUND,
-                    message: format!("unknown tool: {other}"),
-                    data: None,
-                }),
+            if host.is_codex {
+                return dispatch_tool(&host, &name, &args).await;
             }
+            // The hold can pass on a row still bound to an earlier connection
+            // for this session (one that died and the sweeper hasn't cleared),
+            // and the daemon then refuses the write, because it finds a caller
+            // by this connection's binding. A refused write stored nothing, so
+            // send the session again and retry it once.
+            let resend = || {
+                log::warn!(
+                    "[marshal-shim] {name} was refused as unregistered; sending the session again and retrying once"
+                );
+                let snapshot = host.session.lock().unwrap().clone();
+                if let Err(err) = crate::emit_session_set(&host.client, &snapshot) {
+                    log::warn!("[marshal-shim] re-SET before a retry failed: {err}");
+                }
+            };
+            retry_once_if_unbound(
+                || dispatch_tool(&host, &name, &args),
+                resend,
+                UNBOUND_RETRY_AFTER,
+            )
+            .await
         })
     }
 
@@ -370,6 +380,57 @@ async fn read_messages(
 // =============================================================================
 // Tool implementations (writes)
 // =============================================================================
+
+/// Run one tool call.
+async fn dispatch_tool(
+    host: &ToolHost,
+    name: &str,
+    args: &Value,
+) -> Result<ToolOutcome, ToolError> {
+    match name {
+        "set_status" => set_status(host, args).await,
+        "send_message" => send_message(host, args).await,
+        "broadcast" => broadcast(host, args).await,
+        "join_room" => join_room(host, args).await,
+        "leave_room" => leave_room(host, args).await,
+        "ack_messages" => ack_messages(host, args).await,
+        other => Err(ToolError {
+            code: METHOD_NOT_FOUND,
+            message: format!("unknown tool: {other}"),
+            data: None,
+        }),
+    }
+}
+
+/// How long a retried write waits for its re-SET to land. The roster can't
+/// tell this connection's binding from an older one, so there's nothing to poll.
+const UNBOUND_RETRY_AFTER: std::time::Duration = std::time::Duration::from_millis(750);
+
+/// Whether the daemon refused a write because this connection has no session
+/// bound to it (`resolve_caller`'s refusal), which re-sending the session fixes.
+fn is_unbound_refusal(message: &str) -> bool {
+    message.contains("has no session on the roster")
+}
+
+/// Run `call`; if the daemon refused it as unbound, `resend` the session, wait
+/// `settle`, and run it once more. Any other outcome is returned as it is.
+async fn retry_once_if_unbound<T, Fut>(
+    call: impl Fn() -> Fut,
+    resend: impl FnOnce(),
+    settle: std::time::Duration,
+) -> Result<T, ToolError>
+where
+    Fut: std::future::Future<Output = Result<T, ToolError>>,
+{
+    match call().await {
+        Err(e) if is_unbound_refusal(&e.message) => {
+            resend();
+            tokio::time::sleep(settle).await;
+            call().await
+        }
+        other => other,
+    }
+}
 
 /// How long a write waits for this session to reach the roster.
 const REGISTER_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
@@ -967,6 +1028,86 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_unbound_refusal_is_retried() {
+        assert!(is_unbound_refusal(
+            "caller (client abc) has no session on the roster — re-SET your Session and retry"
+        ));
+        for other in [
+            "no session matches 'x' (by id, nickname, operator, or id-prefix) — check marshal://roster",
+            "no recipient: `to` is empty; name a session by nickname, id or operator email (see marshal://roster)",
+            "command timed out after 15000 ms (daemon unresponsive?)",
+        ] {
+            assert!(!is_unbound_refusal(other), "{other}");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unbound_refusal_resends_and_retries_once() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let refused = |m: &str| ToolError::invalid_params(m.to_string());
+        let unbound =
+            "caller (client c) has no session on the roster — re-SET your Session and retry";
+        let settle = std::time::Duration::from_millis(5);
+
+        // Refused as unbound, then fine after the re-SET: one resend, two calls.
+        let (calls, resends) = (AtomicUsize::new(0), AtomicUsize::new(0));
+        let out = retry_once_if_unbound(
+            || async {
+                if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                    Err(refused(unbound))
+                } else {
+                    Ok(7)
+                }
+            },
+            || {
+                resends.fetch_add(1, Ordering::SeqCst);
+            },
+            settle,
+        )
+        .await;
+        assert_eq!(out.unwrap(), 7);
+        assert_eq!((calls.into_inner(), resends.into_inner()), (2, 1));
+
+        // Refused as unbound twice: retried only once, and the second refusal
+        // is what the agent sees.
+        let (calls, resends) = (AtomicUsize::new(0), AtomicUsize::new(0));
+        let out: Result<(), _> = retry_once_if_unbound(
+            || async {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Err(refused(unbound))
+            },
+            || {
+                resends.fetch_add(1, Ordering::SeqCst);
+            },
+            settle,
+        )
+        .await;
+        assert!(is_unbound_refusal(&out.unwrap_err().message));
+        assert_eq!((calls.into_inner(), resends.into_inner()), (2, 1));
+
+        // Any other refusal, or success, isn't retried.
+        for succeeds in [false, true] {
+            let (calls, resends) = (AtomicUsize::new(0), AtomicUsize::new(0));
+            let _ = retry_once_if_unbound(
+                || async {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    if succeeds {
+                        Ok(1)
+                    } else {
+                        Err(refused("no session matches 'x'"))
+                    }
+                },
+                || {
+                    resends.fetch_add(1, Ordering::SeqCst);
+                },
+                settle,
+            )
+            .await;
+            assert_eq!((calls.into_inner(), resends.into_inner()), (1, 0));
+        }
+    }
 
     #[tokio::test]
     async fn an_early_write_waits_for_registration_then_goes_ahead() {
