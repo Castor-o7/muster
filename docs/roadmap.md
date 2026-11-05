@@ -151,6 +151,12 @@ Merged and needing a live run: MUS-36 and MUS-37.
   to fall outside what MUS-92's settle re-check catches. The cell is on the conformance suite's
   `FLAKY` list until this is fixed, so it doesn't fail CI. Done when: the cause is found from a
   failing run's daemon log, and the cell is off `FLAKY` after passing in CI on three PRs in a row.
+  #133's run at 236ec03 (run 42086972236) failed `claude-tls` × `restart-keeps-identity` the
+  same way, so it's on `FLAKY` for this story too. Neither cell has failed on a1 (7 of 7, also
+  under full CPU load), and CI kept no daemon log, so a failed cell, `FLAKY` or not, now prints
+  the daemon's `[identity]` and `[hook]` lines and its warnings, with succession at debug, and
+  `CONFORMANCE_DAEMON_LOG=1` prints them for a passing cell. Still to do: the cause, from the
+  first CI run that fails with that log.
 - [ ] **MUS-47: Hand unread mail to a successor.** From MUS-31. Retained mail reaches
   nobody without this. Depends on MUS-3. Done when: a session taking over an identity
   receives its predecessor's unread mail, shown by a test.
@@ -199,6 +205,8 @@ Merged and needing a live run: MUS-36 and MUS-37.
   approval with a valid signed token is accepted for exactly its action; a forged, expired,
   reused or mismatched one is refused; and a session on the operator's account can't produce a
   valid one. Each is shown by a test.
+  Design, with options for the operator: [operator-approvals.md](operator-approvals.md)
+  (sienna-mullet, 2026-11-05). MUS-51 builds on it.
 - [x] **MUS-7: Protect the local ports.** The first step of MUS-39. 6256 and 6257 have no
   authentication, and the hook listener doesn't check `Origin`, so any process on the daemon's
   host, or a web page in its browser, can reach them. Done when: a test shows a cross-origin web

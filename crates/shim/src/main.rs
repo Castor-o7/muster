@@ -177,8 +177,6 @@ fn main() -> Result<()> {
                 .context("building tokio runtime")?
                 .block_on(setup::run(&args));
         }
-        // Store the code `muster-daemon pair` printed, so this machine reaches
-        // the daemon through its TLS gate. See `link`.
         // Store the code `muster-daemon pair` printed. With no argument the code
         // is read from stdin, so it stays out of shell history and `ps`.
         Some("pair") => {
