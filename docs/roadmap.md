@@ -450,7 +450,9 @@ Rally.
 - [x] **MUS-64: Make the TLS gate optional (G3).** Plain WebSocket by default, like upstream, and
   a switch ("cert mode") that turns on the gate, pinning, tokens and pairing. Done when: tests
   cover both modes. Offer both a `--tls` flag and a `MUSTER_TLS=1` variable, and check upstream's
-  daemon for which it uses; the operator asks upstream which it wants. Design in #82. Built with
+  daemon for which it uses. For upstream the operator chose `--tls` (2026-11-05, "--tls
+  please", replacing a relayed `MARSHAL_TLS=1` choice from the night before), with `--plain` as
+  the escape when pairings exist and no environment variable. Design in #82. Built with
   both, one port for local and remote, and a refusal to run plain while pairings exist unless
   `MUSTER_TLS=0` says so; the gate e2e covers both modes. **Murph's unit needs
   `Environment=MUSTER_TLS=1` before the restart that brings this in**, or the daemon refuses to
