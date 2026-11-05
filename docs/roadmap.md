@@ -438,6 +438,12 @@ Merged and needing a live run: MUS-36 and MUS-37.
   when: Codex can connect through the gate. The Pi, opencode and Prime Agent plugins
   are left out under the language decision.
 - [ ] **MUS-19: Fix stale docs.** Most were corrected on 2026-10-30. Done when: following the README on a clean machine works. Needs a run: the Muster team, on a clean machine.
+  Progress 2026-11-05 (sienna-mullet): followed the README literally in two isolated HOMEs on
+  a1 (a TLS daemon on spare ports, and a client): `cargo install --git`, then `muster-daemon
+  pair`, `muster-shim setup --pair-file`, and `muster-shim doctor` (all ok). A real Claude
+  session registered through the plugin's hooks. Fixed `--locked`, the patch warning, the
+  pairing hint and the statusLine. Not ticked: the run was on a1 with isolated HOMEs, not a
+  clean machine.
 
 ## Phase 4: Coordination
 

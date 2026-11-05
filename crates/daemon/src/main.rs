@@ -369,6 +369,11 @@ fn pair(args: &[String]) -> Result<()> {
     } else {
         eprintln!("Invited {name}. On that machine, run:\n");
         println!("muster-shim pair {code}");
+        eprintln!(
+            "\nOr, to keep the code out of shell history and `ps`, save it to a file there \
+             and run `muster-shim pair < FILE`, or `muster-shim setup --pair-file FILE` to \
+             pair and wire Claude Code in one go. Delete the file afterwards."
+        );
     }
     eprintln!(
         "\nThe code works once and expires in {}. Until then, treat it like a password.",
