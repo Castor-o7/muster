@@ -2,7 +2,8 @@
 //!
 //! This is separate from `Session` because a session writes its own `Session`
 //! row, so a field there would only be the session's claim. Only the daemon's
-//! hook listener writes this one. The entity `id` is the session id.
+//! hook listener writes this one; with TLS on, the gate refuses a client's
+//! events on it. The entity `id` is the session id.
 
 use std::sync::Arc;
 

@@ -254,6 +254,44 @@ fn quote_body(body: &str) -> String {
     body.replace('<', "&lt;").replace('\n', "\n    ")
 }
 
+/// `new`, keeping an earlier `os` and `arch` if it has none: the wait hook sends
+/// neither, and they're display-only claims, so there's nothing to protect.
+fn with_known_platform(new: Option<HostInfo>, prior: Option<&HostInfo>) -> Option<HostInfo> {
+    let mut new = new?;
+    if let Some(prior) = prior {
+        if new.os.is_empty() {
+            new.os = prior.os.clone();
+        }
+        if new.arch.is_empty() {
+            new.arch = prior.arch.clone();
+        }
+    }
+    Some(new)
+}
+
+/// The operator and host to record. A request the gate marked with `machine` is
+/// from a paired machine, so that verified name and the daemon's operator replace
+/// what it claimed. A request from the daemon's own host is taken at its word.
+fn attested(
+    machine: Option<&str>,
+    daemon_operator: Option<String>,
+    operator: Option<String>,
+    host: Option<HostInfo>,
+) -> (Option<String>, Option<HostInfo>) {
+    let Some(machine) = machine else {
+        return (operator, host);
+    };
+    let (os, arch) = host.map(|h| (h.os, h.arch)).unwrap_or_default();
+    (
+        daemon_operator.or(operator),
+        Some(HostInfo {
+            name: machine.to_string(),
+            os,
+            arch,
+        }),
+    )
+}
+
 fn register_hook_session(
     query: &str,
     body: &[u8],
@@ -287,6 +325,13 @@ fn register_hook_session(
         os: q.get("os").cloned().unwrap_or_default(),
         arch: q.get("arch").cloned().unwrap_or_default(),
     });
+    let machine = q.get("machine").map(String::as_str);
+    let (operator, host) = attested(
+        machine,
+        crate::credentials::daemon_operator(),
+        operator,
+        host,
+    );
     let project = if dir == "session" {
         None
     } else {
@@ -310,11 +355,12 @@ fn register_hook_session(
             let mut updated = (**p).clone();
             updated.cwd = cwd;
             updated.last_activity_at = Some(now);
-            if updated.operator.is_none() {
+            // What the gate attests replaces any earlier claim.
+            if updated.operator.is_none() || machine.is_some() {
                 updated.operator = operator;
             }
-            if updated.host.is_none() {
-                updated.host = host;
+            if updated.host.is_none() || machine.is_some() {
+                updated.host = with_known_platform(host, updated.host.as_ref());
             }
             if updated.project.is_none() {
                 updated.project = project;
@@ -735,5 +781,63 @@ mod tests {
             Some(fresh),
             1000 + WAKE_WATCHER_REFRESH_MS
         ));
+    }
+}
+
+#[cfg(test)]
+mod attest_tests {
+    use super::*;
+
+    fn claimed_host() -> Option<HostInfo> {
+        Some(HostInfo {
+            name: "forged".into(),
+            os: "linux".into(),
+            arch: "x86_64".into(),
+        })
+    }
+
+    #[test]
+    fn a_paired_machine_cannot_choose_its_host_or_operator() {
+        let (operator, host) = attested(
+            Some("host-a"),
+            Some("alice@example.test".into()),
+            Some("forged@example.test".into()),
+            claimed_host(),
+        );
+        assert_eq!(operator.as_deref(), Some("alice@example.test"));
+        let host = host.unwrap();
+        assert_eq!(host.name, "host-a");
+        assert_eq!(host.os, "linux");
+    }
+
+    #[test]
+    fn a_hook_without_platform_details_keeps_the_known_ones() {
+        let prior = HostInfo {
+            name: "laptop".into(),
+            os: "macos".into(),
+            arch: "aarch64".into(),
+        };
+        let bare = HostInfo {
+            name: "host-a".into(),
+            os: String::new(),
+            arch: String::new(),
+        };
+        let kept = with_known_platform(Some(bare), Some(&prior)).unwrap();
+        assert_eq!(
+            (kept.name.as_str(), kept.os.as_str(), kept.arch.as_str()),
+            ("host-a", "macos", "aarch64")
+        );
+    }
+
+    #[test]
+    fn local_requests_keep_their_claim() {
+        let (operator, host) = attested(
+            None,
+            Some("alice@example.test".into()),
+            Some("local".into()),
+            claimed_host(),
+        );
+        assert_eq!(operator.as_deref(), Some("local"));
+        assert_eq!(host.unwrap().name, "forged");
     }
 }
