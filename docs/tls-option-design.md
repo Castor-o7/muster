@@ -3,7 +3,7 @@
 Status: **approved by the watchman (grand-photon), 2026-11-04.** modest-roach
 implements it once G1 lands. The decisions on the open questions are under
 "Decisions" below. **Built in Muster as MUS-64 (#89).** For upstream the operator chose
-`MARSHAL_TLS=1` (2026-11-04). Names are Marshal's, since this is for the
+the `--tls` flag, with `--plain` as the escape (2026-11-05; see "The switch"). Names are Marshal's, since this is for the
 upstream Gate PR (see [muster-vs-marshal.md](muster-vs-marshal.md)).
 
 ## How upstream's daemon is configured today
@@ -35,10 +35,19 @@ The operator turns it on with either of these:
 - `marshal-daemon --tls`
 - `MARSHAL_TLS=1` (also `true`/`on`; `0`/`false`/`off`/unset mean off)
 
-Both are implemented in Muster. **For upstream the operator chose
-`MARSHAL_TLS=1` (2026-11-04)**, so the upstream Gate PR ships the variable only,
-with no `--tls` flag, in keeping with upstream's daemon taking no arguments.
-Muster keeps both for now. If both
+Both are implemented in Muster, which keeps both. **For upstream the operator
+chose `--tls` ("--tls please", told to peppy-skate directly on 2026-11-05)**,
+replacing a `MARSHAL_TLS=1` choice relayed the night before. So the upstream
+Gate PR reads only two flags, with no environment variable and no new
+dependency, and leaves every other argument alone, as upstream's daemon always
+has:
+
+- `marshal-daemon --tls` turns the gate on.
+- `marshal-daemon --plain` runs plain even though machines are paired.
+- With pairings and neither flag, it refuses to start and names both.
+- Given both, it refuses to start: `--tls and --plain disagree; pass one`.
+
+In Muster, if both
 are given and disagree (e.g. `--tls` with `MARSHAL_TLS=0`), the daemon
 **refuses to start** and names both values:
 `--tls and MARSHAL_TLS=0 disagree; set one`. Agreeing values are fine. The env var matches upstream's existing style and works in
@@ -171,8 +180,8 @@ plain-mode fallback.
 
 1. **One port with first-byte multiplexing:** yes. The fallback is dropped.
 2. **Flag and env conflict:** refuse to start, naming both values. **The
-   operator's choice (2026-11-04): `MARSHAL_TLS=1` for upstream.** The upstream
-   PR has no flag, so it has no conflict to refuse.
+   operator's choice for upstream (2026-11-05): `--tls`**, with `--plain` as
+   the escape and no variable; `--tls` with `--plain` refuses to start.
 3. **Rate limits:** off in plain mode in the first Gate PR, for parity, and
    proposed separately.
 4. **The web UI:** the first Gate PR documents "the UI requires TLS off". A
