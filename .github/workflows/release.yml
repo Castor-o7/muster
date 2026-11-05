@@ -51,6 +51,10 @@ jobs:
           toolchain: stable
           targets: ${{ matrix.target }}
       - name: Build
+        env:
+          # MUS-96: shipped binaries carry no symbol tables or debuginfo. Here rather than in
+          # Cargo.toml, so local release builds keep theirs.
+          CARGO_PROFILE_RELEASE_STRIP: symbols
         run: cargo build --release --locked --target ${{ matrix.target }} -p muster-shim -p muster-daemon
       - name: Name the binaries for the release
         run: |

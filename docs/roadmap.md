@@ -407,6 +407,15 @@ Merged and needing a live run: MUS-36 and MUS-37.
   Linux x86_64 under the names install-codex.sh asks for, with one SHA256SUMS. workflow_dispatch
   is a dry run that only uploads artifacts; a `v*` tag also makes a draft release, which stays
   unpublished until Josh publishes it. Left: a tag and a published release, on Josh's word.
+- [x] **MUS-96: The installer checks its download, and release binaries are stripped.** From
+  MUS-14's review. Done when: `scripts/install-codex.sh` fetches SHA256SUMS from the same release,
+  checks the shim against it with sha256sum (or `shasum -a 256` on macOS), and refuses to run it on
+  a mismatch, a missing entry, a missing SHA256SUMS or no tool to check with; a fixture test
+  shows a tampered shim refused; and the release workflow strips the binaries, keeping its smoke
+  test, SHA-pinned actions and no cache. `scripts/test-install-codex.sh` runs in CI with a fake
+  curl: 9 checks pass, and 7 of them fail against the installer from before. This guards against a
+  corrupt or swapped download, not a tampered release, since both files come from the same
+  release; signing waits for Josh's Apple developer setup.
 - [ ] **MUS-91: Keep `windows-cross-check` from timing out.** It hit its 20-minute limit on #110,
   #113 and #124, and a re-run passed each time. Every time it was the apt step: `mingw-w64` pulls
   278 MB (the i686 and x86_64 toolchains, C and C++), which normally takes 7 s, but the Azure

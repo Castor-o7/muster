@@ -49,13 +49,49 @@ case "$os" in
         ;;
 esac
 
-url="$REPO/releases/latest/download/muster-shim-$target"
+asset="muster-shim-$target"
+base="$REPO/releases/latest/download"
 tmp=$(mktemp -d)
 bin="$tmp/muster-shim"
 trap 'rm -rf "$tmp"' EXIT INT TERM
 
+# The SHA-256 of a file, with whichever tool this machine has (macOS ships shasum).
+sha256_of() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$1" | awk '{print $1}'
+    else
+        return 1
+    fi
+}
+
 echo "Downloading muster-shim ($target)..."
-curl -fSL --proto '=https' --tlsv1.2 -o "$bin" "$url"
+curl -fSL --proto '=https' --tlsv1.2 -o "$bin" "$base/$asset"
+
+# Check it against the release's SHA256SUMS before running it (MUS-96). Both come from the same
+# release over HTTPS, so this catches a corrupt or swapped download, not a tampered release.
+# Anything short of a match stops here, before the binary runs.
+if ! curl -fsSL --proto '=https' --tlsv1.2 -o "$tmp/SHA256SUMS" "$base/SHA256SUMS"; then
+    echo "error: couldn't download SHA256SUMS from the release; not installing." >&2
+    exit 1
+fi
+expected=$(awk -v f="$asset" '{ name = $2; sub(/^\*/, "", name) } name == f { print $1; exit }' "$tmp/SHA256SUMS")
+if [ -z "$expected" ]; then
+    echo "error: the release's SHA256SUMS has no entry for $asset; not installing." >&2
+    exit 1
+fi
+if ! actual=$(sha256_of "$bin"); then
+    echo "error: neither sha256sum nor shasum is installed, so the download can't be checked; not installing." >&2
+    exit 1
+fi
+if [ "$actual" != "$expected" ]; then
+    echo "error: $asset doesn't match the release's SHA256SUMS; not installing." >&2
+    echo "  expected $expected" >&2
+    echo "  got      $actual" >&2
+    exit 1
+fi
+echo "Checked $asset against SHA256SUMS."
 chmod +x "$bin"
 # Clear the Gatekeeper quarantine in case this binary was fetched via a browser
 # (curl downloads carry none). Harmless on Linux.
