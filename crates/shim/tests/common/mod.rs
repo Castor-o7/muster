@@ -42,8 +42,10 @@ pub fn real_home() -> Option<PathBuf> {
 }
 
 /// `muster-shim`, with HOME, `XDG_CONFIG_HOME` and their Windows equivalents
-/// in the isolated home, and no daemon address or pairing from the
-/// environment. A test adds what it needs.
+/// in the isolated home, and no daemon address, pairing, or Claude or Codex
+/// config dir from the environment: `setup`, `doctor` and `statusline` honour
+/// `CLAUDE_CONFIG_DIR`, and `setup --apply` writes there. A test adds what it
+/// needs.
 pub fn shim() -> Command {
     let home = isolated_home();
     let mut cmd = Command::new(SHIM);
@@ -53,6 +55,8 @@ pub fn shim() -> Command {
         .env("APPDATA", home.join("AppData").join("Roaming"))
         .env_remove("MUSTER_DAEMON_ADDRESS")
         .env_remove("MUSTER_BASE_URL")
-        .env_remove("MYKO_ADDRESS");
+        .env_remove("MYKO_ADDRESS")
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .env_remove("CODEX_HOME");
     cmd
 }

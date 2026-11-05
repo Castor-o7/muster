@@ -52,4 +52,12 @@ fn the_isolated_home_isnt_the_real_one() {
             "{var} is {set:?}, outside the isolated home"
         );
     }
+    // A developer's own Claude or Codex config dir would otherwise be read,
+    // and by `setup --apply` written.
+    for var in ["CLAUDE_CONFIG_DIR", "CODEX_HOME"] {
+        assert!(
+            env.iter().any(|(k, v)| *k == var && v.is_none()),
+            "common::shim() doesn't remove {var}"
+        );
+    }
 }
