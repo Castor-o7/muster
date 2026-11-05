@@ -1752,7 +1752,7 @@ const HARNESSES: &[Harness] = &[
         name: "codex-tls",
         mode: Mode::Tls,
         make: || Box::new(FakeCodex::new()),
-        not_applicable: &[],
+        not_applicable: HOOK_HARNESS_NOT_APPLICABLE,
         needs_bun: false,
     },
     Harness {
