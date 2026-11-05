@@ -45,8 +45,10 @@ usage:
                                       print a one-time code for another daemon to link here
   muster-daemon link CODE             link this daemon to the one that printed CODE
   muster-daemon links                 list links, both ways
-  muster-daemon unlink NAME           stop dialing a linked daemon
-  muster-daemon unpair NAME           revoke a machine's access, or a daemon's link here
+  muster-daemon unlink NAME           end a link: stop dialing it, and revoke its link here
+  muster-daemon unpair [--machine | --link] NAME
+                                      revoke a machine's access, or a daemon's link here;
+                                      a bare NAME that is both is refused
   muster-daemon pairs                 list paired machines
   muster-daemon pause | resume        stop or restart message wake-ups
   muster-daemon allow MACHINE         let only listed machines send (and this host)
@@ -59,36 +61,9 @@ fn main() -> Result<()> {
         None => run_daemon(false),
         Some("--tls") if args.len() == 1 => run_daemon(true),
         Some("pair") => pair(&args[1..]),
-        Some("unpair") => match args.get(1) {
-            Some(name) if args.len() == 2 => {
-                let dir = daemon::credentials::state_dir()?;
-                let machine = daemon::credentials::remove_token(&dir, name)?;
-                let link = daemon::credentials::remove_token(
-                    &dir,
-                    &daemon::credentials::link_token_name(name),
-                )?;
-                if machine || link {
-                    println!("unpaired {name}; its token stops working on its next connection");
-                } else {
-                    println!("no paired machine or linked daemon named {name}");
-                }
-                Ok(())
-            }
-            _ => anyhow::bail!("{USAGE}"),
-        },
+        Some("unpair") => unpair(&args[1..]),
         Some("link") if args.len() == 2 => link(&args[1]),
-        Some("unlink") if args.len() == 2 => {
-            let dir = daemon::credentials::state_dir()?;
-            if daemon::links::remove_link(&dir, &args[1])? {
-                println!(
-                    "unlinked {}; the running daemon closes the link within a few seconds",
-                    args[1]
-                );
-            } else {
-                println!("no link named {}", args[1]);
-            }
-            Ok(())
-        }
+        Some("unlink") if args.len() == 2 => unlink(&args[1]),
         Some("links") if args.len() == 1 => {
             let dir = daemon::credentials::state_dir()?;
             let dialed = daemon::links::read_links(&dir)?;
@@ -164,6 +139,67 @@ fn main() -> Result<()> {
         }
         Some(other) => anyhow::bail!("unknown argument: {other}\n{USAGE}"),
     }
+}
+
+/// `unpair [--machine | --link] NAME` (MUS-84).
+fn unpair(args: &[String]) -> Result<()> {
+    use daemon::credentials::{UnpairKind, Unpaired};
+    let (kind, name) = match args {
+        [flag, name] if flag == "--machine" => (UnpairKind::Machine, name),
+        [flag, name] if flag == "--link" => (UnpairKind::Link, name),
+        [name] if !name.starts_with("--") => (UnpairKind::Either, name),
+        _ => anyhow::bail!("{USAGE}"),
+    };
+    if let (UnpairKind::Machine, Some(link)) = (kind, daemon::credentials::as_link(name)) {
+        anyhow::bail!(
+            "{name} is a linked daemon's name, not a machine's: \
+             `muster-daemon unpair --link {link}` or `muster-daemon unlink {link}` ends that link"
+        );
+    }
+    let dir = daemon::credentials::state_dir()?;
+    match daemon::credentials::unpair(&dir, name, kind)? {
+        Unpaired::Machine => {
+            println!("unpaired the machine {name}; its token stops working on its next connection")
+        }
+        Unpaired::Link => println!(
+            "revoked the link from {}; it closes within a few seconds",
+            daemon::credentials::as_link(name).unwrap_or(name)
+        ),
+        Unpaired::Ambiguous => anyhow::bail!(
+            "{name} is both a paired machine and a linked daemon, so nothing was revoked. \
+             `muster-daemon unpair --machine {name}` revokes the machine (and every session on it); \
+             `muster-daemon unpair --link {name}` or `muster-daemon unlink {name}` ends only the link"
+        ),
+        Unpaired::Nothing => match kind {
+            UnpairKind::Machine => println!("no paired machine named {name}"),
+            UnpairKind::Link => println!("no linked daemon named {name}"),
+            UnpairKind::Either => println!("no paired machine or linked daemon named {name}"),
+        },
+    }
+    Ok(())
+}
+
+/// `unlink NAME`: works on either side of a link. The dialer stops dialing;
+/// the dialed side revokes `link:NAME` (MUS-84). Never touches a machine.
+fn unlink(name: &str) -> Result<()> {
+    use daemon::credentials::{UnpairKind, Unpaired};
+    let dir = daemon::credentials::state_dir()?;
+    let dialed = daemon::links::remove_link(&dir, name)?;
+    let revoked = daemon::credentials::unpair(&dir, name, UnpairKind::Link)? == Unpaired::Link;
+    match (dialed, revoked) {
+        (true, true) => println!(
+            "unlinked {name}: stopped dialing it and revoked its link here; \
+             the running daemon closes the link within a few seconds"
+        ),
+        (true, false) => println!(
+            "unlinked {name}: stopped dialing it; the running daemon closes the link within a few seconds"
+        ),
+        (false, true) => println!(
+            "unlinked {name}: revoked its link here; the running daemon closes the link within a few seconds"
+        ),
+        (false, false) => println!("no link named {name}"),
+    }
+    Ok(())
 }
 
 /// `pair --name NAME [--address HOST:PORT]`: mint a token and print the code.

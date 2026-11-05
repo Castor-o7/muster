@@ -137,7 +137,7 @@ A **link** joins two daemons, each keeping its own roster, store and controls. A
 muster-daemon pair --name a1 --link --address murph.example:6255
 ```
 
-It prints a one-time `muster-daemon link <code>` command, valid for 15 minutes. Run it on the other daemon's host, in a shell with `MUSTER_TLS=1`. The running daemon connects within a few seconds. `muster-daemon links` lists links both ways, `unlink NAME` stops dialing one, and `unpair NAME` on the dialed side revokes it. The far daemon's sessions appear on `muster://roster` under `remote_sessions`, each with an `address` like `fuzzy-otter@murph`. Send to that address to reach one; a bare name prefers a local session. Mail from a linked daemon arrives labelled the same way. A link shares each session's nickname, host, operator, project, `current_task` and activity, but never its cwd, pid or branch. Mail for a link that is down waits in the outbox, which survives a restart only with Postgres, and is refused back to its senders after a day.
+It prints a one-time `muster-daemon link <code>` command, valid for 15 minutes. Run it on the other daemon's host, in a shell with `MUSTER_TLS=1`. The running daemon connects within a few seconds. `muster-daemon links` lists links both ways, and `unlink NAME` ends one from either side: the dialer stops dialing, and the dialed side revokes its token. `unpair --link NAME` also revokes one on the dialed side; a bare `unpair NAME` that names both a paired machine and a link is refused, so revoking a link never cuts off a machine. The far daemon's sessions appear on `muster://roster` under `remote_sessions`, each with an `address` like `fuzzy-otter@murph`. Send to that address to reach one; a bare name prefers a local session. Mail from a linked daemon arrives labelled the same way. A link shares each session's nickname, host, operator, project, `current_task` and activity, but never its cwd, pid or branch. Mail for a link that is down waits in the outbox, which survives a restart only with Postgres, and is refused back to its senders after a day.
 
 ### 2b. Pair each machine
 
@@ -153,7 +153,7 @@ It prints a `muster-shim pair muster-pair:v2:…` command. Run that on the machi
 - `--expires 30s`, `15m` or `2h` sets how long the code works. The default is 15 minutes. A used or expired code gets "the daemon refused this code"; ask for a new one.
 - `muster-shim pairing` shows a machine's pairing with its token masked.
 - `muster-shim pair` still accepts a `muster-pair:v1:` code from an older daemon. Those hold the token itself, so pair again to retire one that has been seen.
-- `muster-daemon pairs` lists paired machines, and `muster-daemon unpair a1` revokes one. Its open connections close within seconds and new ones are refused; nothing needs restarting.
+- `muster-daemon pairs` lists paired machines, and `muster-daemon unpair a1` (or `unpair --machine a1`) revokes one. Its open connections close within seconds and new ones are refused; nothing needs restarting.
 - `muster-shim unpair` removes a machine's own pairing.
 - Pairing again under the same name replaces that machine's token, so that machine's running sessions lose their connection until they restart. This is also how to rotate a machine's token.
 - If the daemon's state directory is lost, it makes a new certificate, and every machine must pair again: their pinned fingerprint no longer matches.
