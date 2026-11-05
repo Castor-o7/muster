@@ -2,8 +2,9 @@
 # End-to-end check of a daemon restart with Postgres (MUS-58): an ad-hoc room
 # membership survives it. The sweeper removes memberships whose session has
 # left the roster, so it must not run before myko has replayed the sessions.
-# Needs zsh, python3, curl, nc and Postgres's initdb, pg_ctl and postgres on
-# PATH. Build first (`cargo build`), then run this script.
+# Needs zsh, python3, curl and nc, and either Postgres's initdb, pg_ctl and
+# postgres on PATH, for a throwaway server, or RESTART_E2E_POSTGRES_URL naming
+# an existing database. Build first (`cargo build`), then run this script.
 set -u
 BIN=${MUSTER_E2E_BIN:-$(cd "$(dirname "$0")/.." && pwd)/target/debug}
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/muster-restart-e2e.XXXX")
@@ -12,18 +13,28 @@ pass=0; fail=0
 check() { if eval "$2"; then echo "PASS  $1"; pass=$((pass+1)); else echo "FAIL  $1"; fail=$((fail+1)); fi; }
 waitfor() { for i in {1..100}; do eval "$1" && return 0; sleep 0.2; done; return 1; }
 
-# A throwaway Postgres on a Unix socket only, so nothing else can reach it. The
-# socket gets its own short directory: its path may be at most 103 bytes.
-PGPORT=16955
-SOCK=$(mktemp -d /tmp/muster-pg.XXXX)
-initdb -D $WORK/pg -U muster --auth=trust >$WORK/initdb.log 2>&1 || { echo "initdb failed"; cat $WORK/initdb.log; exit 1; }
-pg_ctl -D $WORK/pg -l $WORK/pg.log -o "-p $PGPORT -k $SOCK -c listen_addresses=''" -w start >/dev/null || { echo "postgres didn't start"; cat $WORK/pg.log; exit 1; }
 DPID=
-trap 'kill $DPID 2>/dev/null; wait 2>/dev/null; pg_ctl -D $WORK/pg -m immediate stop >/dev/null 2>&1; rm -rf $SOCK' EXIT
+if [[ -n ${RESTART_E2E_POSTGRES_URL:-} ]]; then
+  # An existing Postgres, as CI's service is: a table and channel of this run's
+  # own, so nothing else using the database is touched.
+  PG_URL=$RESTART_E2E_POSTGRES_URL
+  PG_TABLE=restart_e2e_$$
+  trap 'kill $DPID 2>/dev/null; wait 2>/dev/null' EXIT
+else
+  # A throwaway Postgres on a Unix socket only, so nothing else can reach it. The
+  # socket gets its own short directory: its path may be at most 103 bytes.
+  PGPORT=16955
+  SOCK=$(mktemp -d /tmp/muster-pg.XXXX)
+  initdb -D $WORK/pg -U muster --auth=trust >$WORK/initdb.log 2>&1 || { echo "initdb failed"; cat $WORK/initdb.log; exit 1; }
+  pg_ctl -D $WORK/pg -l $WORK/pg.log -o "-p $PGPORT -k $SOCK -c listen_addresses=''" -w start >/dev/null || { echo "postgres didn't start"; cat $WORK/pg.log; exit 1; }
+  trap 'kill $DPID 2>/dev/null; wait 2>/dev/null; pg_ctl -D $WORK/pg -m immediate stop >/dev/null 2>&1; rm -rf $SOCK' EXIT
+  PG_URL="host=$SOCK port=$PGPORT dbname=postgres user=muster"
+  PG_TABLE=myko_events
+fi
 
 ENV=(XDG_CONFIG_HOME=$WORK/cfg MUSTER_STATE_DIR=$WORK/state MUSTER_HOST=rhost
      MUSTER_BIND=127.0.0.1:16855 MUSTER_HOOK_BIND=127.0.0.1:16856
-     "MYKO_POSTGRES_URL=host=$SOCK port=$PGPORT dbname=postgres user=muster")
+     "MYKO_POSTGRES_URL=$PG_URL" MYKO_POSTGRES_TABLE=$PG_TABLE MYKO_POSTGRES_CHANNEL=${PG_TABLE}_notify)
 start() { env $ENV RUST_LOG=info $BIN/muster-daemon >>$WORK/daemon.log 2>&1 & DPID=$!; waitfor 'nc -z 127.0.0.1 16855 2>/dev/null && nc -z 127.0.0.1 16856 2>/dev/null'; }
 start
 check "the daemon starts with Postgres" 'grep -q "persistence: postgres" $WORK/daemon.log'
