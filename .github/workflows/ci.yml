@@ -19,6 +19,21 @@ jobs:
       # conformance rebuilt the workspace (MUS-87). Line tables keep file and
       # line numbers in backtraces.
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
+    # The conformance suite's restart cells persist to Postgres (MUS-76).
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: conformance
+          POSTGRES_PASSWORD: conformance
+          POSTGRES_DB: conformance
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U conformance"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 15
     steps:
       - uses: actions/checkout@v4
       # The hosted image ships SDKs this job never uses; removing them leaves
@@ -92,6 +107,9 @@ jobs:
         env:
           # A missing bun fails the plugins' cells instead of skipping them.
           CONFORMANCE_REQUIRE_BUN: "1"
+          # And a missing database fails the restart cells that need one.
+          CONFORMANCE_POSTGRES_URL: postgres://conformance:conformance@127.0.0.1:5432/conformance
+          CONFORMANCE_REQUIRE_POSTGRES: "1"
         run: cargo build --workspace && cargo test -p muster-shim --test conformance -- --ignored --nocapture
       - name: Test simulation fixture and scoring contracts
         run: python3 -m unittest discover -s scripts/sandbox -v
@@ -113,7 +131,18 @@ jobs:
         with:
           targets: x86_64-pc-windows-gnu
       - uses: Swatinem/rust-cache@v2
-      - run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config mingw-w64
+      # Only the x86_64 C cross-compiler: the build scripts compile C for the
+      # target (ring, aws-lc-sys, rquickjs-sys). The `mingw-w64` metapackage
+      # also pulled the i686 and C++ toolchains, 278 MB, and on a throttled
+      # mirror that download alone ran past the job's limit (MUS-91).
+      # build-essential and pkg-config come with the image. The step's own
+      # limit makes a stalled mirror fail in minutes, naming this step.
+      - name: Install the mingw C cross-compiler
+        timeout-minutes: 8
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends gcc-mingw-w64-x86-64
+          x86_64-w64-mingw32-gcc --version | head -1
       - name: Cross-compile the Windows shim
         run: cargo check -p muster-shim --target x86_64-pc-windows-gnu
 
