@@ -209,6 +209,7 @@ async fn send_all(
     for session in &targets {
         let cell = client.send_command::<SendMessage, SendMessageResult>(&SendMessage {
             to_session_id: session.id.clone(),
+            response_required: false,
             body: body.clone(),
             as_session: Some(from.clone()),
             idempotency_key: None,

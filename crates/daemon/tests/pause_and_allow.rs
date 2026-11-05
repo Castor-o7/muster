@@ -68,6 +68,7 @@ fn cmd_ctx(ctx: &MykoServerContext) -> CommandContext {
 
 fn send(ctx: &MykoServerContext, body: &str) {
     SendMessage {
+        response_required: false,
         to_session_id: SessionId(Arc::from("recipient")),
         body: body.into(),
         as_session: None,
@@ -194,6 +195,7 @@ fn try_send(
     body: &str,
 ) -> Result<muster_entities::SendMessageResult, myko::command::CommandError> {
     SendMessage {
+        response_required: false,
         to_session_id: SessionId(Arc::from("recipient")),
         body: body.into(),
         as_session: None,

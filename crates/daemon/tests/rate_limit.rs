@@ -92,6 +92,7 @@ fn a_flooding_session_is_throttled_and_others_keep_sending() {
     set_session(&ctx, &session("rate-recipient", None));
     let send = |from: &str, n: usize| {
         SendMessage {
+            response_required: false,
             to_session_id: SessionId(Arc::from("rate-recipient")),
             body: format!("message {n}"),
             as_session: None,
@@ -133,6 +134,7 @@ fn a_flood_spread_across_new_sessions_is_throttled_per_machine() {
     );
     let send = |client: &str| {
         SendMessage {
+            response_required: false,
             to_session_id: SessionId(Arc::from("spread-recipient")),
             body: "hi".into(),
             as_session: None,

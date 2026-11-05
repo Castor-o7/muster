@@ -12,8 +12,9 @@
 //! 3. attach the TUI with `codex --remote`.
 //!
 //! Unix uses Codex's managed Unix-domain-socket daemon. Native Windows does not
-//! have that daemon, so the launcher supervises one app-server process on an
-//! ephemeral loopback-only WebSocket port and tears it down with the TUI.
+//! have that daemon. Windows discovers the persistent authenticated server
+//! in CODEX_HOME/remote-control, or uses MUSTER_CODEX_APP_SERVER_CONNECTION_FILE
+//! when explicitly set. Unmanaged homes use an isolated server for the TUI.
 //!
 //! The bridge watches muster's durable message/read views. When a direct
 //! unread message targets a hook-owned session on this host, it asks the local
@@ -61,14 +62,14 @@ use muster_entities::{
 use myko::client::MykoClient;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-#[cfg(unix)]
 use sha2::{Digest, Sha256};
+#[cfg(unix)]
+use tokio_tungstenite::client_async_with_config;
+use tokio_tungstenite::tungstenite::{client::IntoClientRequest, handshake::client::Request};
 use tokio_tungstenite::{
     WebSocketStream, accept_async_with_config, connect_async_with_config,
     tungstenite::{Message as WebSocketMessage, protocol::WebSocketConfig},
 };
-#[cfg(unix)]
-use tokio_tungstenite::{client_async_with_config, tungstenite::client::IntoClientRequest};
 
 // Match Codex 0.163.0's REMOTE_APP_SERVER_MAX_WEBSOCKET_MESSAGE_SIZE:
 // https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/app-server-client/src/remote.rs#L67
@@ -81,15 +82,17 @@ fn app_server_websocket_config() -> WebSocketConfig {
 const DEFAULT_POLL: Duration = Duration::from_millis(750);
 const WAKE_COALESCE_WINDOW: Duration = Duration::from_secs(30);
 const RETRY_COOLDOWN: Duration = Duration::from_secs(2);
-#[cfg(unix)]
 const WAKE_LEADER_SETTLE: Duration = Duration::from_secs(2);
 const RPC_TIMEOUT: Duration = Duration::from_secs(8);
 const BRIDGE_START_TIMEOUT: Duration = Duration::from_secs(10);
 const TUI_RECOVERY_TIMEOUT: Duration = Duration::from_secs(30);
 const REGISTRATION_RETRY: Duration = Duration::from_secs(2);
 const APP_SERVER_START_TIMEOUT: Duration = Duration::from_secs(10);
-const WAKE_PROMPT: &str = "Handle the injected <muster_inbox>; if absent, read unread direct \
-Muster messages. Then continue your current task.";
+const WAKE_PROMPT: &str = "Muster delivery wakeup, not a new user assignment. Read the injected \
+<muster_inbox>; if absent, check unread direct Muster messages once. If none remain, stop. \
+Address only coordination relevant to existing authorization. Preserve waits for user input or approval \
+and do not resume paused, cancelled, or completed work. Respond when this message requires an answer; \
+answers and confirmations normally require no further response.";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum AppServerEndpoint {
@@ -106,14 +109,13 @@ impl std::fmt::Display for AppServerEndpoint {
     }
 }
 
-/// Coordinates wake ownership among bridges attached to the same Unix
+/// Coordinates wake ownership among bridges attached to the same local
 /// app-server and Muster daemon. Lifecycle registration remains active in
 /// every bridge; only model-turn creation is elected.
 ///
 /// Unix `codex-run` launchers share one managed app-server, so without this
 /// lock every per-TUI bridge sees the same unread row and submits the same
-/// `turn/start`. Windows launchers own isolated app-servers and therefore do
-/// not contend.
+/// `turn/start`. Windows uses an exclusive file handle for the same election.
 #[cfg(unix)]
 #[derive(Debug)]
 struct WakeLeadership {
@@ -174,7 +176,6 @@ impl WakeLeadership {
     }
 }
 
-#[cfg(unix)]
 fn wake_lock_path(app_server: &AppServerEndpoint, daemon: &str) -> PathBuf {
     let identity = format!("{app_server}\n{daemon}");
     let digest = Sha256::digest(identity.as_bytes());
@@ -192,18 +193,50 @@ fn wake_lock_path(app_server: &AppServerEndpoint, daemon: &str) -> PathBuf {
     directory.join(format!(".muster-codex-wake-{suffix}.lock"))
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
 #[derive(Debug)]
-struct WakeLeadership;
+struct WakeLeadership {
+    lock_path: PathBuf,
+    lock: Option<fs::File>,
+    acquired_at: Option<Instant>,
+}
 
-#[cfg(not(unix))]
+#[cfg(windows)]
 impl WakeLeadership {
-    fn new(_app_server: &AppServerEndpoint, _daemon: &str) -> Self {
-        Self
+    fn new(app_server: &AppServerEndpoint, daemon: &str) -> Self {
+        Self::at(wake_lock_path(app_server, daemon))
     }
 
-    fn ready(&mut self, _now: Instant) -> Result<bool> {
-        Ok(true)
+    fn at(lock_path: PathBuf) -> Self {
+        Self {
+            lock_path,
+            lock: None,
+            acquired_at: None,
+        }
+    }
+
+    fn ready(&mut self, now: Instant) -> Result<bool> {
+        use std::os::windows::fs::OpenOptionsExt;
+        if self.lock.is_none() {
+            match fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .read(true)
+                .write(true)
+                .share_mode(0)
+                .open(&self.lock_path)
+            {
+                Ok(file) => {
+                    self.lock = Some(file);
+                    self.acquired_at = Some(now);
+                }
+                Err(error) if error.raw_os_error() == Some(32) => return Ok(false),
+                Err(error) => return Err(error).context("acquiring Windows Codex wake leadership"),
+            }
+        }
+        Ok(self
+            .acquired_at
+            .is_some_and(|at| now.saturating_duration_since(at) >= WAKE_LEADER_SETTLE))
     }
 }
 
@@ -295,7 +328,8 @@ pub fn run_codex(args: &[String]) -> Result<()> {
              attaches the TUI to it. Direct Muster messages can start an idle\n\
              turn; plain Codex remains inbox-at-next-boundary.\n\
              \n\
-             Set MUSTER_CODEX_BIN to override the `codex` executable."
+             Set MUSTER_CODEX_BIN to override the `codex` executable.\n\
+             Set MUSTER_CODEX_APP_SERVER_CONNECTION_FILE to attach to a persistent Windows server."
         );
         return Ok(());
     }
@@ -399,7 +433,7 @@ fn run_codex_binary(codex: &str, args: &[String]) -> Result<()> {
 
     // The bridge is scoped to this interactive launcher. Multiple launchers may
     // coexist; Unix bridges elect one wake leader for their shared app-server,
-    // while Windows launchers each own an isolated app-server.
+    // and persistent Windows servers use exclusive file handles for election.
     let _ = bridge.kill();
     let _ = bridge.wait();
     let _ = fs::remove_file(&ready_file);
@@ -420,6 +454,11 @@ fn cleanup_proxy(app_server: &LaunchedAppServer) {
 }
 
 fn run_native_codex(codex: &str, args: &[String], bridge_error: &anyhow::Error) -> Result<()> {
+    if shared_connection_path().is_some() {
+        anyhow::bail!(
+            "shared Codex server unavailable: {bridge_error:#}; no isolated session was started"
+        );
+    }
     eprintln!(
         "warning: Codex live delivery is unavailable ({bridge_error:#}); starting native Codex"
     );
@@ -753,7 +792,7 @@ async fn run_tcp_tui_proxy(
                         .await
                         .context("accepting Codex TUI WebSocket")?;
                 let (upstream, _) = connect_async_with_config(
-                    &upstream,
+                    app_server_request(&upstream)?,
                     Some(app_server_websocket_config()),
                     false,
                 )
@@ -903,7 +942,99 @@ fn launch_app_server(codex: &str) -> Result<LaunchedAppServer> {
 
 #[cfg(windows)]
 fn launch_app_server(codex: &str) -> Result<LaunchedAppServer> {
+    if let Some(connection) = shared_connection()? {
+        return shared_app_server(&connection.endpoint);
+    }
     launch_isolated_app_server(codex)
+}
+
+#[cfg(any(windows, test))]
+fn shared_app_server(endpoint: &str) -> Result<LaunchedAppServer> {
+    loopback_address(endpoint)?;
+    let proxy = ephemeral_loopback_endpoint()?;
+    Ok(LaunchedAppServer {
+        remote: proxy.clone(),
+        bridge_args: vec![
+            "--endpoint".into(),
+            endpoint.into(),
+            "--proxy-endpoint".into(),
+            proxy,
+        ],
+        child: None,
+        proxy_path: None,
+    })
+}
+
+#[derive(Deserialize)]
+struct SharedConnection {
+    endpoint: String,
+    token: String,
+}
+
+fn shared_connection_path() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("MUSTER_CODEX_APP_SERVER_CONNECTION_FILE") {
+        return Some(PathBuf::from(path));
+    }
+    #[cfg(windows)]
+    {
+        let home = std::env::var_os("CODEX_HOME")
+            .map(PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("USERPROFILE").map(|profile| PathBuf::from(profile).join(".codex"))
+            })?;
+        return managed_connection_path(&home);
+    }
+    #[cfg(not(windows))]
+    None
+}
+
+#[cfg(any(windows, test))]
+fn managed_connection_path(home: &Path) -> Option<PathBuf> {
+    let directory = home.join("remote-control");
+    let connection = directory.join("connection.json");
+    // A managed server being restarted must fail visibly, not create an
+    // isolated writer that Remote Control cannot attach to.
+    (connection.exists() || directory.join("start.ps1").exists()).then_some(connection)
+}
+
+fn shared_connection() -> Result<Option<SharedConnection>> {
+    let Some(path) = shared_connection_path() else {
+        return Ok(None);
+    };
+    let connection: SharedConnection = serde_json::from_slice(
+        &fs::read(path)
+            .context("reading shared Codex connection; check the Remote Control task")?,
+    )
+    .context("invalid shared Codex connection file")?;
+    loopback_address(&connection.endpoint)?;
+    anyhow::ensure!(
+        !connection.token.is_empty(),
+        "shared Codex connection has an empty token"
+    );
+    Ok(Some(connection))
+}
+
+fn app_server_request(endpoint: &str) -> Result<Request> {
+    let connection = shared_connection()?;
+    if let Some(connection) = &connection {
+        anyhow::ensure!(
+            connection.endpoint == endpoint,
+            "shared Codex server changed; relaunch the terminal client"
+        );
+    }
+    authenticated_request(endpoint, connection.as_ref().map(|c| c.token.as_str()))
+}
+
+fn authenticated_request(endpoint: &str, token: Option<&str>) -> Result<Request> {
+    let mut request = endpoint.into_client_request()?;
+    if let Some(token) = token {
+        let mut value = format!("Bearer {token}")
+            .parse::<tokio_tungstenite::tungstenite::http::HeaderValue>()
+            .map_err(|_| anyhow::anyhow!("invalid shared Codex capability token"))?;
+        value.set_sensitive(true);
+        request.headers_mut().insert("Authorization", value);
+    }
+    Ok(request)
 }
 
 #[derive(Deserialize)]
@@ -1374,7 +1505,11 @@ async fn watch_app_server_registrations(
             AppServerEndpoint::WebSocket(endpoint) => {
                 let connection = tokio::time::timeout(
                     RPC_TIMEOUT,
-                    connect_async_with_config(endpoint, Some(app_server_websocket_config()), false),
+                    connect_async_with_config(
+                        app_server_request(endpoint)?,
+                        Some(app_server_websocket_config()),
+                        false,
+                    ),
                 )
                 .await;
                 match connection {
@@ -1831,6 +1966,7 @@ async fn try_pending_registration<S>(
         .await
         {
             decoration.current_name = Some(name);
+            decoration.name_hydrated = true;
         }
         decorations.insert(registration.thread_id.clone(), decoration);
         log::info!("[codex-bridge] registered thread={session_id} before first prompt");
@@ -1954,12 +2090,14 @@ where
 }
 
 fn muster_decorated_thread_name(current_name: Option<&str>, nickname: &str) -> Option<String> {
-    let base = strip_muster_thread_name_prefix(current_name?.trim(), nickname).trim();
-    if base.is_empty() {
-        return None;
-    }
+    let base =
+        strip_muster_thread_name_prefix(current_name.unwrap_or_default().trim(), nickname).trim();
     let marker = format!("[{nickname}]");
-    Some(format!("{marker} {base}"))
+    Some(if base.is_empty() {
+        marker
+    } else {
+        format!("{marker} {base}")
+    })
 }
 
 fn strip_muster_thread_name_prefix<'a>(name: &'a str, nickname: &str) -> &'a str {
@@ -2035,7 +2173,11 @@ async fn start_thread(app_server: &AppServerEndpoint, session_id: &SessionId) ->
         AppServerEndpoint::WebSocket(endpoint) => {
             let (mut websocket, _) = tokio::time::timeout(
                 RPC_TIMEOUT,
-                connect_async_with_config(endpoint, Some(app_server_websocket_config()), false),
+                connect_async_with_config(
+                    app_server_request(endpoint)?,
+                    Some(app_server_websocket_config()),
+                    false,
+                ),
             )
             .await
             .context("timed out connecting to Codex app-server")?
@@ -2466,6 +2608,7 @@ mod tests {
 
     fn message(id: &str, recipient: Option<&str>) -> Arc<Message> {
         Arc::new(Message {
+            response_required: false,
             id: MessageId(Arc::from(id)),
             from_session_id: SessionId(Arc::from("sender")),
             to_session_id: recipient.map(|id| SessionId(Arc::from(id))),
@@ -2491,9 +2634,83 @@ mod tests {
         assert!(cooldowns.is_empty());
     }
 
-    #[cfg(unix)]
     #[test]
-    fn unix_bridges_elect_one_wake_leader_and_fail_over() {
+    fn managed_windows_home_does_not_depend_on_shell_environment() {
+        let home = tempfile::tempdir().unwrap();
+        assert_eq!(managed_connection_path(home.path()), None);
+        let directory = home.path().join("remote-control");
+        fs::create_dir(&directory).unwrap();
+        let connection = directory.join("connection.json");
+        fs::write(
+            &connection,
+            r#"{"endpoint":"ws://127.0.0.1:12345","token":"test"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            managed_connection_path(home.path()),
+            Some(connection.clone())
+        );
+        fs::write(directory.join("start.ps1"), "managed server").unwrap();
+        fs::remove_file(&connection).unwrap();
+        assert_eq!(managed_connection_path(home.path()), Some(connection));
+    }
+
+    #[test]
+    fn shared_server_is_not_owned_by_terminal_launcher() {
+        let mut server = shared_app_server("ws://127.0.0.1:32123").unwrap();
+        assert!(server.child.is_none());
+        assert_eq!(server.bridge_args[1], "ws://127.0.0.1:32123");
+        assert_ne!(server.remote, server.bridge_args[1]);
+        stop_owned_app_server(&mut server);
+        assert!(shared_app_server("ws://192.168.1.1:32123").is_err());
+    }
+
+    #[tokio::test]
+    #[allow(clippy::result_large_err)] // tungstenite requires this callback error type.
+    async fn authenticated_shared_server_accepts_two_clients() {
+        use tokio_tungstenite::{accept_hdr_async, tungstenite::handshake::server::Response};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("ws://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let mut connections = Vec::new();
+            for _ in 0..2 {
+                let (stream, _) = listener.accept().await.unwrap();
+                let socket = accept_hdr_async(stream, |request: &Request, response: Response| {
+                    assert_eq!(request.headers()["Authorization"], "Bearer test-capability");
+                    Ok(response)
+                })
+                .await
+                .unwrap();
+                connections.push(socket);
+            }
+            for mut socket in connections {
+                socket
+                    .send(WebSocketMessage::Text("shared-thread".into()))
+                    .await
+                    .unwrap();
+            }
+        });
+        let mut clients = Vec::new();
+        for _ in 0..2 {
+            let request = authenticated_request(&endpoint, Some("test-capability")).unwrap();
+            assert!(request.headers()["Authorization"].is_sensitive());
+            let (socket, _) = connect_async_with_config(request, None, false)
+                .await
+                .unwrap();
+            clients.push(socket);
+        }
+        for mut client in clients {
+            assert_eq!(
+                client.next().await.unwrap().unwrap().into_text().unwrap(),
+                "shared-thread"
+            );
+        }
+        server.await.unwrap();
+        assert!(authenticated_request(&endpoint, Some("bad\nheader")).is_err());
+    }
+
+    #[test]
+    fn bridges_elect_one_wake_leader_and_fail_over() {
         let path = std::env::temp_dir().join(format!(
             "muster-codex-leader-test-{}.lock",
             uuid::Uuid::new_v4()
@@ -2613,7 +2830,12 @@ mod tests {
             muster_decorated_thread_name(Some("auth refactor"), "sunny-summit"),
             Some("[sunny-summit] auth refactor".into())
         );
-        assert_eq!(muster_decorated_thread_name(None, "sunny-summit"), None);
+        for name in [None, Some(""), Some("   "), Some("[sunny-summit]")] {
+            assert_eq!(
+                muster_decorated_thread_name(name, "sunny-summit"),
+                Some("[sunny-summit]".into())
+            );
+        }
         assert_eq!(
             muster_decorated_thread_name(Some("[sunny-summit] auth refactor"), "sunny-summit"),
             Some("[sunny-summit] auth refactor".into())
@@ -2842,7 +3064,7 @@ mod tests {
                                 "id": "thread-before-prompt",
                                 "sessionId": "session-before-prompt",
                                 "cwd": "/work/before-prompt",
-                                "name": "[muster:old-nickname] auth refactor"
+                                "name": null
                             }
                         }
                     })
@@ -2857,10 +3079,7 @@ mod tests {
             assert_eq!(name_set["params"]["threadId"], "thread-before-prompt");
             assert_eq!(
                 name_set["params"]["name"],
-                format!(
-                    "[{}] auth refactor",
-                    muster_entities::nickname("session-before-prompt")
-                )
+                format!("[{}]", muster_entities::nickname("session-before-prompt"))
             );
             websocket
                 .send(WebSocketMessage::Text(

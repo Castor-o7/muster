@@ -88,6 +88,7 @@ fn a_pairing_code_in_a_message_is_stored_redacted() {
     set_session(&ctx, &session("sender", Some("c-sender")));
     set_session(&ctx, &session("recipient", None));
     let cmd = SendMessage {
+        response_required: false,
         to_session_id: SessionId(Arc::from("recipient")),
         body: "Murph is at muster-pair:v1:eyJhZGRyZXNzIjoibXVycGgifQ and the header was Bearer tok_123".into(),
         as_session: None,

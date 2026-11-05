@@ -119,6 +119,7 @@ fn offline_recipient_succeeds_and_persists_for_pull() {
     set_session(&ctx, &session("recipient", None));
 
     let cmd = SendMessage {
+        response_required: true,
         to_session_id: SessionId(Arc::from("recipient")),
         body: "hi".into(),
         as_session: None,
@@ -136,6 +137,15 @@ fn offline_recipient_succeeds_and_persists_for_pull() {
     assert_eq!(result.wake, WakeStatus::Unobserved);
     assert_eq!(message_count(&ctx), 1, "message must persist for pull");
     assert_eq!(only_message(&ctx).body, "hi");
+    assert!(only_message(&ctx).response_required);
+    let read = muster_entities::ReadMessages {
+        as_session: Some(SessionId(Arc::from("recipient"))),
+        ..serde_json::from_value(serde_json::json!({})).unwrap()
+    }
+    .execute(cmd_ctx(&ctx, None))
+    .expect("read persisted requirement");
+    assert!(read.messages[0].response_required);
+    assert_eq!(read.messages[0].body, "hi");
 }
 
 #[test]
@@ -154,6 +164,7 @@ fn a_pull_recipient_with_a_waiter_expects_a_wake() {
         .expect("apply WakeWatcher SET");
 
     let cmd = SendMessage {
+        response_required: false,
         to_session_id: SessionId(Arc::from("recipient")),
         body: "hi".into(),
         as_session: None,
@@ -176,6 +187,7 @@ fn stale_binding_succeeds_and_persists() {
     set_session(&ctx, &session("recipient", Some("c-stale")));
 
     let cmd = SendMessage {
+        response_required: false,
         to_session_id: SessionId(Arc::from("recipient")),
         body: "hi".into(),
         as_session: None,
@@ -201,6 +213,7 @@ fn self_identified_sender_via_as_session_succeeds() {
     set_session(&ctx, &session("recipient", None));
 
     let cmd = SendMessage {
+        response_required: false,
         to_session_id: SessionId(Arc::from("recipient")),
         body: "from http".into(),
         as_session: Some(SessionId(Arc::from("sender"))),
@@ -251,6 +264,7 @@ fn unknown_recipient_errors_and_does_not_persist() {
     set_session(&ctx, &session("sender", Some("c-sender")));
 
     let cmd = SendMessage {
+        response_required: false,
         to_session_id: SessionId(Arc::from("does-not-exist")),
         body: "?".into(),
         as_session: None,
@@ -280,6 +294,7 @@ fn nickname_resolves_server_side() {
 
     let nick = muster_entities::nickname("recipient-xyz");
     let cmd = SendMessage {
+        response_required: false,
         to_session_id: SessionId(Arc::from(nick.as_str())),
         body: "hi".into(),
         as_session: None,
@@ -312,6 +327,7 @@ fn direct_message_ids_are_uuid_v7() {
     set_session(&ctx, &session("recipient", None));
 
     let result = SendMessage {
+        response_required: false,
         to_session_id: SessionId(Arc::from("recipient")),
         body: "hi".into(),
         as_session: None,
@@ -331,6 +347,7 @@ fn a_retry_with_the_same_key_stores_one_message() {
     set_session(&ctx, &session("recipient", None));
     let send = |body: &str, key: &str| {
         SendMessage {
+            response_required: false,
             to_session_id: SessionId(Arc::from("recipient")),
             body: body.into(),
             as_session: None,
@@ -372,6 +389,7 @@ fn operator_token_routes_to_the_humans_most_recently_active_agent() {
     set_session(&ctx, &active);
 
     let cmd = SendMessage {
+        response_required: false,
         to_session_id: SessionId(Arc::from("operator@example.com")),
         body: "your call on the redeploy".into(),
         as_session: None,
@@ -415,6 +433,7 @@ fn operator_routing_prefers_a_live_agent_and_accepts_the_op_prefix() {
     set_session(&ctx, &live);
 
     let cmd = SendMessage {
+        response_required: false,
         to_session_id: SessionId(Arc::from("op:operator@example.com")),
         body: "ping".into(),
         as_session: None,
@@ -438,6 +457,7 @@ fn caller_without_session_errors() {
     set_session(&ctx, &session("recipient", Some("c-recipient")));
 
     let cmd = SendMessage {
+        response_required: false,
         to_session_id: SessionId(Arc::from("recipient")),
         body: "?".into(),
         as_session: None,
@@ -462,6 +482,7 @@ fn unidentified_caller_errors() {
     set_session(&ctx, &session("recipient", None));
 
     let cmd = SendMessage {
+        response_required: false,
         to_session_id: SessionId(Arc::from("recipient")),
         body: "?".into(),
         as_session: None,

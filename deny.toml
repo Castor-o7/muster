@@ -54,7 +54,6 @@ exceptions = [
   { name = "myko-macros", allow = ["AGPL-3.0-or-later"] },
   { name = "myko-server", allow = ["AGPL-3.0-or-later"] },
   { name = "myko-leptos", allow = ["AGPL-3.0-or-later"] },
-  { name = "myko-telemetry", allow = ["AGPL-3.0-or-later"] },
   { name = "autosocket", allow = ["AGPL-3.0-or-later"] },
 ]
 
