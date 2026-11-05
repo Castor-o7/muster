@@ -19,7 +19,14 @@ if [[ -n ${RESTART_E2E_POSTGRES_URL:-} ]]; then
   # own, so nothing else using the database is touched.
   PG_URL=$RESTART_E2E_POSTGRES_URL
   PG_TABLE=restart_e2e_$$
-  trap 'kill $DPID 2>/dev/null; wait 2>/dev/null' EXIT
+  # On exit, drop what myko made for this run: the table, which takes its indexes
+  # and trigger with it, and the trigger's function. Needs psql; without it they stay.
+  drop_run_schema() {
+    command -v psql >/dev/null || return 0
+    psql -q -X "$PG_URL" -c "DROP TABLE IF EXISTS $PG_TABLE; DROP FUNCTION IF EXISTS ${PG_TABLE}_notify_insert_fn();" >/dev/null 2>&1 \
+      || echo "note: couldn't drop $PG_TABLE"
+  }
+  trap 'kill $DPID 2>/dev/null; wait 2>/dev/null; drop_run_schema' EXIT
 else
   # A throwaway Postgres on a Unix socket only, so nothing else can reach it. The
   # socket gets its own short directory: its path may be at most 103 bytes.
