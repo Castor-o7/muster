@@ -33,6 +33,52 @@ pub enum Step {
     Pair,
     /// Run `claude` with these arguments.
     Claude(Vec<&'static str>),
+    /// Add `statusLine` to `settings.json`, so the session's nickname is
+    /// always on screen (MUS-38). No `claude` command sets it.
+    StatusLine,
+}
+
+/// The statusLine command setup adds.
+pub const STATUSLINE_COMMAND: &str = "muster-shim statusline";
+
+/// How to run an existing statusline and Muster's side by side: both read
+/// Claude's JSON on stdin, so it's read once and given to each.
+pub fn chain_hint(existing: &str) -> String {
+    format!(
+        "input=$(cat); printf '%s' \"$input\" | {existing}; printf ' '; printf '%s' \"$input\" \
+         | {STATUSLINE_COMMAND}"
+    )
+}
+
+/// `settings.json`'s text with `statusLine` added, everything else byte for
+/// byte as it was. It's inserted as the object's first key rather than
+/// re-serialized, which would reorder the operator's keys. Refuses a file that
+/// isn't a JSON object, or that already has a `statusLine`.
+pub fn add_statusline(text: &str) -> Result<String> {
+    let entry = format!(
+        "\"statusLine\": {{ \"type\": \"command\", \"command\": \"{STATUSLINE_COMMAND}\" }}"
+    );
+    if text.trim().is_empty() {
+        return Ok(format!("{{\n  {entry}\n}}\n"));
+    }
+    let before: Value = serde_json::from_str(text).context("settings.json isn't valid JSON")?;
+    let Some(obj) = before.as_object() else {
+        bail!("settings.json isn't a JSON object");
+    };
+    if obj.contains_key("statusLine") {
+        bail!("settings.json already has a statusLine");
+    }
+    let open = text.find('{').context("settings.json has no object")?;
+    let sep = if obj.is_empty() { "" } else { "," };
+    let out = format!("{}{{\n  {entry}{sep}{}", &text[..open], &text[open + 1..]);
+    // Check the result is the same settings plus exactly this key.
+    let mut after: Value =
+        serde_json::from_str(&out).context("adding statusLine broke the JSON")?;
+    after.as_object_mut().map(|o| o.remove("statusLine"));
+    if after != before {
+        bail!("adding statusLine would change other settings; add it by hand");
+    }
+    Ok(out)
 }
 
 /// What setup found and will do. Pure, so it's tested without a home.
@@ -112,6 +158,27 @@ pub fn plan(
         }
         steps.push(Step::Claude(vec!["plugin", "install", PLUGIN]));
     }
+
+    // MUS-38: the statusline is where the operator sees which session is which.
+    match settings.and_then(|s| s.get("statusLine")) {
+        None => steps.push(Step::StatusLine),
+        Some(line) => {
+            let cmd = line["command"].as_str().unwrap_or("").trim();
+            if cmd.contains(STATUSLINE_COMMAND) {
+                notes.push("the statusline already shows Muster's nickname".into());
+            } else {
+                notes.push(format!(
+                    "settings.json already has a statusLine, so setup leaves it alone. To show \
+                     the session's nickname beside it, set its command to: {}",
+                    chain_hint(if cmd.is_empty() {
+                        "<your command>"
+                    } else {
+                        cmd
+                    })
+                ));
+            }
+        }
+    }
     Plan { steps, notes }
 }
 
@@ -157,6 +224,9 @@ fn describe(step: &Step) -> String {
     match step {
         Step::Pair => "pair with the code from --pair-file".into(),
         Step::Claude(args) => format!("claude {}", args.join(" ")),
+        Step::StatusLine => format!(
+            "add \"statusLine\": {STATUSLINE_COMMAND} to settings.json, so the nickname shows"
+        ),
     }
 }
 
@@ -216,7 +286,10 @@ pub async fn run(args: &[String]) -> Result<()> {
 
     if apply && !plan.steps.is_empty() {
         let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
-        if plan.steps.iter().any(|s| matches!(s, Step::Claude(_)))
+        if plan
+            .steps
+            .iter()
+            .any(|s| matches!(s, Step::Claude(_) | Step::StatusLine))
             && let Some(b) = backup(&settings_path, &stamp)?
         {
             println!("backed up {} to {}", settings_path.display(), b.display());
@@ -231,6 +304,21 @@ pub async fn run(args: &[String]) -> Result<()> {
                     if let Some(p) = code_file.filter(|p| *p != "-") {
                         println!("the code is used up now; you can delete {p}");
                     }
+                }
+                Step::StatusLine => {
+                    // Read now: a plugin install just before may have changed it.
+                    let text = match std::fs::read_to_string(&settings_path) {
+                        Ok(t) => t,
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+                        Err(e) => return Err(e).context("reading settings.json"),
+                    };
+                    let out = add_statusline(&text).context("adding the statusline")?;
+                    if let Some(dir) = settings_path.parent() {
+                        std::fs::create_dir_all(dir)?;
+                    }
+                    let tmp = settings_path.with_extension("json.tmp");
+                    std::fs::write(&tmp, out)?;
+                    std::fs::rename(&tmp, &settings_path)?;
                 }
                 Step::Claude(args) => {
                     let status = Command::new("claude")
@@ -254,6 +342,13 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// No pairing or plugin step (the statusline step is tested on its own).
+    fn no_wiring(p: &Plan) -> bool {
+        !p.steps
+            .iter()
+            .any(|s| matches!(s, Step::Pair | Step::Claude(_)))
+    }
+
     fn hooks_json() -> Value {
         serde_json::from_str(include_str!(
             "../../../plugins/muster-shim/hooks/hooks.json"
@@ -270,6 +365,7 @@ mod tests {
                 Step::Pair,
                 Step::Claude(vec!["plugin", "marketplace", "add", MARKETPLACE]),
                 Step::Claude(vec!["plugin", "install", PLUGIN]),
+                Step::StatusLine,
             ]
         );
     }
@@ -279,7 +375,10 @@ mod tests {
         let p = plan(true, false, Some(&json!({})), None, true);
         assert_eq!(
             p.steps,
-            vec![Step::Claude(vec!["plugin", "install", PLUGIN])]
+            vec![
+                Step::Claude(vec!["plugin", "install", PLUGIN]),
+                Step::StatusLine
+            ]
         );
     }
 
@@ -287,7 +386,7 @@ mod tests {
     fn complete_hand_wiring_is_left_alone() {
         let claude = json!({ "mcpServers": { "muster": { "command": "muster-shim" } } });
         let p = plan(true, false, Some(&hooks_json()), Some(&claude), false);
-        assert!(p.steps.is_empty(), "{p:?}");
+        assert!(no_wiring(&p), "{p:?}");
         assert!(
             p.notes
                 .iter()
@@ -300,7 +399,7 @@ mod tests {
         let mut settings = hooks_json();
         settings["hooks"].as_object_mut().unwrap().remove("Stop");
         let p = plan(true, false, Some(&settings), None, false);
-        assert!(p.steps.is_empty(), "{p:?}");
+        assert!(no_wiring(&p), "{p:?}");
         assert!(p.notes.iter().any(|n| n.contains("partly wired")));
         assert!(
             p.notes
@@ -314,8 +413,56 @@ mod tests {
     fn the_plugin_already_on_and_a_second_code_do_nothing() {
         let settings = json!({ "enabledPlugins": { PLUGIN: true } });
         let p = plan(true, true, Some(&settings), None, true);
-        assert!(p.steps.is_empty(), "{p:?}");
+        assert!(no_wiring(&p), "{p:?}");
         assert!(p.notes.iter().any(|n| n.contains("code isn't used")));
+    }
+
+    #[test]
+    fn statusline_is_added_with_the_other_keys_kept_as_they_were() {
+        let text = "{\n  \"theme\": \"dark\",\n  \"z\": [1, 2]\n}\n";
+        let out = add_statusline(text).unwrap();
+        assert!(
+            out.ends_with("  \"theme\": \"dark\",\n  \"z\": [1, 2]\n}\n"),
+            "{out}"
+        );
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["statusLine"]["command"], STATUSLINE_COMMAND);
+        assert_eq!(v["theme"], "dark");
+        // Empty object and missing file.
+        let v: Value = serde_json::from_str(&add_statusline("{}").unwrap()).unwrap();
+        assert_eq!(v["statusLine"]["type"], "command");
+        let v: Value = serde_json::from_str(&add_statusline("").unwrap()).unwrap();
+        assert_eq!(v["statusLine"]["command"], STATUSLINE_COMMAND);
+    }
+
+    #[test]
+    fn statusline_refuses_to_replace_one_or_touch_bad_json() {
+        let existing = r#"{"statusLine": {"type": "command", "command": "mine"}}"#;
+        assert!(add_statusline(existing).is_err());
+        assert!(add_statusline("[1]").is_err());
+        assert!(add_statusline("{ not json").is_err());
+    }
+
+    #[test]
+    fn the_plan_adds_the_statusline_only_where_there_is_none() {
+        let p = plan(true, false, Some(&json!({})), None, true);
+        assert!(p.steps.contains(&Step::StatusLine), "{p:?}");
+
+        let mine = json!({ "statusLine": { "type": "command", "command": "~/bin/line.sh" } });
+        let p = plan(true, false, Some(&mine), None, true);
+        assert!(!p.steps.contains(&Step::StatusLine), "{p:?}");
+        assert!(
+            p.notes.iter().any(|n| n.contains("leaves it alone")
+                && n.contains("| ~/bin/line.sh;")
+                && n.contains("| muster-shim statusline")),
+            "{p:?}"
+        );
+
+        let ours =
+            json!({ "statusLine": { "type": "command", "command": "muster-shim statusline" } });
+        let p = plan(true, false, Some(&ours), None, true);
+        assert!(!p.steps.contains(&Step::StatusLine));
+        assert!(p.notes.iter().any(|n| n.contains("already shows")));
     }
 
     #[test]

@@ -206,6 +206,27 @@ pub fn claude_wiring(settings: Option<&Value>, claude_json: Option<&Value>) -> V
     out
 }
 
+/// Whether Claude Code shows the session's nickname (MUS-38). A warning, not a
+/// failure: messages still flow without it.
+pub fn statusline_check(settings: Option<&Value>) -> Finding {
+    let cmd = settings.and_then(|s| s["statusLine"]["command"].as_str());
+    match cmd {
+        Some(c) if c.contains("muster-shim statusline") => {
+            Finding::ok("statusline", "shows the session's nickname")
+        }
+        Some(_) => Finding::warn(
+            "statusline",
+            "Claude's statusLine is someone else's, so the nickname isn't on screen",
+            "`muster-shim setup` prints a command that runs both",
+        ),
+        None => Finding::warn(
+            "statusline",
+            "no statusLine, so you only learn a session's nickname when someone uses it",
+            "`muster-shim setup --apply` adds it",
+        ),
+    }
+}
+
 /// Whether this binary is the `muster-shim` that Claude Code will run.
 pub fn path_check(exe: Option<&Path>, on_path: Option<&Path>) -> Finding {
     let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
@@ -348,10 +369,12 @@ pub async fn run() -> Result<()> {
     findings.push(credential_check());
     findings.push(daemon_check().await);
     let (settings, claude_json) = claude_files();
+    let settings = settings.as_deref().and_then(read_json);
     findings.extend(claude_wiring(
-        settings.as_deref().and_then(read_json).as_ref(),
+        settings.as_ref(),
         claude_json.as_deref().and_then(read_json).as_ref(),
     ));
+    findings.push(statusline_check(settings.as_ref()));
     for f in &findings {
         println!("{}", render(f));
     }
@@ -449,6 +472,15 @@ mod tests {
         let settings = json!({ "enabledPlugins": { PLUGIN_ID: true } });
         let f = claude_wiring(Some(&settings), Some(&json!({})));
         assert!(f.iter().all(|f| f.level == Level::Ok), "{:?}", levels(&f));
+    }
+
+    #[test]
+    fn the_statusline_check_warns_until_it_shows_the_nickname() {
+        assert_eq!(statusline_check(None).level, Level::Warn);
+        let mine = json!({ "statusLine": { "command": "line.sh" } });
+        assert_eq!(statusline_check(Some(&mine)).level, Level::Warn);
+        let chained = json!({ "statusLine": { "command": "a | muster-shim statusline" } });
+        assert_eq!(statusline_check(Some(&chained)).level, Level::Ok);
     }
 
     #[test]
