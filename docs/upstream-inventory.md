@@ -155,10 +155,12 @@ cell says which part).
 | Durability | 37–39, 49, 55, 59, 62, 65 |
 | Other | 6, 21, 25, 26, 35, 47, part of 56, part of 83 |
 
-Suggested order: Hooks, then Durability, then Gate (the largest, and #72 waits on myko), then Other. Each
-needs U-RR and U-CG folded in first. The cleanest way is to do this on top
-of modest-roach's G1 catch-up merge, rather than cherry-picking onto
-`94ecc24` and resolving the same conflicts twice.
+Suggested order: Hooks, then Durability, then Gate (the largest; #72 waits
+on myko), then Other. Each port is its own branch on upstream main
+(`94ecc24`, or wherever upstream is when it is built), carrying only that
+bucket's entries under Marshal names. Where an entry collides with U-RR or
+U-CG, the branch reuses the resolution from modest-roach's G1 catch-up
+merge rather than resolving the conflict a second time.
 
 **Correction (port/hooks prep).** The Hooks entries can't be cherry-picked
 cleanly onto upstream: they are entangled with the Gate.

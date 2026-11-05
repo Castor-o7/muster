@@ -17,11 +17,12 @@ find . -depth -name '*muster*' -not -path './.git/*' -not -path './target/*' \
   done
 
 # 2. Text. Order matters: specific forms before the generic ones.
-files=$(grep -rIl --exclude-dir=.git --exclude-dir=target --exclude-dir=vendor \
-  -e muster -e Muster -e MUSTER -e '\b625[5-8]\b' . || true)
-[ -z "$files" ] && exit 0
-# shellcheck disable=SC2086
-perl -pi -e '
+# NUL-separated, so paths with spaces survive.
+# Caution: the \b625[5-8]\b rewrite hits any bounded 6255-6258, not just ports
+# (e.g. a "-6255-" segment in a test UUID), so always read the resulting diff.
+grep -rIlZ --exclude-dir=.git --exclude-dir=target --exclude-dir=vendor \
+  -e muster -e Muster -e MUSTER -e '\b625[5-8]\b' . |
+  xargs -0 -r perl -pi -e '
   s{github\.com/Castor-o7/muster}{github.com/ignition-is-go/marshal}g;
   s{Castor-o7/muster}{ignition-is-go/marshal}g;
   s/\b6255\b/6155/g; s/\b6256\b/6156/g; s/\b6257\b/6157/g; s/\b6258\b/6158/g;
@@ -29,7 +30,7 @@ perl -pi -e '
   s/MUSTER/MARSHAL/g;
   s/Muster/Marshal/g;
   s/muster/marshal/g;
-' $files
+'
 
 # 3. Report anything left for a human to look at.
 left=$(grep -rIn --exclude-dir=.git --exclude-dir=target --exclude-dir=vendor -i muster . || true)
