@@ -331,6 +331,14 @@ Merged and needing a live run: MUS-36 and MUS-37.
 - [ ] **MUS-13: Run CI on macOS.** Done when: CI runs on macOS and passes,
   including `recovery_tracks_codex_effective_working_directory`, which fails on
   macOS today.
+- [ ] **MUS-87: Keep CI from running out of disk or failing on a download.** Found on #113's
+  run (42043766050): the `check` job builds the workspace, runs the gate and links e2e, installs
+  bun and the plugins' `node_modules`, and builds again for conformance, and the ubuntu runner
+  ran out of space (`rustc-LLVM ERROR: IO failure on output stream: No space left on device`).
+  Two runs on main also failed at "Install bun" when GitHub's release download answered 504.
+  Done when: the job frees the runner SDKs it doesn't use and builds with line tables only,
+  shows `df -h` before, after and at the end, retries the bun download with its SHA-256
+  check kept, and CI passes on the PR with the headroom shown.
 - [ ] **MUS-14: Publish prebuilt binaries.** There are no releases yet, so
   `scripts/install-codex.sh` can't work and the plugins aren't on npm. Done when: macOS and Linux can
   install without a Rust toolchain.
