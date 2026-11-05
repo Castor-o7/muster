@@ -666,12 +666,13 @@ fn same_cwd(first: &Path, second: &Path) -> bool {
 
         comparable(first).eq_ignore_ascii_case(&comparable(second))
     }
-    // `codex_thread_cwd` canonicalizes, and on macOS a temp dir under
-    // `/var/folders` canonicalizes to `/private/var/folders` (MUS-96).
+    // Both sides resolved, as codex_thread_cwd resolves its answer: on macOS the
+    // temp directory is under /var, a symlink to /private/var, so comparing one
+    // resolved path with one as given never matched there (MUS-13).
     #[cfg(not(windows))]
     {
-        let canonical = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-        canonical(first) == canonical(second)
+        let resolved = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        resolved(first) == resolved(second)
     }
 }
 
