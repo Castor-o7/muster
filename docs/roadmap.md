@@ -14,12 +14,12 @@ evidence from a real run by the person or team named.
 
 ## Status
 
-2026-11-05: 35 of 75 stories ticked, about 47%, not counting the 3 moved to Rally. Live on
-Murph since 2026-11-04 16:02:18: `14e2d1a`, deployed by Lamplighter on the operator's word, with
-every port check passing. It carries MUS-7 (first live at `3746864`, 14:28) and MUS-59, besides
-everything before. Merged and waiting for the next daemon restart: MUS-8 (which also needs a
-rebuilt shim wherever a machine next pairs), MUS-9, MUS-10, MUS-60, and MUS-11's rustls
-and tokio security updates. Sessions pick up a rebuilt shim
+2026-11-05: 36 of 77 stories ticked, about 47%, not counting the 3 moved to Rally. Live on
+Murph since 2026-11-05 08:48: `edf5ea8` (PID 3759037), applied by the operator with
+`MUSTER_TLS=1` and checked by checksum. Besides everything before, it brings MUS-8, MUS-9,
+MUS-10, MUS-60, MUS-11's rustls and tokio updates, MUS-62 (upstream v0.54.1), MUS-64 (the
+optional TLS mode), MUS-66 (daemon links), and MUS-71, MUS-72, MUS-73, MUS-75, MUS-78 and MUS-79.
+Merged and waiting for the next daemon restart: MUS-74. Sessions pick up a rebuilt shim
 when they restart, and no keyed send (MUS-29) has been seen live yet. Verified live on 2026-11-04:
 MUS-4, MUS-7, MUS-34, MUS-35, MUS-54 and MUS-57. Merged, live and not yet verified: MUS-46,
 MUS-48, MUS-50 (its live half needs a session that loses its binding), MUS-55 and MUS-59.
@@ -464,6 +464,17 @@ Rally.
   no session on the roster"), so a change of wording would quietly stop the retry. Done when:
   `resolve_caller`'s refusal carries a stable code or data field, the shim matches that rather
   than the text, and a test pins both ends to the same value.
+- [ ] **MUS-83: Say when the local token is refused.** Found in the MUS-66 run: a shim without
+  the daemon's local token was rejected at the gate ("missing or wrong local token"), but the
+  tool call only reported "command timed out after 10000 ms (daemon unresponsive?)". Done
+  when: a shim whose connection is refused for its token says so, and names the token file,
+  and a test covers it.
+- [ ] **MUS-84: Keep `unpair` from revoking a machine and a link together.** Found by
+  tangerine-wombat cleaning up after the MUS-66 run: on Murph, `unpair a1` removes both a1's
+  machine pairing (which every a1 session uses) and the link token `link:a1`, and `unlink a1`
+  on the dialed side does nothing, because it edits only the dialer's `links` file. Done when:
+  `unpair` takes `--machine` or `--link`, a bare name that matches both is refused with both
+  forms named, `unlink` on the dialed side removes `link:<name>`, and an e2e covers each case.
 - [x] **MUS-72: Hold a session's first writes until it's registered.** Found by tangerine-wombat
   in the G5 run on Murph: a tool call right after `initialize` reached the daemon before the
   shim's Session SET and failed "caller has no session on the roster". A real agent's first
@@ -481,7 +492,7 @@ Rally.
 - [x] **MUS-65: Document live delivery without the channels flag (G4).** How hooks give live
   delivery and wake, checked against the code, and how that differs from Marshal's channel
   push. Merged as #80.
-- [ ] **MUS-66: Message between daemons (G5).** Secure and bidirectional, on the TLS mode. The
+- [x] **MUS-66: Message between daemons (G5).** Secure and bidirectional, on the TLS mode. The
   watchman reads a design and threat model before any building. The design answers what
   configuration links two daemons (peer address, token or certificate fingerprint, and whether
   `muster-daemon pair` is reused), whether a test session needs its own shim pairing file, what
@@ -490,9 +501,11 @@ Rally.
   second daemon on Murph (loopback ports 6265–6268, its own state dir, config dir and database).
   Design merged as #90. Built: `pair --link` and `link`, the `/link` route and protocol, remote
   sessions on the roster, `nickname@link` addressing, an outbox that survives a restart (with
-  Postgres), and the threat-model checks, all covered by `scripts/test-links-e2e.sh`. Still
-  needs the two runs: Lamplighter's two-daemon test on Murph, then the real a1↔Murph run with
-  the operator's OK.
+  Postgres), and the threat-model checks, all covered by `scripts/test-links-e2e.sh`. The real
+  a1↔Murph run passed on 2026-11-05 with Murph on `edf5ea8` (`MUSTER_TLS=1`, checked by
+  checksum) and a test daemon on a1 built from the same commit: one `pair --link` code
+  redeemed, a message each way (labelled `gleaming-salamander@a1` and `tangerine-wombat@Murph`),
+  and the link back up after the a1 daemon restarted.
 - [ ] **MUS-67: Write up Muster against Marshal (G7).** What Muster adds and changes, written
   for the eventual upstream PR descriptions. Draft in #81.
 - [ ] **MUS-68: Simulate each behaviour change in Zoo (G8).** Upstream requires a real-agent
