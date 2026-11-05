@@ -123,6 +123,33 @@ each opened after the one before it has merged:
    It's an optional filter that runs before myko handles a request, and nothing
    changes when none is set. It replaces vendoring myko-server 6.11.5. The Gate
    can't open until myko has released it.
+   **The myko PR plan (commissioner, 2026-11-05 ~16:35):**
+   - **The change.** Taken from `d4165f5`, minus the vendoring: about 37 changed lines in
+     `libs/myko/server/src/router.rs` and `lib.rs`. It adds `router::RequestFilter`, an
+     `Arc<dyn Fn(&HttpRequestHead, SocketAddr) -> Result<(), (u16, &str)>>` that runs on
+     each parsed request head before any route, and `MykoServerBuilder::with_request_filter`.
+     With no filter set, nothing changes. myko `main` (v6.11.6) has no changes in
+     `libs/myko/server/src` since 6.11.5, so the patch applies as written.
+   - **The overlap to settle first.** trevorsargent's **ignition-is-go/myko#129** (open,
+     opened 2026-11-05, "authenticated gateways and persisted permissions") rewrites the
+     same files: `router.rs` +195, `lib.rs` +34, `ws_handler.rs`, and `mcp/*`. It adds an
+     opt-in `with_auth_provider` with a pluggable `Authenticator`. That could cover the
+     gate's "401 without the token" check, as a bearer credential. It doesn't cover the
+     "403 for a browser `Origin`" check, because `Credentials` carries only `bearer`. So
+     opening our filter now would compete with #129 in the same lines. **Recommendation:**
+     the operator asks the myko maintainers which they'd prefer: a small
+     request-head filter on top of #129, or an `Origin` check (or the request head) made
+     available to #129's gateway. Then build on #129 rather than race it. The Gate is
+     several PRs away, so waiting costs nothing now.
+   - **Prerequisites.** A **Castor-o7/myko fork**, which doesn't exist yet. Creating it is
+     the operator's action. A reference clone is at `~/src/myko`, where the `pr-129` branch
+     is fetched. myko's rules (`AGENTS.md`): run checks with `cargo flux run`, run tests with
+     `RUST_TEST_THREADS=1`, comments explain why, and TODOs carry initials. No version bump,
+     since lucid-release does it.
+   - **Then the Gate** bumps `myko-server` to the release that includes the hook, and drops
+     `vendor/`, `[patch.crates-io]`, `MARSHAL-PATCH.md`, and the vendored-licence notes in
+     `deny.toml` and the README.
+
 5. **Gate**, in two or three PRs: TLS, then pairing, then the myko listener. It's
    additive while `--tls` isn't given, and plain mode stays the default. It depends
    on the released myko with the `RequestFilter` hook, and vendors nothing.
