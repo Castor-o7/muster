@@ -160,8 +160,12 @@ Two things, both intended:
 
   The Zoo drives Codex agents and has no Claude Code harness. So this shows
   that Codex coordination is no worse with the change; it can't show the Claude
-  delivery itself. The evaluation is in `scripts/sandbox/evaluations/` on this
-  branch.
+  delivery itself. The evaluation is in commit `1225c85` on this PR's branch,
+  `feat/claude-hooks-without-flag`, under `scripts/sandbox/evaluations/`. It
+  ran against `62552e6`. The branch is now at `b32b9f3`, with six commits of
+  review fixes on top (three docs, three daemon fixes: a held `/hook/wait` isn't
+  activity, a peer's body can't forge the inbox framing, and the wait loop
+  doesn't spin under `run()`) that the Zoo hasn't been re-run on.
   - **The model differs from your past campaigns.** They used `gpt-6.1-sol`,
     which our ChatGPT login refuses. This run uses `gpt-6-luna` for both the
     baseline (`94ecc24`) and the candidate. So it compares the two builds with
