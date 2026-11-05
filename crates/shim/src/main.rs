@@ -1175,7 +1175,7 @@ pub(crate) fn read_assigned_nickname(session_id: &str) -> Option<String> {
 /// Mirror `nickname` for `session_id` to the first writable config-dir
 /// candidate. Best-effort: a failure just leaves the statusline on its
 /// deterministic fallback.
-fn write_assigned_nickname(session_id: &str, nickname: &str) {
+pub(crate) fn write_assigned_nickname(session_id: &str, nickname: &str) {
     let Some(path) = config_file_candidates(&nickname_file_name(session_id))
         .into_iter()
         .next()
