@@ -118,18 +118,27 @@ impl Handler for CoordHandler {
             // come before the shim's registration lands (MUS-72), so hold it
             // briefly rather than fail it.
             wait_until_registered(&host).await;
-            match name.as_str() {
-                "set_status" => set_status(&host, &args).await,
-                "send_message" => send_message(&host, &args).await,
-                "broadcast" => broadcast(&host, &args).await,
-                "join_room" => join_room(&host, &args).await,
-                "leave_room" => leave_room(&host, &args).await,
-                "ack_messages" => ack_messages(&host, &args).await,
-                other => Err(ToolError {
-                    code: METHOD_NOT_FOUND,
-                    message: format!("unknown tool: {other}"),
-                    data: None,
-                }),
+            let first = dispatch_tool(&host, &name, &args).await;
+            // The hold can pass on a row still bound to an earlier connection
+            // for this session (one that died and the sweeper hasn't cleared),
+            // and the daemon then refuses the write, because it finds a caller
+            // by this connection's binding (MUS-79). A refused write stored
+            // nothing, so send the session again and retry it once.
+            match first {
+                Err(e) if !host.is_codex && is_unbound_refusal(&e.message) => {
+                    log::warn!(
+                        "[muster-shim] {name} was refused as unregistered; sending the session again and retrying once"
+                    );
+                    let snapshot = host.session.lock().unwrap().clone();
+                    if let Err(err) = crate::emit_session_set(&host.client, &snapshot) {
+                        log::warn!("[muster-shim] re-SET before a retry failed: {err}");
+                    }
+                    // The roster can't tell this connection's binding from an
+                    // older one, so give the SET a moment to land.
+                    tokio::time::sleep(UNBOUND_RETRY_AFTER).await;
+                    dispatch_tool(&host, &name, &args).await
+                }
+                other => other,
             }
         })
     }
@@ -403,6 +412,36 @@ async fn read_messages(
 // Tool implementations (writes)
 // =============================================================================
 
+/// Run one tool call.
+async fn dispatch_tool(
+    host: &ToolHost,
+    name: &str,
+    args: &Value,
+) -> Result<ToolOutcome, ToolError> {
+    match name {
+        "set_status" => set_status(host, args).await,
+        "send_message" => send_message(host, args).await,
+        "broadcast" => broadcast(host, args).await,
+        "join_room" => join_room(host, args).await,
+        "leave_room" => leave_room(host, args).await,
+        "ack_messages" => ack_messages(host, args).await,
+        other => Err(ToolError {
+            code: METHOD_NOT_FOUND,
+            message: format!("unknown tool: {other}"),
+            data: None,
+        }),
+    }
+}
+
+/// How long a retried write waits for its re-SET to land (MUS-79).
+const UNBOUND_RETRY_AFTER: std::time::Duration = std::time::Duration::from_millis(750);
+
+/// Whether the daemon refused a write because this connection has no session
+/// bound to it (`resolve_caller`'s refusal), which re-sending the session fixes.
+fn is_unbound_refusal(message: &str) -> bool {
+    message.contains("has no session on the roster")
+}
+
 /// How long a write waits for this session to reach the roster (MUS-72).
 const REGISTER_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 const REGISTER_POLL: std::time::Duration = std::time::Duration::from_millis(100);
@@ -419,28 +458,44 @@ async fn wait_until_registered(host: &ToolHost) {
         let me = host.session.lock().unwrap().id.clone();
         crate::registered_on_roster(&host.sessions_cell.get(), &me)
     };
-    if wait_for(registered, REGISTER_RESEND_AFTER, REGISTER_POLL).await {
-        return;
-    }
-    // The registration sent on connect is fire-and-forget, and the background
-    // check only re-sends after missing the row on more than one 5 s tick. So a
-    // lost first SET (seen right after a daemon restart, MUS-78) would outlast
-    // this wait. Send it again now, once.
-    let snapshot = host.session.lock().unwrap().clone();
-    log::warn!(
-        "[muster-shim] session {} not on the roster {} s after a write began; sending it again",
-        snapshot.id.0,
-        REGISTER_RESEND_AFTER.as_secs()
-    );
-    if let Err(e) = crate::emit_session_set(&host.client, &snapshot) {
-        log::warn!("[muster-shim] re-SET before a write failed: {e}");
-    }
-    wait_for(
+    let resend = || {
+        let snapshot = host.session.lock().unwrap().clone();
+        log::warn!(
+            "[muster-shim] session {} not on the roster {} s after a write began; sending it again",
+            snapshot.id.0,
+            REGISTER_RESEND_AFTER.as_secs()
+        );
+        if let Err(e) = crate::emit_session_set(&host.client, &snapshot) {
+            log::warn!("[muster-shim] re-SET before a write failed: {e}");
+        }
+    };
+    hold_until(
         registered,
-        REGISTER_WAIT - REGISTER_RESEND_AFTER,
+        resend,
+        REGISTER_RESEND_AFTER,
+        REGISTER_WAIT,
         REGISTER_POLL,
     )
     .await;
+}
+
+/// Wait for `ready` up to `limit`, calling `resend` once if it isn't ready by
+/// `resend_after`. The registration sent on connect is fire-and-forget, and the
+/// background check only re-sends after missing the row on more than one 5 s
+/// tick, so a lost first SET (seen right after a daemon restart, MUS-78)
+/// would outlast the whole wait without this.
+async fn hold_until(
+    ready: impl Fn() -> bool,
+    resend: impl FnOnce(),
+    resend_after: std::time::Duration,
+    limit: std::time::Duration,
+    poll: std::time::Duration,
+) -> bool {
+    if wait_for(&ready, resend_after, poll).await {
+        return true;
+    }
+    resend();
+    wait_for(&ready, limit.saturating_sub(resend_after), poll).await
 }
 
 /// Poll `ready` until it's true or `limit` passes. Returns whether it became true.
@@ -989,6 +1044,20 @@ where
 #[cfg(test)]
 mod tests {
 
+    #[test]
+    fn only_the_unbound_refusal_is_retried() {
+        assert!(super::is_unbound_refusal(
+            "caller (client abc) has no session on the roster — re-SET your Session and retry"
+        ));
+        for other in [
+            "no session matches 'x' (by id, nickname, operator, or id-prefix) — check muster://roster",
+            "too many messages from this session: try again in 3 s",
+            "command timed out after 15000 ms (daemon unresponsive?)",
+        ] {
+            assert!(!super::is_unbound_refusal(other), "{other}");
+        }
+    }
+
     #[tokio::test]
     async fn an_early_write_waits_for_registration_then_goes_ahead() {
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1002,6 +1071,60 @@ mod tests {
         .await;
         assert!(ready);
         assert_eq!(polls.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn a_session_still_missing_after_a_while_is_sent_again_once() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        let ms = std::time::Duration::from_millis;
+        // The first SET was lost: the row only lands once the session is resent.
+        let resent = AtomicBool::new(false);
+        let resends = AtomicUsize::new(0);
+        let ready = hold_until(
+            || resent.load(Ordering::SeqCst),
+            || {
+                resends.fetch_add(1, Ordering::SeqCst);
+                resent.store(true, Ordering::SeqCst);
+            },
+            ms(50),
+            ms(2000),
+            ms(10),
+        )
+        .await;
+        assert!(ready);
+        assert_eq!(resends.load(Ordering::SeqCst), 1);
+
+        // Already registered: nothing is resent.
+        let resends = AtomicUsize::new(0);
+        let ready = hold_until(
+            || true,
+            || {
+                resends.fetch_add(1, Ordering::SeqCst);
+            },
+            ms(50),
+            ms(2000),
+            ms(10),
+        )
+        .await;
+        assert!(ready);
+        assert_eq!(resends.load(Ordering::SeqCst), 0);
+
+        // Never registered: resent once, then it gives up at the limit.
+        let resends = AtomicUsize::new(0);
+        let started = std::time::Instant::now();
+        let ready = hold_until(
+            || false,
+            || {
+                resends.fetch_add(1, Ordering::SeqCst);
+            },
+            ms(50),
+            ms(200),
+            ms(10),
+        )
+        .await;
+        assert!(!ready);
+        assert_eq!(resends.load(Ordering::SeqCst), 1);
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
     }
 
     #[tokio::test]

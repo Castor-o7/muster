@@ -14,7 +14,7 @@ evidence from a real run by the person or team named.
 
 ## Status
 
-2026-11-04: 34 of 68 stories ticked, about 50%, not counting the 3 moved to Rally. Live on
+2026-11-05: 35 of 75 stories ticked, about 47%, not counting the 3 moved to Rally. Live on
 Murph since 2026-11-04 16:02:18: `14e2d1a`, deployed by Lamplighter on the operator's word, with
 every port check passing. It carries MUS-7 (first live at `3746864`, 14:28) and MUS-59, besides
 everything before. Merged and waiting for the next daemon restart: MUS-8 (which also needs a
@@ -459,6 +459,11 @@ Rally.
   restart. Done when: no machine's config names 6257 (a1's and Murph's `.mcp.json`, the TUI,
   the TS plugins), and the alias, its variable and its rollout check are removed. The upstream
   Gate PR ships without it.
+- [ ] **MUS-80: Give the unregistered refusal a stable code.** From the watchman's review of
+  MUS-79: the shim retries a write refused as unregistered by matching the daemon's text ("has
+  no session on the roster"), so a change of wording would quietly stop the retry. Done when:
+  `resolve_caller`'s refusal carries a stable code or data field, the shim matches that rather
+  than the text, and a test pins both ends to the same value.
 - [x] **MUS-72: Hold a session's first writes until it's registered.** Found by tangerine-wombat
   in the G5 run on Murph: a tool call right after `initialize` reached the daemon before the
   shim's Session SET and failed "caller has no session on the roster". A real agent's first
@@ -468,6 +473,11 @@ Rally.
   `to: ""` matched every id by prefix and was delivered to the sender itself. Upstream
   `94ecc24` behaves the same; a small upstream fix, when the operator allows upstream PRs.
   Done when: an empty or blank `to` is refused with a clear error and nothing is stored.
+- [x] **MUS-79: Retry a write refused as unregistered.** The links e2e failed 6 of 39 on CI after
+  #102: a fresh shim for a session whose row was still bound to an earlier, dead connection saw
+  "a binding" and passed MUS-72's hold, and the daemon then refused its write, because it finds a
+  caller by this connection's binding. Done when: a write refused "has no session on the roster"
+  re-sends the session and is retried once, and the gate e2e reproduces the stale binding.
 - [x] **MUS-65: Document live delivery without the channels flag (G4).** How hooks give live
   delivery and wake, checked against the code, and how that differs from Marshal's channel
   push. Merged as #80.

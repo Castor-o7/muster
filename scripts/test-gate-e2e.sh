@@ -336,6 +336,9 @@ LOSTSET=$WORK/lostset.py
 cat >$LOSTSET <<'PY'
 import json, os, select, socket, subprocess, sys, threading, time
 shim, env_home, upstream_port = sys.argv[1], sys.argv[2], int(sys.argv[3])
+sid = sys.argv[4] if len(sys.argv) > 4 else "e2e-lost-set"
+drop_first = (sys.argv[5] if len(sys.argv) > 5 else "drop") == "drop"
+send_to = sys.argv[6] if len(sys.argv) > 6 else None
 dropped = threading.Event()
 def read_n(s, n):
     b = b""
@@ -357,7 +360,7 @@ def relay_up(c, u):
             mask = read_n(c, 4) if h[1] & 128 else b""
             body = read_n(c, n)
             plain = bytes(b ^ mask[i % 4] for i, b in enumerate(body)) if mask else body
-            if not dropped.is_set() and b'"Session"' in plain and b"SET" in plain:
+            if drop_first and not dropped.is_set() and b'"Session"' in plain and b"SET" in plain:
                 dropped.set(); continue
             u.sendall(h + ext + mask + body)
     except (OSError, EOFError): pass
@@ -377,8 +380,8 @@ def serve():
         threading.Thread(target=relay_down, args=(u, c), daemon=True).start()
 threading.Thread(target=serve, daemon=True).start()
 env = dict(os.environ, HOME=env_home, XDG_CONFIG_HOME=env_home, MUSTER_DAEMON_ADDRESS="ws://127.0.0.1:%d" % port,
-           CLAUDE_CODE_SESSION_ID="e2e-lost-set", RUST_LOG="info")
-p = subprocess.Popen([shim], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=open(env_home + "/shim.log", "w"), env=env, text=True, bufsize=1)
+           CLAUDE_CODE_SESSION_ID=sid, RUST_LOG="info")
+p = subprocess.Popen([shim], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=open(env_home + "/shim.log", "a"), env=env, text=True, bufsize=1)
 def rpc(i, method, params, wait):
     p.stdin.write(json.dumps({"jsonrpc": "2.0", "id": i, "method": method, "params": params}) + "\n"); p.stdin.flush()
     end = time.time() + wait
@@ -389,15 +392,25 @@ def rpc(i, method, params, wait):
     raise SystemExit("no reply to " + method)
 rpc(1, "initialize", {"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "e2e", "version": "0"}}, 20)
 start = time.time()
-r = rpc(2, "tools/call", {"name": "set_status", "arguments": {"text": "after a lost SET"}}, 20)
+# send_message finds its caller by this connection's binding; set_status doesn't.
+call = {"name": "send_message", "arguments": {"to": send_to, "body": "after a stale binding"}} if send_to else {"name": "set_status", "arguments": {"text": "after a lost SET"}}
+r = rpc(2, "tools/call", call, 20)
 took = time.time() - start
 print("DROPPED" if dropped.is_set() else "NOT-DROPPED", "OK" if "error" not in r and not r.get("result", {}).get("isError") else "FAILED " + json.dumps(r)[:300], "%.1f" % took)
-p.kill()
+p.kill()  # SIGKILL: no deregistration, so the row stays bound to this dead connection
 PY
 mkdir -p $WORK/lostset-home/muster && cp $WORK/daemon/muster/local-token $WORK/lostset-home/muster/
 OUT=$(perl -e 'alarm 40; exec @ARGV' python3 -I $LOSTSET $BIN/muster-shim $WORK/lostset-home 16255 2>&1)
 check "a shim whose first Session SET is lost still gets its first write through" '[[ $OUT == "DROPPED OK "* ]] && (( ${${OUT##* }%.*} < 5 ))'
 check "and says it sent the session again" 'grep -q "not on the roster 1 s after a write began; sending it again" $WORK/lostset-home/shim.log'
+[[ $OUT == "DROPPED OK "* ]] || print -r -- "$OUT"
+# A row still bound to a dead connection for the same session (MUS-79): the
+# hold sees a binding and passes, the daemon refuses, and the shim retries.
+STALE=a0000000-0000-4000-8000-0000000000f7
+perl -e 'alarm 40; exec @ARGV' python3 -I $LOSTSET $BIN/muster-shim $WORK/lostset-home 16255 $STALE keep >/dev/null 2>&1
+OUT=$(perl -e 'alarm 40; exec @ARGV' python3 -I $LOSTSET $BIN/muster-shim $WORK/lostset-home 16255 $STALE drop e2e-lost-set 2>&1)
+check "a shim whose session row is still bound to a dead connection gets its first write through" '[[ $OUT == "DROPPED OK "* ]]'
+check "after one logged retry" 'grep -q "was refused as unregistered; sending the session again and retrying once" $WORK/lostset-home/shim.log'
 [[ $OUT == "DROPPED OK "* ]] || print -r -- "$OUT"
 
 # A session whose connection drops while it's still waiting stays reachable (MUS-54).
