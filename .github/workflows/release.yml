@@ -1,0 +1,129 @@
+name: Release
+
+# MUS-14: prebuilt muster-shim and muster-daemon for macOS arm64 and Linux x86_64, so neither
+# needs a Rust toolchain to install. scripts/install-codex.sh fetches
+# releases/latest/download/muster-shim-<target>, so the assets are raw binaries with those names.
+#
+# - workflow_dispatch builds everything and uploads it as a workflow artifact only: a dry run that
+#   touches no release and no tag.
+# - Pushing a `v*` tag does the same, then creates a DRAFT release with the files attached. Nothing
+#   is public until someone publishes the draft by hand.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest # Apple silicon
+            target: aarch64-apple-darwin
+          # The oldest supported Ubuntu image, so the binaries need the oldest glibc we can give
+          # them (2.35). They link OpenSSL 3 (native-tls) dynamically: Ubuntu 22.04+, Debian 12+,
+          # Fedora 36+ and other distributions with libssl.so.3.
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies (Linux)
+        if: runner.os == 'Linux'
+        timeout-minutes: 8
+        run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config libssl-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }} -p muster-shim -p muster-daemon
+      - name: Name the binaries for the release
+        run: |
+          mkdir dist
+          for bin in muster-shim muster-daemon; do
+            cp "target/${{ matrix.target }}/release/$bin" "dist/$bin-${{ matrix.target }}"
+          done
+          ls -l dist
+      # Neither binary has --version; both answer an unknown flag with an error or their usage.
+      # Getting that text back shows the binary loads its libraries and runs on this runner.
+      - name: Smoke test
+        run: |
+          for bin in muster-shim muster-daemon; do
+            out=$("./dist/$bin-${{ matrix.target }}" --release-smoke-test 2>&1 || true)
+            echo "$bin: $out" | head -3
+            echo "$out" | grep -qiE "usage|unknown argument" || { echo "::error::$bin didn't run"; exit 1; }
+          done
+          file dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bin-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  # One SHA256SUMS over every asset, made and checked in one place.
+  package:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bin-*
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: |
+          cp ../scripts/install-codex.sh .
+          chmod +x muster-*
+          sha256sum muster-* install-codex.sh > SHA256SUMS
+          sha256sum -c SHA256SUMS
+          cat SHA256SUMS
+          # Every asset scripts/install-codex.sh can ask for is here.
+          for target in aarch64-apple-darwin x86_64-unknown-linux-gnu; do
+            for bin in muster-shim muster-daemon; do
+              grep -q " $bin-$target\$" SHA256SUMS || { echo "::error::missing $bin-$target"; exit 1; }
+            done
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: muster-release
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    needs: package
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: muster-release
+          path: dist
+      - name: Create a draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft \
+            --verify-tag \
+            --title "muster $TAG" \
+            --notes "Prebuilt muster-shim and muster-daemon for macOS (Apple silicon) and Linux (x86_64, glibc 2.35+ with OpenSSL 3). Check downloads against SHA256SUMS: \`sha256sum -c SHA256SUMS --ignore-missing\`."
