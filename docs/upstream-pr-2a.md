@@ -146,8 +146,10 @@ Two things, both intended:
     after the false approval claim.
   - At n=3 we claim only that this change is no worse than the baseline in
     every scenario, not that it fixes that failure.
-  - Turns, messages and tokens matched or were lower in `independent` and
-    `contention`.
+  - Turns and messages matched in `independent` and `contention`. Tokens were
+    lower in `independent` (261,949 against 312,204 in all; median 88k
+    against 111k). In `contention` the median was lower (350k against 354k),
+    but the total was higher (1,162,972 against 1,127,925).
   - In `approval-wait` the candidate took one more turn and sent one more
     message in 2 of 3 repeats (5,6,6 turns against 5,5,5). The transcripts
     show why: an injected request to take over another project
