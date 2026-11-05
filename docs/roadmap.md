@@ -539,6 +539,14 @@ Rally.
   `thread/started`. Done when: the suite runs the restart cells against Postgres in CI, covering
   mail sent before the restart, and the bridge re-registers its threads when its daemon connection
   comes back, so the `codex` × `daemon-restart-mid-wait` cell passes.
+- [ ] **MUS-78: After a TLS daemon restart, a shim's first write can beat its registration.**
+  From MUS-69, against MUS-72. MUS-72 holds a shim's first write until its session is on the
+  roster, for at most 5 s (`REGISTER_WAIT`). With TLS on, right after the daemon restarts, a fresh
+  shim's registration can take longer, so the hold expires and the daemon refuses the send with
+  "has no session on the roster". The conformance suite's `claude-tls` ×
+  `daemon-restart-mid-wait` cell hit it in 2 of 8 runs; it retries that one refusal for now,
+  naming this story. Done when: the first write after a TLS restart isn't refused, and that
+  retry is removed.
 
 ## Moved to Rally
 

@@ -1214,7 +1214,22 @@ fn daemon_restart_mid_wait(c: &mut Cell) -> Result<(), String> {
     // Postgres so did the roster; register the sender again.
     c.sender = Cell::sender(&c.daemon, &c.sender_id);
     let t = token("restart");
-    c.send(&t)?;
+    // MUS-78: with TLS on, right after a restart, a fresh shim's first write
+    // can beat its registration even with MUS-72's hold, and is refused with
+    // "has no session on the roster". Retry that one refusal, in this one
+    // scenario, until MUS-78 is fixed; then remove this.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        match c.send(&t) {
+            Err(e) if e.contains("has no session on the roster") && Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(250));
+            }
+            other => {
+                other?;
+                break;
+            }
+        }
+    }
     let woke = c.harness.wait_for_wake(Duration::from_secs(25));
     if !contains(&woke, &t) {
         return Err(format!(
