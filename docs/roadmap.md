@@ -436,6 +436,24 @@ Merged and needing a live run: MUS-36 and MUS-37.
   credential, a handshake with the daemon, and Claude Code's MCP server and five hooks
   against `plugins/muster-shim/hooks/hooks.json`. It also flags leftover Marshal wiring.
   Still to do: the one setup command, and the launchd and systemd units.
+  Progress 2026-11-05 (oceanic-gemsbok, MUS-98): `scripts/setup.sh` is the one command. It
+  installs the binaries into one place, with release downloads checked against SHA256SUMS or
+  `cargo install --locked`. It runs `muster-daemon service` with `--daemon`, then `muster-shim
+  setup`, which ends with the doctor. It's a dry run by default and never starts anything. Not
+  ticked: what's left is the operator's run on a clean machine through a reboot, and launchd on a
+  Mac, which nobody has run from setup.sh yet.
+- [x] **MUS-98: `scripts/setup.sh`, one command to set up a machine.** The glue for MUS-15,
+  split from it with sienna-mullet's agreement. Done when: one script installs muster-shim (and
+  muster-daemon with `--daemon`) into one prefix, from the release checked against SHA256SUMS
+  (MUS-96) or `cargo install --locked`, then hands over to `muster-daemon service` (#155) and
+  `muster-shim setup` (#157). It's a dry run unless given `--apply`, never passes `--force` or
+  `--drop-settings`, never starts or restarts a daemon, takes a pairing code only as a file or on
+  stdin, and names other copies on PATH without deleting them. `scripts/test-setup.sh` checks
+  all of that against fakes (17 checks; deliberately breaking setup.sh with `--force` and a
+  `systemctl restart` fails 4 of them). `scripts/test-setup-e2e.sh` runs it on a Linux daemon
+  host: setup.sh installs into a throwaway HOME and prefix, and the unit `service` writes there
+  runs under systemd under a throwaway name on spare ports. The host's own unit is left untouched.
+  Follow-up: add test-setup.sh to ci.yml once the MUS-97 freeze lifts.
 - [ ] **MUS-16: Support addresses beyond one LAN IP.** Done when: a paired laptop
   stays connected when it moves between home and a Tailscale or WireGuard network. Needs a run: the operator, who
   has the laptop.
