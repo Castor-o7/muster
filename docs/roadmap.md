@@ -357,6 +357,11 @@ Merged and needing a live run: MUS-36 and MUS-37.
   were fine: passing runs take 35 to 109 s, 247 s cold. Done when: the job installs only the x86_64
   C cross-compiler, the apt step has its own limit so a stalled mirror fails fast and names the
   step, and `windows-cross-check` passes without a re-run on three PRs in a row.
+  The first two are done (#129). Then #134's run (42064578049) hit the 8-minute step limit
+  fetching only the C compiler: the step failed fast, as designed, but the mirror was still too
+  slow, and the count reset. So the `.deb` files are now cached with `actions/cache`, keyed on the
+  runner image's version. A hit installs with `dpkg -i` and never reaches the mirror; a miss
+  fetches once and saves the cache.
 - [ ] **MUS-15: One-command setup.** Done when: one command sets up a new machine,
   `muster doctor` reports what's wrong, and launchd and systemd units keep the
   daemon running across reboots. Needs a run: the operator, on a clean machine and
