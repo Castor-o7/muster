@@ -568,10 +568,8 @@ fn start_background(
     state_dir: &std::path::Path,
     allowlist: bool,
 ) -> StopChannel {
-    // Spawn the periodic sweeper. WS-shim sessions reap on client loss +
-    // grace; pull/hook sessions reap on the activity backstop. See cleanup.
-    tokio::spawn(daemon::cleanup::run_sweeper(server.ctx()));
-    // The operator's pause and, with TLS on, the sender allowlist (MUS-10).
+    // The periodic sweeper starts in `serve_until_stopped`, once myko has
+    // caught up with Postgres (MUS-58). The operator's pause and, with TLS on, the sender allowlist (MUS-10).
     tokio::spawn(daemon::controls::run(
         state_dir.to_path_buf(),
         server.ctx(),
@@ -588,8 +586,21 @@ async fn serve_until_stopped(
     stop_tx: tokio::sync::watch::Sender<bool>,
     listeners: impl std::future::Future<Output = ()>,
 ) -> Result<()> {
+    // The sweeper starts only once myko has replayed Postgres. `build` starts the
+    // replay in the background and only `run` waits for it, so a sweep before then
+    // would find room memberships whose sessions hadn't loaded yet and remove them
+    // (MUS-58), on every restart. WS-shim sessions reap on client loss + grace;
+    // pull/hook sessions on the activity backstop. See cleanup.
+    let sweeper = async {
+        while !server.is_ready() {
+            tokio::time::sleep(SWEEPER_READY_POLL).await;
+        }
+        tokio::spawn(daemon::cleanup::run_sweeper(server.ctx()));
+        std::future::pending::<()>().await;
+    };
     tokio::select! {
         r = server.run() => r.map_err(|e| anyhow::anyhow!(e))?,
+        () = sweeper => {}
         () = listeners => {}
         signal = stop_signal() => {
             log::info!("muster-daemon: {signal}; ending held waits, then stopping");
@@ -600,6 +611,9 @@ async fn serve_until_stopped(
     }
     Ok(())
 }
+
+/// How often the sweeper checks, before it starts, whether myko has caught up.
+const SWEEPER_READY_POLL: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// How long a stopping daemon gives held waits to write their replies.
 const STOP_DRAIN: std::time::Duration = std::time::Duration::from_millis(500);
