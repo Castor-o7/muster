@@ -320,6 +320,9 @@ struct Appender {
     /// Tests: the next write puts only this many bytes in, then fails.
     #[cfg(test)]
     fail_after: Option<usize>,
+    /// Tests: the next reopen after a compaction fails.
+    #[cfg(test)]
+    fail_reopen: bool,
 }
 
 struct Shared {
@@ -397,6 +400,8 @@ impl FilePersister {
                 broken: None,
                 #[cfg(test)]
                 fail_after: None,
+                #[cfg(test)]
+                fail_reopen: false,
             }),
             dirty: AtomicBool::new(false),
             compacting: AtomicBool::new(false),
@@ -497,6 +502,17 @@ impl FilePersister {
     }
 }
 
+/// Open the freshly compacted file for appends.
+fn reopen(appender: &mut Appender, path: &Path) -> io::Result<File> {
+    #[cfg(test)]
+    if std::mem::take(&mut appender.fail_reopen) {
+        return Err(io::Error::other("injected reopen failure"));
+    }
+    #[cfg(not(test))]
+    let _ = appender;
+    open_append(path)
+}
+
 /// Write one whole line, and sync it if asked. Fails rather than leave it half
 /// written, though the caller still has to cut off what a failure left behind.
 fn write_line(appender: &mut Appender, line: &[u8], sync_now: bool) -> io::Result<()> {
@@ -565,8 +581,21 @@ fn compact(shared: &Shared, between: impl FnOnce()) -> io::Result<()> {
     let tail = io::copy(&mut live, &mut out)?;
     out.sync_all()?;
     std::fs::rename(&tmp, &shared.path)?;
-    sync_dir(&shared.dir)?;
-    appender.file = open_append(&shared.path)?;
+    // From here the appender's file is the old, now unlinked one: it must be
+    // repointed, or appends must be refused. Never left writing into a deleted file.
+    let reopened = sync_dir(&shared.dir).and_then(|()| reopen(&mut appender, &shared.path));
+    match reopened {
+        Ok(file) => appender.file = file,
+        Err(e) => {
+            let why = format!(
+                "after compacting, {} couldn't be reopened ({e})",
+                shared.path.display()
+            );
+            log::error!("[store] {why}");
+            appender.broken = Some(why);
+            return Err(e);
+        }
+    }
     appender.len = folded_len + tail;
     drop(appender);
     shared.compacted_len.store(folded_len, Ordering::Relaxed);
@@ -879,6 +908,41 @@ mod tests {
                 ("Message".into(), "m1".into(), "before".into()),
                 ("Message".into(), "m3".into(), "after".into()),
             ]
+        );
+    }
+
+    /// fiery-snapper's should-fix: if the compacted file can't be reopened after the
+    /// rename, appends must be refused, not written into the old, deleted file.
+    #[test]
+    fn a_failed_reopen_after_compaction_refuses_writes_instead_of_losing_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = FilePersister::open(dir.path()).unwrap().persister;
+        p.persist(set("Message", "m1", "before")).unwrap();
+        p.shared.appender.lock().unwrap().fail_reopen = true;
+        let err = p.compact().unwrap_err();
+        assert!(err.to_string().contains("injected reopen failure"), "{err}");
+        let refused = p.persist(set("Message", "m2", "after")).unwrap_err();
+        assert!(
+            refused.message.contains("couldn't be reopened"),
+            "{}",
+            refused.message
+        );
+        assert!(
+            p.shared
+                .health
+                .last_error
+                .read()
+                .unwrap()
+                .as_deref()
+                .unwrap()
+                .contains("broken")
+        );
+        drop(p);
+        // The rename did happen, so the file on disk is the compacted one, whole.
+        let reopened = FilePersister::open(dir.path()).unwrap();
+        assert_eq!(
+            state(&reopened.folded),
+            [("Message".into(), "m1".into(), "before".into())]
         );
     }
 
