@@ -47,8 +47,25 @@ Each condition needs its own checkout and an immutable directory holding its
 
 | Condition | Source | Binary directory |
 |---|---|---|
-| baseline | Marshal `94ecc24` (v0.54.1) | already built in the watchman's scratchpad on a1; record its path here |
-| candidate | `port/hooks-2a-offer` at `62552e6` | being rebuilt from `62552e6` on a1; record its path here |
+| baseline | Marshal `94ecc24` (v0.54.1) | `zoo/bin-baseline` in the watchman's scratchpad on a1 |
+| candidate | `port/hooks-2a-offer` at `62552e6` | `zoo/bin-candidate` in the watchman's scratchpad on a1 |
+
+Built on a1 on 2026-11-05 with `cargo build --release -p marshal-daemon -p marshal-shim`.
+Their SHA-256s:
+
+| | `marshal-daemon` | `marshal-shim` |
+|---|---|---|
+| baseline `94ecc24` | `ed21bbbb467d0043f344913a392e72781ba0a5becdbc93df94ff5a752e682cfe` | `db9df092c505eb5b0222e68d2b81e15f53e9a920253589aecbf19a76c8937aec` |
+| candidate `62552e6` | `3ea5ef11cfa7478c5913d7ffcef4e057f2664be0f52859fbe4eb7b8c9ece6757` | `ff95f83e2f3787a29ebe7930f3d5566aaec34d0ab644e41e93810ddd83a65585` |
+
+**A session's scratchpad is temporary.** If the run happens in a later session,
+or the directories are gone:
+- rebuild both, from those exact commits, into new directories;
+- record the new hashes, and use those in the report. Release builds aren't
+  guaranteed to be byte-identical across toolchains, so a new hash isn't an
+  error, but it must be the one reported;
+- and check `--baseline-commit` and `--candidate-commit` still name the
+  commits built.
 
 Each one is built like this:
 
