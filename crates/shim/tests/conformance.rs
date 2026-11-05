@@ -54,6 +54,7 @@ const KNOWN_FAILURES: &[(&str, &str, &str)] = &[
     ("pi", "resume-wakes-held-mail", "MUS-82"),
     ("opencode", "dropped-ack-redelivers", "MUS-81"),
     ("opencode", "resume-wakes-held-mail", "MUS-82"),
+    ("opencode", "armed-shows-its-wake-path", "MUS-89"),
 ];
 
 /// Harnesses in the grid that have no fake yet, with the stage that adds one.
@@ -1543,15 +1544,16 @@ fn wake_none_not_expected(c: &mut Cell) -> Result<(), String> {
     Ok(())
 }
 
-/// Scenario 9: An idle session that something can wake is shown so: the roster says `waiting`
-/// and a send says `expected` (MUS-77), and it does wake. For Claude that's its waiter; for Codex,
-/// the app-server bridge, which holds no wait.
+/// Scenario 9: An idle session that something can wake is shown so, and it does wake. The roster
+/// says `waiting` for a held wait (Claude's waiter; for Codex, its app-server bridge, which holds
+/// none, MUS-77) and then a send says `expected`, or `channel` for a plugin that takes the live
+/// push. Never `none`.
 fn armed_shows_its_wake_path(c: &mut Cell) -> Result<(), String> {
     c.harness.arm_idle();
     let id = c.recipient();
     let deadline = Instant::now() + Duration::from_secs(15);
     let mut row = c.recipient_on_roster()?;
-    while row["wake"] != json!("waiting") {
+    while row["wake"] != json!("waiting") && row["wake"] != json!("channel") {
         if Instant::now() >= deadline {
             return Err(format!(
                 "the roster says wake {} for an armed idle session",
@@ -1564,9 +1566,10 @@ fn armed_shows_its_wake_path(c: &mut Cell) -> Result<(), String> {
             .row(&id, Duration::from_secs(5))
             .unwrap_or_default();
     }
+    let waiting = row["wake"] == json!("waiting");
     let t = token("armed");
     let r = c.send(&t)?;
-    if r["wake"] != json!("expected") {
+    if waiting && r["wake"] != json!("expected") {
         return Err(format!(
             "send said wake {} for a session the roster says is waiting",
             r["wake"]
@@ -1631,7 +1634,7 @@ const HARNESSES: &[Harness] = &[
         name: "opencode",
         mode: Mode::Plain,
         make: || Box::new(FakePlugin::new("muster-opencode")),
-        not_applicable: PUSH_PLUGIN_NOT_APPLICABLE,
+        not_applicable: OPENCODE_NOT_APPLICABLE,
         needs_bun: true,
     },
 ];
@@ -1645,6 +1648,17 @@ const PUSH_PLUGIN_NOT_APPLICABLE: &[(&str, &str)] = &[
     (
         "wake-none-not-expected",
         "a connected plugin renders pushes, so the roster says channel, never none",
+    ),
+];
+
+/// OpenCode's, which differ from Pi's only in why the roster can't say none: its plugin doesn't
+/// declare its channel yet, so the roster says none though it wakes by the push (MUS-89).
+const OPENCODE_NOT_APPLICABLE: &[(&str, &str)] = &[
+    PUSH_PLUGIN_NOT_APPLICABLE[0],
+    (
+        "wake-none-not-expected",
+        "it wakes by the live push; its roster row says none only because the plugin doesn't \
+         declare its channel (MUS-89), and once it does it never will",
     ),
 ];
 
