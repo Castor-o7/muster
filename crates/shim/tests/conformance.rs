@@ -496,6 +496,8 @@ trait FakeHarness {
     fn arm_idle(&mut self);
     /// What an idle session was woken with, if it was woken within `within`.
     fn wait_for_wake(&mut self, within: Duration) -> Option<String>;
+    /// Whether the armed wake path has fired yet, without consuming it.
+    fn woken_yet(&mut self) -> bool;
     /// A busy session reaches its next delivery point (a hook or a turn
     /// boundary): what was injected, if anything.
     fn busy_boundary(&mut self) -> Option<String>;
@@ -643,6 +645,12 @@ impl FakeHarness for FakeClaude {
         let _ = child.stderr.take().unwrap().read_to_string(&mut stderr);
         // asyncRewake: exit 2 starts a turn with stderr; anything else doesn't.
         (status.code() == Some(2)).then_some(stderr)
+    }
+
+    fn woken_yet(&mut self) -> bool {
+        self.waiter
+            .as_mut()
+            .is_some_and(|w| w.try_wait().ok().flatten().is_some())
     }
 
     fn busy_boundary(&mut self) -> Option<String> {
@@ -961,6 +969,10 @@ impl FakeHarness for FakeCodex {
         )
     }
 
+    fn woken_yet(&mut self) -> bool {
+        self.app().turns() > self.turns_before
+    }
+
     fn busy_boundary(&mut self) -> Option<String> {
         self.app().set_busy(true);
         self.run_hook("post-tool-use", "post-tool-use")
@@ -1084,6 +1096,7 @@ const SCENARIOS: &[(&str, Scenario)] = &[
     ("duplicate-shown-at-most-once", duplicate_shown_at_most_once),
     ("daemon-restart-mid-wait", daemon_restart_mid_wait),
     ("operator-pause-stops-wakes", operator_pause_stops_wakes),
+    ("resume-wakes-held-mail", resume_wakes_held_mail),
     ("broadcast-never-wakes", broadcast_never_wakes),
     ("wake-none-not-expected", wake_none_not_expected),
 ];
@@ -1256,6 +1269,31 @@ fn operator_pause_stops_wakes(c: &mut Cell) -> Result<(), String> {
     if !contains(&seen, &t) {
         return Err(format!(
             "the next hook didn't deliver it while paused; got {seen:?}"
+        ));
+    }
+    Ok(())
+}
+
+/// Scenario 6b: Resuming alone wakes a session whose mail arrived while wakes
+/// were paused. No new message is sent after the resume: the held, still
+/// unread mail is enough.
+fn resume_wakes_held_mail(c: &mut Cell) -> Result<(), String> {
+    c.daemon.cli(&["pause"]);
+    // The daemon reads its controls every 2 s.
+    thread::sleep(Duration::from_millis(2500));
+    c.harness.arm_idle();
+    let t = token("held");
+    c.send(&t)?;
+    // Held through a pause long enough for any wake to have fired.
+    thread::sleep(QUIET_FOR);
+    if c.harness.woken_yet() {
+        return Err("woken while paused, so resuming wasn't what woke it".into());
+    }
+    c.daemon.cli(&["resume"]);
+    let woke = c.harness.wait_for_wake(WAKE_WITHIN);
+    if !contains(&woke, &t) {
+        return Err(format!(
+            "resuming didn't wake the session with the mail held during the pause; got {woke:?}"
         ));
     }
     Ok(())
