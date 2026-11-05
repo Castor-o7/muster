@@ -426,6 +426,8 @@ Merged and needing a live run: MUS-36 and MUS-37.
 - [ ] **MUS-16: Support addresses beyond one LAN IP.** Done when: a paired laptop
   stays connected when it moves between home and a Tailscale or WireGuard network. Needs a run: the operator, who
   has the laptop.
+  Design, with options for the operator: [remote-access.md](remote-access.md) (sienna-mullet,
+  2026-11-05). It bears on MUS-56.
 - [ ] **MUS-17: Keep messages across daemon restarts without Postgres.** Check
   first whether myko allows it. Done when: an unread message survives a daemon
   restart with no Postgres configured.
