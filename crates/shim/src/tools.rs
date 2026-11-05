@@ -419,28 +419,44 @@ async fn wait_until_registered(host: &ToolHost) {
         let me = host.session.lock().unwrap().id.clone();
         crate::registered_on_roster(&host.sessions_cell.get(), &me)
     };
-    if wait_for(registered, REGISTER_RESEND_AFTER, REGISTER_POLL).await {
-        return;
-    }
-    // The registration sent on connect is fire-and-forget, and the background
-    // check only re-sends after missing the row on more than one 5 s tick. So a
-    // lost first SET (seen right after a daemon restart, MUS-78) would outlast
-    // this wait. Send it again now, once.
-    let snapshot = host.session.lock().unwrap().clone();
-    log::warn!(
-        "[muster-shim] session {} not on the roster {} s after a write began; sending it again",
-        snapshot.id.0,
-        REGISTER_RESEND_AFTER.as_secs()
-    );
-    if let Err(e) = crate::emit_session_set(&host.client, &snapshot) {
-        log::warn!("[muster-shim] re-SET before a write failed: {e}");
-    }
-    wait_for(
+    let resend = || {
+        let snapshot = host.session.lock().unwrap().clone();
+        log::warn!(
+            "[muster-shim] session {} not on the roster {} s after a write began; sending it again",
+            snapshot.id.0,
+            REGISTER_RESEND_AFTER.as_secs()
+        );
+        if let Err(e) = crate::emit_session_set(&host.client, &snapshot) {
+            log::warn!("[muster-shim] re-SET before a write failed: {e}");
+        }
+    };
+    hold_until(
         registered,
-        REGISTER_WAIT - REGISTER_RESEND_AFTER,
+        resend,
+        REGISTER_RESEND_AFTER,
+        REGISTER_WAIT,
         REGISTER_POLL,
     )
     .await;
+}
+
+/// Wait for `ready` up to `limit`, calling `resend` once if it isn't ready by
+/// `resend_after`. The registration sent on connect is fire-and-forget, and the
+/// background check only re-sends after missing the row on more than one 5 s
+/// tick, so a lost first SET (seen right after a daemon restart, MUS-78)
+/// would outlast the whole wait without this.
+async fn hold_until(
+    ready: impl Fn() -> bool,
+    resend: impl FnOnce(),
+    resend_after: std::time::Duration,
+    limit: std::time::Duration,
+    poll: std::time::Duration,
+) -> bool {
+    if wait_for(&ready, resend_after, poll).await {
+        return true;
+    }
+    resend();
+    wait_for(&ready, limit.saturating_sub(resend_after), poll).await
 }
 
 /// Poll `ready` until it's true or `limit` passes. Returns whether it became true.
@@ -1002,6 +1018,60 @@ mod tests {
         .await;
         assert!(ready);
         assert_eq!(polls.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn a_session_still_missing_after_a_while_is_sent_again_once() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        let ms = std::time::Duration::from_millis;
+        // The first SET was lost: the row only lands once the session is resent.
+        let resent = AtomicBool::new(false);
+        let resends = AtomicUsize::new(0);
+        let ready = hold_until(
+            || resent.load(Ordering::SeqCst),
+            || {
+                resends.fetch_add(1, Ordering::SeqCst);
+                resent.store(true, Ordering::SeqCst);
+            },
+            ms(50),
+            ms(2000),
+            ms(10),
+        )
+        .await;
+        assert!(ready);
+        assert_eq!(resends.load(Ordering::SeqCst), 1);
+
+        // Already registered: nothing is resent.
+        let resends = AtomicUsize::new(0);
+        let ready = hold_until(
+            || true,
+            || {
+                resends.fetch_add(1, Ordering::SeqCst);
+            },
+            ms(50),
+            ms(2000),
+            ms(10),
+        )
+        .await;
+        assert!(ready);
+        assert_eq!(resends.load(Ordering::SeqCst), 0);
+
+        // Never registered: resent once, then it gives up at the limit.
+        let resends = AtomicUsize::new(0);
+        let started = std::time::Instant::now();
+        let ready = hold_until(
+            || false,
+            || {
+                resends.fetch_add(1, Ordering::SeqCst);
+            },
+            ms(50),
+            ms(200),
+            ms(10),
+        )
+        .await;
+        assert!(!ready);
+        assert_eq!(resends.load(Ordering::SeqCst), 1);
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
     }
 
     #[tokio::test]
