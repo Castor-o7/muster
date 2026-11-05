@@ -443,35 +443,14 @@ impl Mcp {
 
     fn send(&mut self, to: &str, body: &str, key: Option<&str>) -> Result<Value, String> {
         let mut args = json!({"to": to, "body": body});
-        // Every send carries a key, so retrying the refusal below can't make a
-        // second message.
-        let key = key.map_or_else(|| uuid::Uuid::new_v4().to_string(), str::to_string);
-        args["idempotency_key"] = json!(key);
-        self.retrying_unbound(|mcp| mcp.tool("send_message", args.clone()))
-    }
-
-    /// Right after it connects, the shim's connection may not be bound to its
-    /// session yet, and the daemon refuses a send with "has no session on the
-    /// roster"; the shim re-SETs its session, so retry briefly.
-    fn retrying_unbound(
-        &mut self,
-        mut call: impl FnMut(&mut Self) -> Result<Value, String>,
-    ) -> Result<Value, String> {
-        let deadline = Instant::now() + Duration::from_secs(10);
-        loop {
-            match call(self) {
-                Err(e)
-                    if e.contains("has no session on the roster") && Instant::now() < deadline =>
-                {
-                    thread::sleep(Duration::from_millis(250));
-                }
-                other => return other,
-            }
+        if let Some(key) = key {
+            args["idempotency_key"] = json!(key);
         }
+        self.tool("send_message", args)
     }
 
     fn broadcast(&mut self, room: &str, body: &str) -> Result<Value, String> {
-        self.retrying_unbound(|mcp| mcp.tool("broadcast", json!({"to_room": room, "body": body})))
+        self.tool("broadcast", json!({"to_room": room, "body": body}))
     }
 
     fn roster(&mut self) -> Result<Value, String> {
@@ -1065,10 +1044,7 @@ impl Cell {
             )
             .unwrap();
         hook.wait().unwrap();
-        let mut mcp = Mcp::start(daemon, sender_id);
-        // Don't hand it out until its own row is on the roster.
-        let _ = mcp.row(sender_id, Duration::from_secs(15));
-        mcp
+        Mcp::start(daemon, sender_id)
     }
 
     fn recipient(&self) -> String {
