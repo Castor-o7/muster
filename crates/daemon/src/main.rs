@@ -13,6 +13,7 @@ use myko_server::postgres::PostgresConfig;
 use myko_server::{BlackholePersister, MykoServer};
 use std::{
     net::{SocketAddr, ToSocketAddrs},
+    path::PathBuf,
     sync::Arc,
 };
 
@@ -48,7 +49,125 @@ usage:
   muster-daemon pause | resume        stop or restart message wake-ups
   muster-daemon allow MACHINE         let only listed machines send (and this host)
   muster-daemon disallow MACHINE      take a machine off that list
-  muster-daemon senders [--clear]     show the list, or remove it so any machine may send";
+  muster-daemon senders [--clear]     show the list, or remove it so any machine may send
+  muster-daemon service [--tls] [--apply [--force [--drop-settings]]]
+                                      show the systemd or launchd unit that keeps this
+                                      daemon running across reboots; --apply writes it.
+                                      --force replaces a different one, backed up first,
+                                      carrying its environment and ordering over;
+                                      --drop-settings also lets go of what can't be
+                                      carried. It never starts or restarts anything";
+
+/// `muster-daemon service` (MUS-15). See `daemon::service`.
+fn service(args: &[String]) -> Result<()> {
+    use daemon::service::{self, Applied, Kind};
+    let (mut tls, mut apply, mut force, mut drop_settings) = (false, false, false, false);
+    for a in args {
+        match a.as_str() {
+            "--tls" => tls = true,
+            "--apply" => apply = true,
+            "--force" => force = true,
+            "--drop-settings" => drop_settings = true,
+            _ => anyhow::bail!("{USAGE}"),
+        }
+    }
+    if force && !apply {
+        anyhow::bail!("--force only makes sense with --apply");
+    }
+    if drop_settings && !force {
+        anyhow::bail!("--drop-settings only makes sense with --apply --force");
+    }
+    let kind = Kind::for_this_os()
+        .context("units are written for Linux (systemd) and macOS (launchd) only")?;
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .context("HOME isn't set")?;
+    let exe = std::env::current_exe()
+        .and_then(std::fs::canonicalize)
+        .context("finding this binary")?;
+    if exe.components().any(|c| c.as_os_str() == "target") {
+        eprintln!(
+            "note: {} looks like a build directory; a unit should run an installed binary \
+             (`cargo install --path crates/daemon`, then run that one's `service`)",
+            exe.display()
+        );
+    }
+    let path = kind.path(&home);
+    let fresh = service::render(kind, &exe, tls, &home.join("Library/Logs"));
+    // An existing unit's environment and ordering are carried over, so a
+    // replacement keeps its bind, Postgres URL and the rest (MUS-15).
+    let old = std::fs::read_to_string(&path).ok().filter(|o| *o != fresh);
+    let carry = old.as_deref().map(|o| service::carry(kind, &fresh, o));
+    let text = carry.as_ref().map_or(fresh.clone(), |c| c.text.clone());
+    let report = |c: &service::Carry| {
+        for l in &c.carried {
+            println!("  carried from the old unit: {l}");
+        }
+        for l in &c.dropped {
+            println!("  NOT carried (the new unit would lose it): {l}");
+        }
+        let dropins = path.with_extension("service.d");
+        if kind == Kind::Systemd && dropins.is_dir() {
+            println!(
+                "  drop-ins in {} are separate files and stay as they are",
+                dropins.display()
+            );
+        }
+    };
+    if !apply {
+        if let Some(c) = &carry {
+            println!("# {} exists and differs:", path.display());
+            report(c);
+        }
+        println!(
+            "# {} (dry run: nothing written; add --apply to write it)\n",
+            path.display()
+        );
+        print!("{text}");
+        println!("\n# then start it:");
+        for c in kind.start_commands(&path) {
+            println!("#   {c}");
+        }
+        return Ok(());
+    }
+    if let Some(c) = &carry {
+        report(c);
+        if force && !c.dropped.is_empty() && !drop_settings {
+            anyhow::bail!(
+                "{} has settings the new unit can't carry (listed above). Nothing was written. \
+                 Re-run with --drop-settings to replace it anyway; the old file is backed up \
+                 first",
+                path.display()
+            );
+        }
+    }
+    let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
+    match service::apply(&path, &text, force, &stamp)? {
+        Applied::Unchanged => println!("{} is already this unit; nothing written", path.display()),
+        Applied::Written => {
+            println!(
+                "wrote {}. Nothing was started. To start it:",
+                path.display()
+            );
+            for c in kind.start_commands(&path) {
+                println!("  {c}");
+            }
+        }
+        Applied::Replaced { backup } => {
+            println!(
+                "replaced {} (the old one is at {}). Nothing was restarted. A running daemon \
+                 keeps its old settings until it's restarted, which needs the operator's own \
+                 word:",
+                path.display(),
+                backup.display()
+            );
+            for c in kind.restart_commands(&path) {
+                println!("  {c}");
+            }
+        }
+    }
+    Ok(())
+}
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -77,6 +196,7 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
+        Some("service") => service(&args[1..]),
         Some("pairs") if args.len() == 1 => {
             let dir = daemon::credentials::state_dir()?;
             let names = daemon::credentials::token_names(&dir)?;
