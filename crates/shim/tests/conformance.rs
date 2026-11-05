@@ -54,12 +54,14 @@ const QUIET_FOR: Duration = Duration::from_secs(4);
 /// Cells expected to fail today, each with the story that fixes it. The
 /// suite reports them as known failures, and fails if one passes.
 const KNOWN_FAILURES: &[(&str, &str, &str)] = &[
-    ("pi", "dropped-ack-redelivers", "MUS-81"),
     ("pi", "resume-wakes-held-mail", "MUS-82"),
     ("opencode", "dropped-ack-redelivers", "MUS-81"),
     ("opencode", "resume-wakes-held-mail", "MUS-82"),
+    ("opencode", "mail-waiting-at-reconnect", "MUS-81"),
+    ("opencode", "hung-handover-released", "MUS-81"),
     ("prime-agent", "dropped-ack-redelivers", "MUS-81"),
     ("prime-agent", "resume-wakes-held-mail", "MUS-82"),
+    ("prime-agent", "hung-handover-released", "MUS-81"),
     ("pi", "daemon-restart-mid-wait-pg", "MUS-90"),
     ("opencode", "daemon-restart-mid-wait-pg", "MUS-90"),
     ("prime-agent", "daemon-restart-mid-wait-pg", "MUS-90"),
@@ -532,6 +534,20 @@ trait FakeHarness {
     /// Whether the harness's MCP shim attaches to the session's roster row
     /// (Claude's does; Codex's registers no session, `MUSTER_HARNESS=codex`).
     fn mcp_attaches(&self) -> bool;
+    /// Cut the harness's daemon connection, or restore it, and say whether
+    /// it's open afterwards. Only a push plugin runs the scenarios that call it.
+    fn set_online(&mut self, _on: bool) -> bool {
+        unreachable!("only a push plugin cuts its connection")
+    }
+    /// Make the harness's API hang taking a push, or let the hung ones go
+    /// (they're taken after all). Only a push plugin runs it.
+    fn hang_handovers(&mut self, _on: bool) {
+        unreachable!("only a push plugin hangs a handover")
+    }
+    /// How many handovers have hung so far.
+    fn handovers_hung(&mut self) -> usize {
+        unreachable!("only a push plugin hangs a handover")
+    }
 }
 
 /// Claude Code, as `plugins/muster-shim/hooks/hooks.json` wires it: the
@@ -1114,6 +1130,8 @@ impl FakeHarness for FakePlugin {
             .env("MUSTER_DAEMON_ADDRESS", daemon.ws_address())
             .env("MUSTER_HOST", "conformance")
             .env("MUSTER_OPERATOR", "conformance")
+            // The plugin's hold on a push lapses after the same lease (MUS-81).
+            .env("MUSTER_ACK_LEASE_SECS", ACK_LEASE_SECS.to_string())
             .env("HOME", daemon.dir.path().join("home"))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -1180,6 +1198,20 @@ impl FakeHarness for FakePlugin {
 
     fn mcp_attaches(&self) -> bool {
         false
+    }
+
+    fn set_online(&mut self, on: bool) -> bool {
+        self.call(json!({"cmd": "set_online", "on": on}))["open"] == json!(true)
+    }
+
+    fn hang_handovers(&mut self, on: bool) {
+        self.call(json!({"cmd": "hang_deliveries", "on": on}));
+    }
+
+    fn handovers_hung(&mut self) -> usize {
+        self.call(json!({"cmd": "hung"}))["hung"]
+            .as_u64()
+            .unwrap_or(0) as usize
     }
 }
 
@@ -1295,6 +1327,8 @@ const SCENARIOS: &[(&str, Scenario)] = &[
     ("resume-wakes-held-mail", resume_wakes_held_mail),
     ("broadcast-never-wakes", broadcast_never_wakes),
     ("wake-none-not-expected", wake_none_not_expected),
+    ("mail-waiting-at-reconnect", mail_waiting_at_reconnect),
+    ("hung-handover-released", hung_handover_released),
 ];
 
 /// Scenario 1: An idle session wakes on a direct message.
@@ -1606,26 +1640,112 @@ struct Harness {
     needs_bun: bool,
 }
 
+/// Scenario 9 (MUS-81, upstream #134's case): Mail that waited out a
+/// dropped connection is shown once, at the next turn, and a push after the
+/// reconnect doesn't take it with it. While the plugin is offline the daemon
+/// can't push, so the message stays unread. Then a second message is pushed
+/// live: a plugin that drains the inbox after a push would ack the first one
+/// there without showing it.
+fn mail_waiting_at_reconnect(c: &mut Cell) -> Result<(), String> {
+    c.recipient_on_roster()?;
+    let to = c.recipient();
+    if c.harness.set_online(false) {
+        return Err("the plugin's connection never dropped, so the scenario didn't run".into());
+    }
+    let waiting = token("waiting");
+    let sent = c.sender.send(&to, &waiting, None)?;
+    if sent["live_push"] == json!("delivered") {
+        return Err(format!(
+            "pushed while the plugin was offline, so the scenario didn't run: {sent}"
+        ));
+    }
+    if !c.harness.set_online(true) {
+        return Err("the plugin never reconnected".into());
+    }
+    let pushed = token("pushed");
+    let sent = c.sender.send(&to, &pushed, None)?;
+    if sent["live_push"] != json!("delivered") {
+        return Err(format!(
+            "the message after the reconnect wasn't pushed, so the scenario didn't run: {sent}"
+        ));
+    }
+    let seen = c.harness.busy_boundary().unwrap_or_default();
+    for (what, t) in [("the mail that waited", &waiting), ("the push", &pushed)] {
+        let n = seen.matches(t.as_str()).count();
+        if n != 1 {
+            return Err(format!(
+                "{what} was shown {n} times at the next turn, not once; got {seen:?}"
+            ));
+        }
+    }
+    thread::sleep(Duration::from_secs(ACK_LEASE_SECS + 1));
+    let again = c.harness.busy_boundary();
+    if contains(&again, &waiting) || contains(&again, &pushed) {
+        return Err(format!("shown again at the turn after; got {again:?}"));
+    }
+    Ok(())
+}
+
+/// Scenario 10 (MUS-81): A push whose handover hangs isn't lost behind it.
+/// The harness's API never resolves taking the push. While the plugin holds
+/// it, a turn's pull doesn't show it too; once the hold's lease lapses, the
+/// next turn shows it. When the hung handover finally goes through, the
+/// harness has it a second time (the design's accepted duplicate), but no
+/// later pull shows it again.
+fn hung_handover_released(c: &mut Cell) -> Result<(), String> {
+    c.harness.hang_handovers(true);
+    let t = token("hung");
+    c.send(&t)?;
+    let deadline = Instant::now() + WAKE_WITHIN;
+    while c.harness.handovers_hung() == 0 {
+        if Instant::now() >= deadline {
+            return Err("no handover hung, so the scenario didn't run".into());
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    let early = c.harness.busy_boundary();
+    if contains(&early, &t) {
+        return Err(format!(
+            "a pull showed it while its push was still being handed over; got {early:?}"
+        ));
+    }
+    thread::sleep(Duration::from_secs(ACK_LEASE_SECS + 1));
+    let late = c.harness.busy_boundary();
+    if !contains(&late, &t) {
+        return Err(format!(
+            "not shown once the hung handover's hold lapsed (message lost); got {late:?}"
+        ));
+    }
+    c.harness.hang_handovers(false);
+    // The late handover goes through now, and may show it a second time.
+    let _late_handover = c.harness.busy_boundary();
+    thread::sleep(Duration::from_secs(ACK_LEASE_SECS + 1));
+    if contains(&c.harness.busy_boundary(), &t) {
+        return Err("a later pull showed it again after it was acked".into());
+    }
+    Ok(())
+}
+
 const HARNESSES: &[Harness] = &[
     Harness {
         name: "claude",
         mode: Mode::Plain,
         make: || Box::new(FakeClaude::new()),
-        not_applicable: &[],
+        not_applicable: HOOK_HARNESS_NOT_APPLICABLE,
         needs_bun: false,
     },
     Harness {
         name: "claude-tls",
         mode: Mode::Tls,
         make: || Box::new(FakeClaude::new()),
-        not_applicable: &[],
+        not_applicable: HOOK_HARNESS_NOT_APPLICABLE,
         needs_bun: false,
     },
     Harness {
         name: "codex",
         mode: Mode::Plain,
         make: || Box::new(FakeCodex::new()),
-        not_applicable: &[],
+        not_applicable: HOOK_HARNESS_NOT_APPLICABLE,
         needs_bun: false,
     },
     Harness {
@@ -1649,6 +1769,19 @@ const HARNESSES: &[Harness] = &[
         not_applicable: PUSH_PLUGIN_NOT_APPLICABLE,
         needs_bun: true,
     },
+];
+
+/// Scenarios that don't apply to a harness delivered by hooks, with no live
+/// push to the session.
+const HOOK_HARNESS_NOT_APPLICABLE: &[(&str, &str)] = &[
+    (
+        "mail-waiting-at-reconnect",
+        "no live push: mail waits for the next hook, which pulls it",
+    ),
+    (
+        "hung-handover-released",
+        "no live push to hand over: the hook prints the inbox and then acks",
+    ),
 ];
 
 /// Scenarios that don't apply to a plugin that takes the live push.

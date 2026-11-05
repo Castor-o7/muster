@@ -42,6 +42,11 @@ checked as well as what the recipient sees.
 | 6b | `resume-wakes-held-mail` | Mail sent while wakes are paused doesn't wake the session, and resuming alone wakes it with that mail, with no new message. |
 | 7 | `broadcast-never-wakes` | A room broadcast neither wakes the session nor is injected. |
 | 8 | `wake-none-not-expected` | A session the roster calls `wake: none` isn't reported to the sender as `wake: expected`. |
+| 9 | `mail-waiting-at-reconnect` | Mail sent while a push plugin's connection is down is shown once at the next turn after it reconnects, and not again after that, even when another message is pushed live first. A plugin that drains the inbox after a push acks the waiting mail there without showing it (upstream #133). |
+| 10 | `hung-handover-released` | When the harness's API hangs taking a push, a turn's pull doesn't show the message while the plugin holds it, the next turn shows it once the hold's lease lapses, and no pull shows it again after the hung handover goes through. That late handover can show it a second time, which the design accepts ([push-ack-design.md](push-ack-design.md)). |
+
+Scenarios 9 and 10 are about a live push, so they're `n/a` for the hook
+harnesses (Claude and Codex).
 
 Some cells fail today. Each is listed in `KNOWN_FAILURES` against the story
 that fixes it, and shows as `known (MUS-nn)` in the grid. If one starts
@@ -49,7 +54,9 @@ passing, the suite fails until it's taken off the list.
 
 | Cells | Story | What fails |
 |---|---|---|
-| `pi`, `opencode`, `prime-agent` × 3 | MUS-81 | A pushed message is marked read when the push reaches the plugin's connection. If the harness then loses it, the next turn's inbox drain finds nothing unread, and the message is gone: the push-side twin of MUS-75. |
+| `opencode`, `prime-agent` × 3 | MUS-81 | A pushed message is marked read when the push reaches the plugin's connection. If the harness then loses it, the next turn's inbox drain finds nothing unread, and the message is gone: the push-side twin of MUS-75. Pi acks its own pushes and passes. |
+| `opencode` × 9 | MUS-81 | The plugin drains the inbox after a live push, which acks the mail that waited out the drop without showing it. |
+| `opencode`, `prime-agent` × 10 | MUS-81 | The push is marked read before the harness takes it, so a handover that never resolves loses it. |
 | `pi`, `opencode`, `prime-agent` × 6b | MUS-82 | While wakes are paused, the push is skipped and the mail stays unread, but resuming pushes nothing again, so a push session isn't woken until its next turn. |
 | `pi`, `opencode`, `prime-agent` × 5 (pg) | MUS-90 | After a restart with Postgres, mail sent after it doesn't wake the plugin. Unproven: its surviving Session row stays bound to the old connection. |
 
@@ -134,6 +141,12 @@ the suite can't check:
 - **A lost delivery** means `pi.sendMessage` rejects after the extension has
   received the push, as when pi fails to take the message. That's where the
   fake loses the ack in scenario 3.
+- **A hung handover** (scenario 10) means `pi.sendMessage` doesn't resolve
+  until the suite lets it go, and then pi takes the message after all.
+- **A dropped connection** (scenario 9) is the extension's WebSocket closing.
+  The driver wraps `WebSocket` before it loads the extension, closes the open
+  socket, and points new ones at a closed port until the suite restores it.
+  myko reconnects on its own, as it does after a real drop.
 
 Two scenarios are `n/a` for Pi. A plugin has no prompt hooks, so a hook reply
 can't be lost (3b). And a connected plugin renders pushes, so its roster row
@@ -161,7 +174,7 @@ check:
 - **The `event` hook gets `session.created` and `session.idle`** with the
   session id where `eventSessionId` looks for it.
 - **A lost delivery** means `session.prompt` rejects after the plugin has
-  received the push.
+  received the push. A hung handover and a dropped connection work as for Pi.
 
 Scenarios 3b and 8 are `n/a`, as for Pi.
 
@@ -192,8 +205,8 @@ These are listed so nobody reads the grid as more than it is.
   set `MUSTER_BUN`, and run `npm ci --workspaces=false` in the plugin's
   directory. Without bun the plugin cells read `no bun`, and CI fails them
   (`CONFORMANCE_REQUIRE_BUN`).
-- **The plugins' own `bun test` suites don't run in CI yet.** Only their
-  conformance drivers do.
+- **Only the pi plugin's own `bun test` suite runs in CI.** opencode's and
+  Prime Agent's don't yet; their conformance drivers do.
 - **The fixtures are constructed, not recorded.** The Claude fixtures follow
   Claude Code's documented hook input. The Codex fixtures follow the frames the
   bridge's own tests use, because Codex isn't installed where they were

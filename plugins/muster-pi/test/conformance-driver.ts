@@ -17,10 +17,28 @@
 //   {"cmd":"busy_boundary"}              → {"text":string|null}
 //   {"cmd":"lose_deliveries","on":bool}  → {"lost":n}
 //   {"cmd":"lost"}                       → {"lost":n}
+//   {"cmd":"hang_deliveries","on":bool}  → {"hung":n}
+//   {"cmd":"hung"}                       → {"hung":n}
+//   {"cmd":"set_online","on":bool}       → {"open":bool}
 
 import { createHash } from "node:crypto";
 
-import extension from "../src/index.ts";
+// The extension's daemon connection goes through this, so the suite can cut
+// it and restore it (`set_online`). Installed before the extension loads.
+let online = true;
+const sockets = new Set<WebSocket>();
+const RealWebSocket = globalThis.WebSocket;
+class GatedWebSocket extends RealWebSocket {
+  constructor(url: string | URL, protocols?: string | string[]) {
+    // Offline, connect somewhere that refuses, so myko keeps retrying.
+    super(online ? url : "ws://127.0.0.1:9", protocols);
+    sockets.add(this);
+    this.addEventListener("close", () => sockets.delete(this));
+  }
+}
+globalThis.WebSocket = GatedWebSocket as typeof WebSocket;
+
+const { default: extension } = await import("../src/index.ts");
 
 const REPLY = "@@conformance ";
 
@@ -34,6 +52,10 @@ let wokeWith: string | null = null;
 let steered: string[] = [];
 let loseDeliveries = false;
 let lost = 0;
+// A hung handover: pi.sendMessage never resolves until the suite lets it go.
+let hangDeliveries = false;
+let hung = 0;
+const hungResolvers: Array<() => void> = [];
 
 const pi = {
   on(name: string, handler: Handler) {
@@ -54,6 +76,13 @@ const pi = {
       throw new Error("conformance: delivery lost");
     }
     const text = String(message.content ?? "");
+    if (hangDeliveries) {
+      // pi hangs taking it. When it's let go, pi takes it after all.
+      hung++;
+      await new Promise<void>((resolve) => hungResolvers.push(resolve));
+      steered.push(text);
+      return;
+    }
     if (idle && options?.triggerTurn) {
       idle = false;
       wokeWith = text;
@@ -129,6 +158,24 @@ async function handle(cmd: Record<string, unknown>): Promise<unknown> {
       return { lost };
     case "lost":
       return { lost };
+    case "hang_deliveries":
+      hangDeliveries = Boolean(cmd.on);
+      if (!hangDeliveries) for (const resolve of hungResolvers.splice(0)) resolve();
+      return { hung };
+    case "hung":
+      return { hung };
+    case "set_online": {
+      // Replies once the connection is down, or back up (open: whether a
+      // socket is open), so the suite knows where it stands.
+      online = Boolean(cmd.on);
+      if (!online) for (const ws of sockets) ws.close();
+      const isOpen = () => [...sockets].some((ws) => ws.readyState === WebSocket.OPEN);
+      const deadline = Date.now() + 10_000;
+      while (isOpen() !== online && Date.now() < deadline) await sleep(50);
+      // Back up, give the extension a moment to SET its row again.
+      if (online) await sleep(500);
+      return { open: isOpen() };
+    }
     default:
       return { error: `unknown command ${String(cmd.cmd)}` };
   }
