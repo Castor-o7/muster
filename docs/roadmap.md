@@ -14,7 +14,7 @@ evidence from a real run by the person or team named.
 
 ## Status
 
-2026-11-05: 43 of 84 stories ticked, about 51%, not counting the 3 moved to Rally. Live on
+2026-11-05: 43 of 85 stories ticked, about 51%, not counting the 3 moved to Rally. Live on
 Murph since 2026-11-05 08:48: `edf5ea8` (PID 3759037), applied by the operator with
 `MUSTER_TLS=1` and checked by checksum. Besides everything before, it brings MUS-8, MUS-9,
 MUS-10, MUS-60, MUS-11's rustls and tokio updates, MUS-62 (upstream v0.54.1), MUS-64 (the
@@ -625,6 +625,15 @@ Rally.
   session, and the bridge writes no `WakeWatcher`. Done when: the bridge refreshes a
   `WakeWatcher` for each thread it can wake, so the roster says `waiting` and a send says
   `expected` for it, and stops when it can't (paused per MUS-74, or the app-server is gone).
+- [ ] **MUS-94: Keep one wake path's end from clearing another's.** From the watchman's read of
+  #125 (MUS-77) on 2026-11-05. A session has one `WakeWatcher` row, keyed by its session id, and
+  `end_wait` deletes that row whoever calls it. So a stale Codex wake leader's `watching:false`
+  after a handoff clears the record the new leader just wrote, and the roster reads `none`
+  until the new leader's next refresh, up to 30 s. A bridge's `watching:false` can likewise
+  clear a record that a `/hook/wait` waiter holds for the same session. Done when: each wake
+  path keeps its own record, so ending one leaves the others, and the roster reads `waiting`
+  while any is live. Tests show that a stale leader's unwatch after a handoff leaves the new
+  leader's record, and that a bridge's `watching:false` leaves a held wait's record. Depends on MUS-77.
 - [ ] **MUS-74: The Codex bridge ignores the operator's pause.** From MUS-69. `muster-daemon
   pause` stops Claude's waiter (`/hook/wait` hands out nothing) and the live push, but
   `codex_bridge.rs` sends `turn/start` for any unread direct message without checking it, so a
