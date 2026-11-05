@@ -79,6 +79,8 @@ impl Console {
             project: Some("muster".to_string()),
             channels_enabled: Some(false),
             acks_pushes: None,
+            harness: None,
+            identity: None,
         }
     }
 

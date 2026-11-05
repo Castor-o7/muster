@@ -105,6 +105,25 @@ MUS-56 narrows the firewall to listed machines.
 - **Claimed fields.** A session through the local gate keeps the host name it
   claims, which the per-machine message limit and the sender allowlist trust.
   Both need the local token, so this is part of the first gap.
+- **Roles are claims, and a nickname follows its identity (MUS-3).** A session
+  can declare a role with `MUSTER_IDENTITY` (`watchman`, say), and mail to that
+  name reaches it. Nothing attests the claim: on a machine where every session
+  shares one credential, as on a1, any session there can declare any role. So
+  the roster shows a role as declared, and a role is never handed to a new
+  session while any session holding it is live. The same goes for the
+  inferred identity: a new session in a dead session's working directory takes
+  over its nickname and its mail. Keys include the attested machine and
+  operator, so a paired machine can only take over its own sessions'
+  nicknames. Role *addressing* is wider: a send to a role name reaches the
+  one session claiming it, on any machine, so a session on a paired machine
+  that declares `watchman` takes mail addressed to `watchman` (and two claims
+  make the send fail as ambiguous). Nobody addresses a role yet; address the
+  watchman by nickname until roles are attested. A wrong
+  takeover hands mail to the wrong session, so "dead" is strict (an observed
+  client drop with no hook since, or a removal this daemon saw), Codex rows on
+  the roster never count as dead until MUS-77, and every takeover leaves a
+  `Succession` record saying why. The record is the daemon's to write; the
+  gate refuses a client's events on it. Same caveat as Rally's RAL-53.
 - **myko is patched locally** (`vendor/myko-server`, MUS-59) until upstream has
   an equivalent hook; the request to myko's maintainers is pending.
 - **Dependencies.** CI runs `cargo deny` (MUS-11, `deny.toml`). Its ignored
