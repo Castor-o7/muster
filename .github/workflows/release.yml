@@ -16,6 +16,10 @@ on:
 permissions:
   contents: read
 
+# Every action is pinned to a full commit SHA (version in the comment), so a moved tag can't change
+# what builds a release, and the build restores no cache, so a poisoned cache entry can't reach a
+# shipped binary. Releases are rare; the cold build's extra minutes don't matter.
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -28,7 +32,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-latest # Apple silicon
+          - os: macos-15 # Apple silicon, pinned so the image doesn't drift under a release
             target: aarch64-apple-darwin
           # The oldest supported Ubuntu image, so the binaries need the oldest glibc we can give
           # them (2.35). They link OpenSSL 3 (native-tls) dynamically: Ubuntu 22.04+, Debian 12+,
@@ -36,17 +40,16 @@ jobs:
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install build dependencies (Linux)
         if: runner.os == 'Linux'
         timeout-minutes: 8
         run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config libssl-dev
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch, 2026-10-16
         with:
+          # Pinned to a SHA, the action can't read the toolchain from its ref, so name it.
+          toolchain: stable
           targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: release-${{ matrix.target }}
       - name: Build
         run: cargo build --release --locked --target ${{ matrix.target }} -p muster-shim -p muster-daemon
       - name: Name the binaries for the release
@@ -59,6 +62,8 @@ jobs:
       # Neither binary has --version; both answer an unknown flag with an error or their usage.
       # Getting that text back shows the binary loads its libraries and runs on this runner.
       - name: Smoke test
+        # In case a binary ever ignores the unknown flag and keeps running.
+        timeout-minutes: 2
         run: |
           for bin in muster-shim muster-daemon; do
             out=$("./dist/$bin-${{ matrix.target }}" --release-smoke-test 2>&1 || true)
@@ -66,7 +71,7 @@ jobs:
             echo "$out" | grep -qiE "usage|unknown argument" || { echo "::error::$bin didn't run"; exit 1; }
           done
           file dist/*
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: bin-${{ matrix.target }}
           path: dist/*
@@ -78,8 +83,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: bin-*
           path: dist
@@ -98,7 +103,7 @@ jobs:
               grep -q " $bin-$target\$" SHA256SUMS || { echo "::error::missing $bin-$target"; exit 1; }
             done
           done
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: muster-release
           path: dist/*
@@ -112,7 +117,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: muster-release
           path: dist
