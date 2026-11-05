@@ -454,7 +454,7 @@ Rally.
   `MUSTER_TLS=0` says so; the gate e2e covers both modes. **Murph's unit needs
   `Environment=MUSTER_TLS=1` before the restart that brings this in**, or the daemon refuses to
   start and the rollout rolls back.
-- [ ] **MUS-69: Retire the 6257 alias.** From MUS-64. With TLS on, the daemon still binds the
+- [ ] **MUS-70: Retire the 6257 alias.** From MUS-64. With TLS on, the daemon still binds the
   old local-gate port (`MUSTER_INTERNAL_BIND`, 6257) so sessions configured for it survive one
   restart. Done when: no machine's config names 6257 (a1's and Murph's `.mcp.json`, the TUI,
   the TS plugins), and the alias, its variable and its rollout check are removed. The upstream
