@@ -10,13 +10,29 @@
 //
 // The protocol is muster-pi's (see its conformance-driver.ts): one JSON
 // command per stdin line, one reply per command on stdout, prefixed with
-// REPLY so the plugin's own output can't be mistaken for it.
+// REPLY so the plugin's own output can't be mistaken for it. That includes
+// `hang_deliveries`, `hung` and `set_online` (MUS-81).
 
 import { randomUUID } from "node:crypto";
 
 import { $ } from "bun";
 
-import { MusterPlugin } from "../src/index.ts";
+// The plugin's daemon connection goes through this, so the suite can cut it
+// and restore it (`set_online`). Installed before the plugin loads.
+let online = true;
+const sockets = new Set<WebSocket>();
+const RealWebSocket = globalThis.WebSocket;
+class GatedWebSocket extends RealWebSocket {
+  constructor(url: string | URL, protocols?: string | string[]) {
+    // Offline, connect somewhere that refuses, so myko keeps retrying.
+    super(online ? url : "ws://127.0.0.1:9", protocols);
+    sockets.add(this);
+    this.addEventListener("close", () => sockets.delete(this));
+  }
+}
+globalThis.WebSocket = GatedWebSocket as typeof WebSocket;
+
+const { MusterPlugin } = await import("../src/index.ts");
 
 const REPLY = "@@conformance ";
 
@@ -27,6 +43,10 @@ let wokeWith: string | null = null;
 let queued: string[] = [];
 let loseDeliveries = false;
 let lost = 0;
+// A hung handover: session.prompt never resolves until the suite lets it go.
+let hangDeliveries = false;
+let hung = 0;
+const hungResolvers: Array<() => void> = [];
 
 const client = {
   app: { log: async (_: unknown) => ({}) },
@@ -40,6 +60,13 @@ const client = {
         throw new Error("conformance: delivery lost");
       }
       const text = req.body.parts.map((p) => p.text ?? "").join("");
+      if (hangDeliveries) {
+        // opencode hangs taking it. When it's let go, it takes it after all.
+        hung++;
+        await new Promise<void>((resolve) => hungResolvers.push(resolve));
+        queued.push(text);
+        return {};
+      }
       if (idle) {
         idle = false;
         wokeWith = text;
@@ -118,6 +145,21 @@ async function handle(cmd: Record<string, unknown>): Promise<unknown> {
       return { lost };
     case "lost":
       return { lost };
+    case "hang_deliveries":
+      hangDeliveries = Boolean(cmd.on);
+      if (!hangDeliveries) for (const resolve of hungResolvers.splice(0)) resolve();
+      return { hung };
+    case "hung":
+      return { hung };
+    case "set_online": {
+      online = Boolean(cmd.on);
+      if (!online) for (const ws of sockets) ws.close();
+      const isOpen = () => [...sockets].some((ws) => ws.readyState === WebSocket.OPEN);
+      const deadline = Date.now() + 10_000;
+      while (isOpen() !== online && Date.now() < deadline) await sleep(50);
+      if (online) await sleep(500);
+      return { open: isOpen() };
+    }
     default:
       return { error: `unknown command ${String(cmd.cmd)}` };
   }
