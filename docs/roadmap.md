@@ -134,6 +134,9 @@ Merged and needing a live run: MUS-36 and MUS-37.
 - [ ] **MUS-47: Hand unread mail to a successor.** From MUS-31. Retained mail reaches
   nobody without this. Depends on MUS-3. Done when: a session taking over an identity
   receives its predecessor's unread mail, shown by a test.
+  Built on MUS-3; not yet run live. At a takeover the predecessor's unread direct mail is
+  readdressed to the successor and listed on the `Succession` record. The conformance cell
+  `unread-mail-follows-a-restart` (claude, claude-tls, codex) shows it once and not again.
 - [x] **MUS-48: Tell a sender about mail unread at reap.** From MUS-31. Done when: a
   sender can see that a message went unread when its recipient was reaped.
 - [x] **MUS-49: Report what a restart will remove.** From MUS-31: one restart is now

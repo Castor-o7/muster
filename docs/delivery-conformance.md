@@ -45,9 +45,10 @@ checked as well as what the recipient sees.
 
 | 11 | `restart-keeps-identity` | A session that ends as its TUI ends it, followed by a new session in the same working directory, hands the new one its nickname (MUS-3). Mail to the old nickname and the old id reaches the new one. If the new one first got a fresh nickname, mail to that still reaches it, and its next hook says its name changed. |
 | 12 | `live-sibling-keeps-its-name` | A second session in the same working directory, started while the first is live and idle past the quiet time, gets a nickname of its own, and the first keeps its own. For Codex the first is a hook-owned row with no client, which mustn't be taken over until MUS-77. |
+| 13 | `unread-mail-follows-a-restart` | Mail sent to a session while no hook runs, so it's still unread when the session ends, is shown once by the session that takes over its nickname, and not at the hook after (MUS-47). |
 
 Scenarios 9 and 10 are about a live push, so they're `n/a` for the hook
-harnesses (Claude and Codex). Scenarios 11 and 12 are `n/a` for the plugins,
+harnesses (Claude and Codex). Scenarios 11 to 13 are `n/a` for the plugins,
 which don't report a harness yet. The suite's daemon runs with a 1 s
 succession grace and a 2 s quiet time.
 
