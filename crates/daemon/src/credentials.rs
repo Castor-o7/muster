@@ -81,6 +81,25 @@ pub fn load_or_create_identity(dir: &Path) -> io::Result<Identity> {
 }
 
 /// A token's name is what `unpair` and the logs refer to.
+/// The prefix a link's token name carries in `tokens` and `invites` (MUS-66).
+/// `valid_name` refuses `:`, so no machine can be named like a link.
+pub const LINK_PREFIX: &str = "link:";
+
+/// `tokens`' name for the link `name`.
+pub fn link_token_name(name: &str) -> String {
+    format!("{LINK_PREFIX}{name}")
+}
+
+/// Whether a token name from `verify_token` is a link's, and which.
+pub fn as_link(token_name: &str) -> Option<&str> {
+    token_name.strip_prefix(LINK_PREFIX)
+}
+
+/// A name `tokens` may hold: a valid machine name, or `link:` and one.
+fn valid_token_name(name: &str) -> bool {
+    valid_name(as_link(name).unwrap_or(name))
+}
+
 pub fn valid_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 64
@@ -91,7 +110,7 @@ pub fn valid_name(name: &str) -> bool {
 
 /// Mint a token for `name`, replacing any earlier one, and return it.
 pub fn add_token(dir: &Path, name: &str) -> io::Result<String> {
-    if !valid_name(name) {
+    if !valid_token_name(name) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "names are 1-64 characters of letters, digits, '-', '_' or '.'",
@@ -116,7 +135,7 @@ pub fn add_token(dir: &Path, name: &str) -> io::Result<String> {
 /// secret, which `redeem_invite` exchanges for a token once. A new invite for
 /// the same name replaces any outstanding one.
 pub fn add_invite(dir: &Path, name: &str, ttl: std::time::Duration) -> io::Result<String> {
-    if !valid_name(name) {
+    if !valid_token_name(name) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "names are 1-64 characters of letters, digits, '-', '_' or '.'",
@@ -274,6 +293,15 @@ fn write_tokens(dir: &Path, entries: &[(String, String)]) -> io::Result<()> {
     let tmp = dir.join(format!("{TOKENS_FILE}.tmp"));
     write_private(&tmp, text.as_bytes())?;
     std::fs::rename(tmp, dir.join(TOKENS_FILE))
+}
+
+/// Write `dir/name` owner-only, through a sibling and a rename, so a reader
+/// never sees half a file.
+pub fn write_private_file(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let tmp = dir.join(format!("{name}.tmp"));
+    write_private(&tmp, bytes)?;
+    std::fs::rename(tmp, dir.join(name))
 }
 
 fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {

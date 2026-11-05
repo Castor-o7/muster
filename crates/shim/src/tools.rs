@@ -53,6 +53,8 @@ pub struct ToolHost {
     pub wake_watchers_cell: Cell<Vec<Arc<muster_entities::WakeWatcher>>, CellImmutable>,
     /// Whether the operator has paused wake-ups (MUS-10).
     pub wake_pause_cell: Cell<Vec<Arc<muster_entities::WakePause>>, CellImmutable>,
+    /// Sessions on linked daemons (MUS-66), listed after local ones.
+    pub remote_sessions_cell: Cell<Vec<Arc<muster_entities::RemoteSession>>, CellImmutable>,
 }
 
 /// The daemon-assigned handle for `session_id`, read from the SessionNickname
@@ -272,10 +274,33 @@ fn read_roster(host: &ToolHost, uri: &str) -> ResourceContent {
         .collect();
     // While true, no message wakes any session, whatever its `wake` says (MUS-10).
     let wakes_paused = host.wake_pause_cell.get().iter().any(|p| p.paused);
-    json_resource(
-        uri,
-        json!({ "wakes_paused": wakes_paused, "sessions": view }),
-    )
+    // Address one as `address` (`nickname@link`); a bare name prefers local.
+    let remote: Vec<Value> = host
+        .remote_sessions_cell
+        .get()
+        .iter()
+        .map(|r| {
+            json!({
+                "address": r.address(),
+                "session_id": r.session_id,
+                "nickname": r.nickname,
+                "via": r.link,
+                "link_up": r.link_up,
+                "host": r.host,
+                "operator": r.operator,
+                "project": r.project,
+                "current_task": r.current_task,
+                "activity": r.activity,
+                "wake": r.wake,
+                "last_activity_at": r.last_activity_at,
+            })
+        })
+        .collect();
+    let mut body = json!({ "wakes_paused": wakes_paused, "sessions": view });
+    if !remote.is_empty() {
+        body["remote_sessions"] = Value::Array(remote);
+    }
+    json_resource(uri, body)
 }
 
 fn read_rooms(host: &ToolHost, uri: &str) -> ResourceContent {
@@ -485,7 +510,7 @@ fn send_message_output(result: &SendMessageResult) -> Value {
     // returns, so `wake=unobserved` is an observation boundary, not a failure.
     let live_push = result.effective_live_push();
     let wake = result.effective_wake();
-    json!({
+    let mut out = json!({
         "message_id": result.message_id.0.as_ref(),
         "to_session_id": result.to_session_id.0.as_ref(),
         "sent_at": result.sent_at,
@@ -497,7 +522,15 @@ fn send_message_output(result: &SendMessageResult) -> Value {
         "delivered": true,
         "delivery": if result.delivered_live { "live" } else { "inbox" },
         "delivered_live": result.delivered_live,
-    })
+    });
+    // A recipient on a linked daemon (MUS-66): the message waits in this
+    // daemon's outbox for the link; `link_up` false means it's queued.
+    if let Some(link) = &result.via_link {
+        out["delivery"] = json!("remote");
+        out["via_link"] = json!(link);
+        out["link_up"] = json!(result.link_up.unwrap_or(false));
+    }
+    out
 }
 
 async fn broadcast(host: &ToolHost, args: &Value) -> Result<ToolOutcome, ToolError> {
@@ -994,6 +1027,8 @@ mod tests {
             live_push,
             wake,
             delivered_live,
+            via_link: None,
+            link_up: None,
         }
     }
 

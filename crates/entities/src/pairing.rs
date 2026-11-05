@@ -34,6 +34,10 @@ pub struct Invite {
     pub invite: String,
     /// The name this machine will be paired under.
     pub name: String,
+    /// Set on an invite to link two daemons (MUS-66): the inviting daemon's
+    /// own name, which labels its sessions on the daemon that redeems it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<String>,
 }
 
 /// Either kind of code `muster-shim pair` accepts.
@@ -359,6 +363,7 @@ mod tests {
             fingerprint: "AB".repeat(32),
             invite: "one-time".into(),
             name: "a1".into(),
+            link: None,
         };
         let code = invite.to_code();
         assert!(code.starts_with("muster-pair:v2:"));

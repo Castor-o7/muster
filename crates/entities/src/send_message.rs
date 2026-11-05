@@ -93,6 +93,13 @@ pub struct SendMessageResult {
     /// the synchronous channel push; it does not describe asynchronous wake.
     #[serde(default)]
     pub delivered_live: bool,
+    /// Set when the recipient is on a linked daemon (MUS-66): the message waits
+    /// in this daemon's outbox for that link, and `link_up` says whether the
+    /// link is up now. Absent for local recipients.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub via_link: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link_up: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -178,8 +185,23 @@ impl CommandHandler for SendMessage {
         // policy — resolution used to live only in the shim, so plugin/HTTP
         // callers could address by exact id alone. Accepts id / nickname /
         // operator (human-via-agent) / id-prefix; see `resolve_recipient`.
-        let (recipient, to_operator) =
-            resolve_recipient(&ctx, &sessions, self.to_session_id.0.as_ref())?;
+        let token = self.to_session_id.0.clone();
+        // `nickname@link` names a session on a linked daemon (MUS-66).
+        if let Some(remote) = resolve_remote(&ctx, &token, true)? {
+            return self.send_remote(&ctx, &sender, &remote);
+        }
+        let (recipient, to_operator) = match resolve_recipient(&ctx, &sessions, &token) {
+            Ok(found) => found,
+            // A bare name prefers local; only when nothing local matches is a
+            // linked daemon's session tried.
+            Err(e) if e.message.starts_with("no session matches") => {
+                match resolve_remote(&ctx, &token, false)? {
+                    Some(remote) => return self.send_remote(&ctx, &sender, &remote),
+                    None => return Err(e),
+                }
+            }
+            Err(e) => return Err(e),
+        };
 
         // The id comes from the sender and key, so a retry finds the first send.
         let id = match &self.idempotency_key {
@@ -210,6 +232,8 @@ impl CommandHandler for SendMessage {
                     live_push: LivePushStatus::Unknown,
                     wake: WakeStatus::Unobserved,
                     delivered_live: false,
+                    via_link: None,
+                    link_up: None,
                 });
             }
         }
@@ -345,8 +369,159 @@ impl CommandHandler for SendMessage {
             live_push,
             wake,
             delivered_live,
+            via_link: None,
+            link_up: None,
         })
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl SendMessage {
+    /// A send to a session on a linked daemon (MUS-66): stored here with an
+    /// outbox entry, which the link task forwards. No live push or wake from
+    /// here; the far daemon does that when it stores the message.
+    fn send_remote(
+        self,
+        ctx: &CommandContext,
+        sender: &Session,
+        remote: &crate::RemoteSession,
+    ) -> Result<SendMessageResult, CommandError> {
+        let to = SessionId(Arc::from(remote.session_id.as_str()));
+        let id = match &self.idempotency_key {
+            Some(key) => Uuid::new_v5(
+                &Uuid::NAMESPACE_OID,
+                format!("{}\0{key}", sender.id.0).as_bytes(),
+            ),
+            None => Uuid::now_v7(),
+        };
+        let id = MessageId(Arc::from(id.to_string()));
+        if self.idempotency_key.is_some() {
+            let found: Vec<Arc<Message>> = ctx.exec_query(GetMessagesByIds {
+                ids: vec![id.clone()],
+            })?;
+            if let Some(first) = found.first() {
+                if first.body != self.body || first.to_session_id.as_ref() != Some(&to) {
+                    return Err(err(
+                        ctx,
+                        "this idempotency key was already used for a different message",
+                    ));
+                }
+                return Ok(SendMessageResult {
+                    message_id: first.id.clone(),
+                    to_session_id: to,
+                    sent_at: first.sent_at,
+                    live_push: LivePushStatus::Unavailable,
+                    wake: WakeStatus::Unobserved,
+                    delivered_live: false,
+                    via_link: Some(remote.link.clone()),
+                    link_up: Some(remote.link_up),
+                });
+            }
+        }
+        crate::controls::sender_allowed(sender.host.as_ref().map(|h| h.name.as_str()))
+            .map_err(|why| err(ctx, &why))?;
+        crate::rate::take(
+            sender.id.0.as_ref(),
+            sender.host.as_ref().map(|h| h.name.as_str()),
+        )
+        .map_err(|why| err(ctx, &why))?;
+        let now = Utc::now().timestamp_millis();
+        let msg = Message {
+            response_required: self.response_required,
+            id: id.clone(),
+            from_session_id: sender.id.clone(),
+            to_session_id: Some(to.clone()),
+            to_room_id: None,
+            to_operator: None,
+            body: self.body,
+            sent_at: now,
+        };
+        ctx.emit_set(&msg)?;
+        ctx.emit_set(&crate::MessageLink {
+            id: crate::MessageLinkId(id.0.clone()),
+            link: remote.link.clone(),
+            outbound: true,
+            remote_id: None,
+            retry_at: None,
+            note: None,
+        })?;
+        crate::OUTBOX_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(SendMessageResult {
+            message_id: id,
+            to_session_id: to,
+            sent_at: now,
+            live_push: LivePushStatus::Unavailable,
+            wake: WakeStatus::Unobserved,
+            delivered_live: false,
+            via_link: Some(remote.link.clone()),
+            link_up: Some(remote.link_up),
+        })
+    }
+}
+
+/// A session on a linked daemon named by `token` (MUS-66). `nickname@link` (or
+/// `session-id@link`) names one explicitly. A bare token is tried only when no
+/// local session matched it: a bare name prefers local. Exact id, then a unique
+/// nickname, then a unique id prefix. `Ok(None)` when nothing remote matches.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn resolve_remote(
+    ctx: &CommandContext,
+    token: &str,
+    explicit_only: bool,
+) -> Result<Option<Arc<crate::RemoteSession>>, CommandError> {
+    let remotes: Vec<Arc<crate::RemoteSession>> = ctx.exec_query(crate::GetAllRemoteSessions {})?;
+    if remotes.is_empty() {
+        return Ok(None);
+    }
+    if let Some((name, link)) = token.rsplit_once(crate::LINK_SEPARATOR)
+        && remotes.iter().any(|r| r.link == link)
+    {
+        let on_link: Vec<_> = remotes.iter().filter(|r| r.link == link).collect();
+        if let Some(r) = on_link
+            .iter()
+            .find(|r| r.nickname == name || r.session_id == name)
+        {
+            return Ok(Some((*r).clone()));
+        }
+        return Err(err(
+            ctx,
+            &format!("no session '{name}' on the link {link} — check muster://roster"),
+        ));
+    }
+    if explicit_only {
+        return Ok(None);
+    }
+    if let Some(r) = remotes.iter().find(|r| r.session_id == token) {
+        return Ok(Some(r.clone()));
+    }
+    let pick = |matches: Vec<&Arc<crate::RemoteSession>>, how: &str| match matches.len() {
+        0 => Ok(None),
+        1 => Ok(Some(matches[0].clone())),
+        _ => Err(err(
+            ctx,
+            &format!(
+                "{how} '{token}' matches sessions on more than one link: {}; name one as nickname@link",
+                matches
+                    .iter()
+                    .map(|r| r.address())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        )),
+    };
+    if let Some(r) = pick(
+        remotes.iter().filter(|r| r.nickname == token).collect(),
+        "nickname",
+    )? {
+        return Ok(Some(r));
+    }
+    pick(
+        remotes
+            .iter()
+            .filter(|r| r.session_id.starts_with(token))
+            .collect(),
+        "id-prefix",
+    )
 }
 
 fn err(ctx: &CommandContext, message: &str) -> CommandError {

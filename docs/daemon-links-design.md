@@ -1,6 +1,8 @@
 # Design: messaging between daemons (G5, MUS-66)
 
-Status: **approved by the watchman (grand-photon), 2026-11-04,** with the
+Status: **built** (MUS-66, `crates/daemon/src/links.rs`; tests in
+`scripts/test-links-e2e.sh` and `crates/daemon/tests/remote_send.rs`).
+Approved by the watchman (grand-photon), 2026-11-04, with the
 changes folded in below (message ids, `deferred`, `nickname@link`, version
 mismatch) and the answers under "Decisions". Written by modest-roach, 2026-11-04, against Muster main at
 `d9c35d3` with the optional TLS gate from #89 (MUS-64). Names are Muster's;
@@ -247,3 +249,28 @@ all of that. Today both daemons are the same operator's.
 Changes asked for and folded in above: remote mail stored under a fresh local
 id; `deferred` for retryable rate-limit answers; `nickname@link` addressing;
 closing on a `hello` version mismatch.
+
+## As built
+
+Where the build differs from, or adds to, the text above:
+
+- **Link tokens** live in `tokens` as `link:<name>`. Machine names can't hold
+  `:`, so neither kind can stand in for the other. The gate sends a link token
+  only to `/link`, and refuses a machine token there.
+- **The local id** of inbound mail is a UUIDv5 of `(link, remote_id)` in a
+  namespace of its own. It's fresh (the peer doesn't choose it, and it can't
+  equal an id a local send derives), and it makes dedup a lookup by id.
+  `MessageLink` keeps the remote id beside it.
+- **Outbox and labels** are a separate `MessageLink` entity keyed by message id,
+  so `Message` itself is unchanged. `RemoteSession` isn't persisted;
+  `MessageLink` is.
+- **A recipient grace:** for 60 s after a link comes up, mail for a session this
+  daemon doesn't know yet gets `deferred`, not `refused`, because sessions take
+  a moment to register again after a restart. After that, an unknown recipient
+  is refused, as designed.
+- **The give-up** is `LINK_GIVE_UP` (24 h): queued mail older than that, for a
+  link that's down, is refused back to its sender as a message labelled from
+  the far session; remote rows unseen that long are dropped.
+- **Not in v1:** `muster-shim tell` resolves names on the roster itself, so it
+  doesn't take `nickname@link` yet. `send_message` does.
+

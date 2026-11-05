@@ -166,6 +166,12 @@ fn main() -> Result<()> {
             let pairing = match muster_entities::pairing::Code::parse(&code)? {
                 muster_entities::pairing::Code::Pairing(pairing) => pairing,
                 // A one-time invite (MUS-8): exchange it at the gate for a token.
+                muster_entities::pairing::Code::Invite(invite) if invite.link.is_some() => {
+                    anyhow::bail!(
+                        "this code links two daemons; run `muster-daemon link <code>` on the \
+                         other daemon's host instead"
+                    )
+                }
                 muster_entities::pairing::Code::Invite(invite) => link::redeem_invite(invite)?,
             };
             let path = link::save_pairing(&pairing)?;
@@ -456,6 +462,9 @@ async fn serve() -> Result<()> {
         .watch_query::<muster_entities::GetAllWakeWatchers>(muster_entities::GetAllWakeWatchers {});
     let wake_pause_cell = client
         .watch_query::<muster_entities::GetAllWakePauses>(muster_entities::GetAllWakePauses {});
+    let remote_sessions_cell = client.watch_query::<muster_entities::GetAllRemoteSessions>(
+        muster_entities::GetAllRemoteSessions {},
+    );
 
     // Mirror this session's daemon-ASSIGNED nickname to a per-session config
     // file so the runtime-free statusline (a daemon-less subcommand) shows the
@@ -582,6 +591,7 @@ async fn serve() -> Result<()> {
         nicknames_cell,
         wake_watchers_cell,
         wake_pause_cell,
+        remote_sessions_cell,
     });
 
     // Clone: the liveness publisher below also needs the host (for the roster

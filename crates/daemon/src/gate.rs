@@ -60,6 +60,8 @@ pub struct GateConfig {
     /// The token the hook listener requires (MUS-7); the gate adds it when it
     /// forwards a request for a paired machine.
     pub local_token: String,
+    /// Links to other daemons (MUS-66), served on `/link`.
+    pub links: Option<Arc<crate::links::Hub>>,
 }
 
 /// The local gate (MUS-7): plain TCP on the daemon host's loopback, for its own
@@ -317,6 +319,40 @@ async fn handle(
         log::warn!("[gate] rejected {peer}: missing or unknown token");
         return respond(&mut tls, "401 Unauthorized").await;
     };
+    // A link's token opens only `/link`, and only a link's token opens it (MUS-66).
+    let is_link_route = request.path() == crate::links::LINK_PATH;
+    match (credentials::as_link(&name), is_link_route) {
+        (Some(label), true) => {
+            let (Some(hub), true, Some(key)) = (
+                config.links.as_ref(),
+                request.is_websocket_upgrade(),
+                request.header("sec-websocket-key"),
+            ) else {
+                return respond(&mut tls, "400 Bad Request").await;
+            };
+            let Some(_place) = per_machine.try_acquire(&name) else {
+                return respond(&mut tls, "503 Service Unavailable").await;
+            };
+            let token = request.token.clone().unwrap_or_default();
+            let key = key.to_string();
+            return tokio::select! {
+                r = crate::links::accept(tls, &key, label, hub, peer) => r,
+                () = until_unpaired(&config.state_dir, &token, &name) => Ok(()),
+            };
+        }
+        (Some(_), false) => {
+            log::warn!(
+                "[gate] refused {name}: a link's token opens only {}",
+                crate::links::LINK_PATH
+            );
+            return respond(&mut tls, "403 Forbidden").await;
+        }
+        (None, true) => {
+            log::warn!("[gate] refused {name}: a machine's token can't open a link");
+            return respond(&mut tls, "403 Forbidden").await;
+        }
+        (None, false) => {}
+    }
     // One machine flooding the gate is turned away; others keep their own
     // places (MUS-9).
     let Some(_place) = per_machine.try_acquire(&name) else {
@@ -596,6 +632,13 @@ impl Request {
 
     fn path(&self) -> &str {
         self.target.split('?').next().unwrap_or("")
+    }
+
+    fn header(&self, name: &str) -> Option<&str> {
+        self.headers.iter().find_map(|h| {
+            let (k, v) = h.split_once(':')?;
+            k.trim().eq_ignore_ascii_case(name).then(|| v.trim())
+        })
     }
 
     fn has_header(&self, name: &str) -> bool {
