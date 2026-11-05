@@ -138,10 +138,15 @@ Two things, both intended:
   None of the Claude cells is a known failure. That's in Muster. The suite
   isn't part of this PR, and its operator-pause cell tests a Muster control
   that isn't in this PR.
-- **Zoo (`scripts/sandbox`): not run yet.** The Zoo drives Codex agents, and
-  Codex isn't installed on the machine meant for the run. The Zoo has no Claude
-  Code harness, so it can only check that Codex coordination is unchanged. It
-  can't show the Claude delivery itself. That is still the run this change
-  needs: a regression check for Codex, with the same scenario, model and
-  budgets before and after. We'll attach it before review, unless you'd prefer
-  to waive it.
+- **Zoo (`scripts/sandbox`): staged run done, full set to come.** A staged run
+  (1 repeat of `independent`, `approval-wait` and `contention`) passed 6 of 6
+  trials on both sides, with no resource violations. The full 3-repeat set, which
+  the comparison rests on, is next, and its result will replace this paragraph.
+  The Zoo drives Codex agents and has no Claude Code harness, so it checks
+  that Codex coordination is unchanged; it can't show the Claude delivery
+  itself. Both builds get the same scenarios, model and budgets, and we'll
+  attach the full set's evaluation before review.
+  - **The model differs from your past campaigns.** They used `gpt-6.1-sol`,
+    which our ChatGPT login refuses. This run uses `gpt-6-luna` for both the
+    baseline (`94ecc24`) and the candidate. So it compares the two builds with
+    each other, not with the numbers in `scripts/sandbox/evaluations/`.
