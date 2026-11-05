@@ -249,6 +249,8 @@ check "a machine can be paired under a linked daemon's name" 'T env $L_ENV $BIN/
 OUT=$(T env $L_ENV $BIN/muster-daemon unpair dhost 2>&1); RC=$?
 check "a bare unpair of a name that is both is refused, naming both forms" '[[ $RC != 0 && $OUT == *"unpair --machine dhost"* && $OUT == *"unlink dhost"* ]]'
 check "and revokes neither" '[[ $(T env $L_ENV $BIN/muster-daemon pairs | grep -cx "dhost\|link:dhost") == 2 ]]'
+OUT=$(T env $L_ENV $BIN/muster-daemon unpair --machine link:dhost 2>&1); RC=$?
+check "unpair --machine refuses a link's name" '[[ $RC != 0 && $OUT == *"unpair --link dhost"* ]] && T env $L_ENV $BIN/muster-daemon pairs | grep -qx link:dhost'
 OUT=$(T env $L_ENV $BIN/muster-daemon unlink dhost 2>&1)
 check "unlink on the dialed side revokes the link" '[[ $OUT == *"revoked its link here"* ]]'
 check "and closes the open link" 'waitfor "grep -q \"closing link:dhost.s connection: no longer paired\" $WORK/L.log"'

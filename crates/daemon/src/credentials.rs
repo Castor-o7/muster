@@ -282,6 +282,8 @@ pub enum Unpaired {
 pub fn unpair(dir: &Path, name: &str, kind: UnpairKind) -> io::Result<Unpaired> {
     let (name, kind) = match (as_link(name), kind) {
         (Some(bare), UnpairKind::Either | UnpairKind::Link) => (bare, UnpairKind::Link),
+        // No machine is named `link:…`, so `--machine` never takes a link.
+        (Some(_), UnpairKind::Machine) => return Ok(Unpaired::Nothing),
         _ => (name, kind),
     };
     let link = link_token_name(name);
@@ -562,6 +564,12 @@ mod tests {
             unpair(&dir, "b2", UnpairKind::Link).unwrap(),
             Unpaired::Nothing
         );
+        assert_eq!(
+            unpair(&dir, "link:c3", UnpairKind::Machine).unwrap(),
+            Unpaired::Nothing,
+            "--machine never revokes a link"
+        );
+        assert!(names(&dir).contains(&link_token_name("c3")));
         assert_eq!(
             unpair(&dir, "link:c3", UnpairKind::Either).unwrap(),
             Unpaired::Link

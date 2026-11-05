@@ -150,6 +150,12 @@ fn unpair(args: &[String]) -> Result<()> {
         [name] if !name.starts_with("--") => (UnpairKind::Either, name),
         _ => anyhow::bail!("{USAGE}"),
     };
+    if let (UnpairKind::Machine, Some(link)) = (kind, daemon::credentials::as_link(name)) {
+        anyhow::bail!(
+            "{name} is a linked daemon's name, not a machine's: \
+             `muster-daemon unpair --link {link}` or `muster-daemon unlink {link}` ends that link"
+        );
+    }
     let dir = daemon::credentials::state_dir()?;
     match daemon::credentials::unpair(&dir, name, kind)? {
         Unpaired::Machine => {
