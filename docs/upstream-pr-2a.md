@@ -149,8 +149,14 @@ Two things, both intended:
   - Turns, messages and tokens matched or were lower in `independent` and
     `contention`.
   - In `approval-wait` the candidate took one more turn and sent one more
-    message in 2 of 3 repeats (5,6,6 turns against 5,5,5). The evaluation
-    file's interpretation explains why, from the transcripts.
+    message in 2 of 3 repeats (5,6,6 turns against 5,5,5). The transcripts
+    show why: an injected request to take over another project
+    (`responseRequired=False`) woke the idle agent through this change's wake
+    path, and it declined within its scope ("I can't take over project-z or
+    modify its deployment settings; my assignment is limited to my two
+    audits"). In the baseline the same message got no reply. So the extra
+    turn is the wake, the extra message is a polite refusal, and every check
+    passed.
 
   The Zoo drives Codex agents and has no Claude Code harness. So this shows
   that Codex coordination is no worse with the change; it can't show the Claude
