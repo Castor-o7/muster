@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 const SHIM: &str = env!("CARGO_BIN_EXE_marshal-shim");
 const HOOK_INPUT: &str = r#"{"session_id":"itest-claude","cwd":"/tmp/proj"}"#;
-const HOOKS_JSON: &str = include_str!("../../../plugins/marshal-shim/hooks.opt-in.json");
+const HOOKS_JSON: &str = include_str!("../../../plugins/marshal-shim/hooks/hooks.json");
 
 /// What the fake listener saw: the request line and the body.
 struct Seen {

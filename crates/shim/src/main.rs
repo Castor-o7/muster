@@ -99,8 +99,8 @@ fn main() -> Result<()> {
             codex_hook::run(&ep, base.as_deref());
             return Ok(());
         }
-        // Claude Code hook bridge: the same bridge, run from the hooks a user
-        // opts into (`plugins/marshal-shim/hooks.opt-in.json`) as `marshal-shim claude-hook
+        // Claude Code hook bridge: the same bridge, run from the plugin's
+        // `hooks/hooks.json` as `marshal-shim claude-hook
         // session-start|prompt-submit|post-tool-use`. It pulls unread direct
         // messages into the turn, so a session launched without the channels
         // flag still receives them. `claude-hook wait` is the asyncRewake
