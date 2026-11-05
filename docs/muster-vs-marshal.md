@@ -4,8 +4,12 @@ Goal G7. This text is meant for the descriptions of the upstream PRs that
 bring Muster's changes back to [Marshal](https://github.com/ignition-is-go/marshal).
 Each section says what the change adds, why it matters, what it costs, and
 what stays out. The per-commit detail is in
-[upstream-inventory.md](upstream-inventory.md). The delivery mechanics are in
-[hook-delivery.md](hook-delivery.md).
+[upstream-inventory.md](upstream-inventory.md), the order the PRs go in and
+what each overlaps upstream is in [upstream-pr-strategy.md](upstream-pr-strategy.md),
+and the delivery mechanics are in [hook-delivery.md](hook-delivery.md).
+Updated 2026-11-05 for Muster `3fafe4a` and the port stack on Marshal
+`94ecc24`. The section names match the port branches (`port/hooks-v3`,
+`port/durability-v2`, `port/other-v3`, `port/gate-v2`).
 
 Muster forked Marshal at `9b71fd6` to run on a small set of the operator's
 own machines (Linux and macOS, Claude Code and Codex) and to fix what broke
@@ -24,6 +28,19 @@ ships `hooks/hooks.json`:
 
 On macOS the shim also reads its parent's command line, so a session without
 the flag reports `channels_enabled = false` and the daemon stops pushing to it.
+
+Around the hooks:
+
+- Mail is acked only once the client has handed it on. The waiter and the
+  prompt hooks ask for `ack=client`, get the ids in `X-Muster-Ack`, print the
+  mail and only then POST `/hook/ack`. A 60 s lease keeps a second reader from
+  taking the same message, and mail whose reply is lost is offered again when
+  the lease lapses (MUS-75).
+- The roster says whether a message would wake a session (a `WakeWatcher`,
+  held in memory only), and a send result says `wake: expected` only when a
+  live waiter can wake the recipient (MUS-71, still to be forward-ported).
+- On SIGTERM, held waits end with a "restarting" reply, so a waiter re-arms
+  instead of reporting an error.
 
 **Why it matters.** Without the flag, Marshal mail to Claude Code is either
 lost or never fetched. On macOS the daemon pushed a notification Claude
@@ -46,20 +63,26 @@ hooks then find nothing unread.
 **What stays out.** Muster's board and roadmap notes about the feature, and
 the `muster-*` names.
 
+**Overlaps upstream.** It supersedes our own open #154, an earlier cut. Its
+aim and files overlap lobo235's open #141, which pulls the inbox into Claude
+turns with plugin hooks, and #140, which keeps a Claude push unread until it's
+written. See [upstream-pr-strategy.md](upstream-pr-strategy.md).
+
 ## Durability: mail and sessions that survive what goes wrong
 
 **What it adds.**
 
-- Mail is acked only once the client has handed it on, with a short lease so
-  two readers don't take the same message.
 - A timed-out send can be retried with an `idempotency_key` and is not
   delivered twice.
 - A session whose connection drops is kept while it is still waiting.
 - Mail to a reaped session is kept until the 14-day sweep, not deleted at
   restart.
 - A sender can see whether its mail was read before the recipient went away.
-- On SIGTERM, held waits end with a "restarting" signal.
-- Wake watchers are in-memory only.
+
+Muster also has a push-side ack (MUS-81): a session that says it acks its own
+pushes (`acks_pushes`) has a push marked read only once the harness has taken
+it. Whether it goes with this PR is still to decide, since it overlaps
+lobo235's plugin PRs (#132, #134, #136, #137).
 
 **Why it matters.** Each one fixes mail that was lost or doubled in real use:
 a daemon restart, a dropped connection, a reply lost in transit, a session
@@ -75,6 +98,11 @@ cases.
 
 **What stays out.** The Murph restart and rollout scripts.
 
+**Overlaps upstream.** lucid-max's own open #148 (messages and receipts kept
+across a session resume) and lobo235's #131 (read-state kept across a reload)
+change the same `cleanup.rs`, `message.rs` and `message_read.rs`. If either
+lands first, this PR is rebased onto it and says which cases it already covers.
+
 ## Gate: optional TLS and per-machine pairing
 
 **What it adds.**
@@ -86,8 +114,13 @@ cases.
 - A frame filter that lets a paired machine act only as its own sessions,
   including on the hook listener.
 - Attested host and operator for paired machines.
-- A local token on the hook listener, and a local gate in front of myko.
+- A local token on the hook listener and for local tools. Local tools reach
+  the daemon on the gate's own port (the first byte tells TLS from a local
+  plain connection, and plain from another machine gets 426), so there's no
+  separate internal listener (MUS-70).
 - Myko's own listener admits only forwarded requests.
+- A tokens file that can't be read stops the daemon instead of reading as "no
+  pairings" (MUS-85).
 - Message-rate and connection limits.
 - An operator switch to pause wake-ups and limit which machines may send.
 - `docs/threat-model.md` and a `cargo-deny` audit in CI.
@@ -107,18 +140,29 @@ other devices on the LAN.
 
 - New dependencies: `rustls`, `tokio-rustls`, `tokio-tungstenite`, `sha2`,
   `ciborium`, `socket2`.
-- Two more loopback listeners.
+- One more loopback listener: myko's own, proposed as 6158.
 - A pairing step for each extra machine.
 - A local token that every local tool must present.
-- A patched copy of myko-server, which is AGPL and pinned to 6.9.0 while
-  upstream is on 6.11.5. This should become a request-filter hook in myko
-  itself before the gate lands.
+- A vendored copy of myko-server 6.11.5 (AGPL), changed only by a
+  `RequestFilter`. That's about 12,200 lines upstream would carry. It should
+  become a request-filter hook in ignition-is-go/myko before the gate lands.
 
-The gate must be **opt-in**. With it off, Marshal should behave as it does
-today. The design of that switch is G3.
+The gate is **opt-in**, and with it off Marshal behaves as it does today. The
+operator's choice for upstream (2026-11-05):
+- `marshal-daemon --tls` turns the gate on.
+- `--plain` runs plain even though machines are paired.
+- With pairings and neither flag, the daemon refuses to start, naming both.
+- Both flags together are refused.
+- There's no environment variable.
 
-**What stays out.** Muster's port numbers, which become proposed 6157/6158
-for the new listeners, and the Murph firewall notes.
+Muster also keeps `MUSTER_TLS`, which the upstream PR leaves out.
+
+**What stays out.** Muster's port numbers (6255–6258) and the Murph firewall
+notes.
+
+**Overlaps upstream.** lobo235's open #135 (`--help`/`--version`) rewrites the
+same argument handling in `daemon/src/main.rs`. Whichever lands second adopts
+the other's parser.
 
 ## Other
 
@@ -130,13 +174,40 @@ for the new listeners, and the Murph firewall notes.
 - Sessions are removed from their old operator rooms when the operator
   changes.
 - The sweeper logs why it reaped a session.
-- Free-text room names stay out of mention banners.
-- Notices of AGPL dependencies, and a bump past a yanked `chacha20`.
+- Notices of AGPL dependencies, a bump past a yanked `chacha20`, and a
+  `cargo-deny` audit in CI.
+- `send_message` refuses an empty recipient instead of delivering to the
+  sender (MUS-73).
+- A session's first writes wait until it's registered, re-send the session
+  if it hasn't landed in 1 s, and retry once a write refused as unregistered
+  (MUS-72, MUS-78, MUS-79). Before this, an agent's first tool call could fail
+  "has no session on the roster".
 
 **Why it matters.** These are small fixes and tools that came up in daily
 use. None depends on the buckets above.
 
-**What it costs.** Two subcommands and a few lines each.
+**What it costs.** Two subcommands and a few lines each. A first write can
+wait up to 5 s for registration.
+
+**Overlaps upstream.** lobo235's #143 (room-name validation) works next to the
+operator-room fix in `cleanup.rs` and the room tools.
+
+## Later, if upstream wants them
+
+None of these is in a port branch yet. Each would follow the Gate.
+
+- **Messaging between daemons (MUS-66).** Two TLS daemons link with a
+  one-time code, and their sessions message each other as `nickname@link`,
+  with an outbox that survives a restart. It needs the gate on both sides.
+- **The delivery conformance suite (MUS-69).** It runs the real daemon and shim
+  against a fake of each harness (Claude Code, Codex, opencode, Pi, Prime
+  Agent) and prints a harness × scenario grid. It's test-only, and could
+  check upstream's plugins in CI.
+- **Codex bridge fixes.** The bridge respects the operator's pause (MUS-74),
+  re-registers its threads after a daemon restart (MUS-76), shows its wake
+  path on the roster (MUS-77), and goes through the gate (MUS-18).
+- **The local-token refusal message (MUS-83).** A shim whose token the daemon
+  refuses says so and names the file, instead of timing out.
 
 ## What Muster drops entirely
 
