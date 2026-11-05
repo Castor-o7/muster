@@ -73,9 +73,21 @@ impl HookOutcome {
 /// again, so a slow reader can see a duplicate but mail isn't lost.
 const DEFAULT_LEASE: Duration = Duration::from_secs(60);
 
+/// How long a lapsed lease is remembered, so that offering its mail again can be
+/// told apart from a first offer and logged (MUS-86).
+const FORGET_LAPSED: Duration = Duration::from_secs(60 * 60);
+
 /// Mail handed to a reader and not yet acked, as session and message to expiry.
 #[derive(Default)]
 struct Leases(HashMap<(SessionId, MessageId), Instant>);
+
+/// What [`Leases::take`] handed out.
+struct Taken {
+    /// The messages leased to this reader.
+    ids: HashSet<MessageId>,
+    /// How many of them were offered before, and that reader never acked.
+    reoffered: usize,
+}
 
 impl Leases {
     /// Lease whichever of `ids` nobody holds, returning those.
@@ -85,19 +97,24 @@ impl Leases {
         ids: &[MessageId],
         now: Instant,
         lease: Duration,
-    ) -> HashSet<MessageId> {
-        self.0.retain(|_, expires| *expires > now);
-        ids.iter()
+    ) -> Taken {
+        self.0.retain(|_, expires| *expires + FORGET_LAPSED > now);
+        let mut reoffered = 0;
+        let ids = ids
+            .iter()
             .filter(|id| {
                 let key = (session.clone(), (*id).clone());
-                if self.0.contains_key(&key) {
-                    return false;
+                match self.0.get(&key) {
+                    Some(expires) if *expires > now => return false,
+                    Some(_) => reoffered += 1,
+                    None => {}
                 }
                 self.0.insert(key, now + lease);
                 true
             })
             .cloned()
-            .collect()
+            .collect();
+        Taken { ids, reoffered }
     }
 
     fn release(&mut self, session: &SessionId, ids: &[MessageId]) {
@@ -178,6 +195,13 @@ fn handle_ack(body: &[u8], ctx: &Arc<MykoServerContext>) -> HookOutcome {
         .map(|id| MessageId(Arc::from(id)))
         .collect();
     if let Some(session) = session {
+        if !ids.is_empty() {
+            log::info!(
+                "[hook] {}: client acked {} message(s)",
+                session.0.as_ref(),
+                ids.len()
+            );
+        }
         ack_surfaced(ctx, &session, ids);
     }
     HookOutcome::text(String::new())
@@ -258,7 +282,11 @@ fn handle_session_start(query: &str, body: &[u8], ctx: &Arc<MykoServerContext>) 
     // who it is. Authoritative (assigned handle, else the computed candidate the
     // assigner would use), matching what peers see in muster://roster.
     let q = parse_query(query);
-    let nick = nickname_for(&cmd_ctx, &sid).unwrap_or_else(|_| muster_entities::nickname(&sid));
+    // Named here rather than left to the saga, so a session that takes over a
+    // predecessor's nickname (MUS-3) shows that one in its session block.
+    let nick = crate::nickname_assign::ensure_assigned(&cmd_ctx, &sid)
+        .or_else(|_| nickname_for(&cmd_ctx, &sid))
+        .unwrap_or_else(|_| muster_entities::nickname(&sid));
     let mut out = if q.get("harness").map(String::as_str) == Some("codex") {
         format!(
             "<muster_session nickname=\"{nick}\" id=\"{sid}\">Use id as asSession on writes and \
@@ -272,6 +300,9 @@ fn handle_session_start(query: &str, body: &[u8], ctx: &Arc<MykoServerContext>) 
              identity.</muster_session>\n"
         )
     };
+    // The session block above already names it, so a late swap's notice
+    // isn't needed this time.
+    let _ = crate::succession::take_notice(&cmd_ctx, &sid);
     let (inbox, ids) = surface_unread(&cmd_ctx, &sid);
     out.push_str(&inbox);
     HookOutcome {
@@ -364,6 +395,9 @@ fn register_hook_session(
         arch: q.get("arch").cloned().unwrap_or_default(),
     });
     let machine = q.get("machine").map(String::as_str);
+    // MUS-3: what the session is matched on after a restart. Both declared.
+    let harness = q.get("harness").filter(|s| !s.is_empty()).cloned();
+    let identity = q.get("identity").filter(|s| !s.is_empty()).cloned();
     let (operator, host) = attested(
         machine,
         crate::credentials::daemon_operator(),
@@ -403,6 +437,12 @@ fn register_hook_session(
             if updated.project.is_none() {
                 updated.project = project;
             }
+            if harness.is_some() {
+                updated.harness = harness;
+            }
+            // The hook reads MUSTER_IDENTITY from the session's environment
+            // each time, so it's current.
+            updated.identity = identity;
             updated
         }
         None => Session {
@@ -425,6 +465,8 @@ fn register_hook_session(
             project,
             channels_enabled: None,
             acks_pushes: None,
+            harness,
+            identity,
         },
     };
     if let Err(e) = cmd_ctx.emit_set(&session) {
@@ -444,8 +486,14 @@ fn handle_prompt_submit(query: &str, body: &[u8], ctx: &Arc<MykoServerContext>) 
     };
 
     let (inbox, ids) = surface_unread(&cmd_ctx, &sid);
+    // MUS-3: a session that took a predecessor's nickname over after it
+    // registered is told once, here, since its session block named the old one.
+    let body = match crate::succession::take_notice(&cmd_ctx, &sid) {
+        Some(notice) => notice + &inbox,
+        None => inbox,
+    };
     HookOutcome {
-        body: inbox,
+        body,
         deferred_ack: (!ids.is_empty()).then(|| (SessionId(Arc::from(sid)), ids)),
     }
 }
@@ -563,9 +611,14 @@ fn handle_session_end(body: &[u8], ctx: &Arc<MykoServerContext>) -> HookOutcome 
         project: None,
         channels_enabled: None,
         acks_pushes: None,
+        harness: None,
+        identity: None,
     };
     if let Err(e) = cmd_ctx.emit_del(&stub) {
         log::warn!("[hook] session-end DEL failed for {sid}: {e:?}");
+    } else {
+        // MUS-3: an ended session can be taken over by its successor.
+        crate::succession::record_removed(sid, chrono::Utc::now().timestamp_millis());
     }
     end_wait(&cmd_ctx, sid);
     HookOutcome::text(String::new())
@@ -605,9 +658,20 @@ fn surface_unread(cmd_ctx: &CommandContext, sid: &str) -> (String, Vec<MessageId
     let Ok(mut leases) = LEASES.lock() else {
         return (String::new(), Vec::new());
     };
-    let taken = leases.take(&sid_typed, &unread, Instant::now(), lease_duration());
+    let lease = lease_duration();
+    let taken = leases.take(&sid_typed, &unread, Instant::now(), lease);
     drop(leases);
-    result.messages.retain(|m| taken.contains(&m.message_id));
+    if taken.reoffered > 0 {
+        log::info!(
+            "[hook] {}: offering {} message(s) again: the last reader didn't ack within the {} s lease",
+            sid_typed.0.as_ref(),
+            taken.reoffered,
+            lease.as_secs()
+        );
+    }
+    result
+        .messages
+        .retain(|m| taken.ids.contains(&m.message_id));
     if result.messages.is_empty() {
         return (String::new(), Vec::new());
     }
@@ -785,10 +849,43 @@ mod lease_tests {
         let lease = Duration::from_secs(60);
         let now = Instant::now();
         let mut leases = Leases::default();
-        assert_eq!(leases.take(&session, &ids, now, lease).len(), 1);
-        assert!(leases.take(&session, &ids, now, lease).is_empty());
-        // No ack ever came: the path was lost, so offer it again.
-        assert_eq!(leases.take(&session, &ids, now + lease, lease).len(), 1);
+        let first = leases.take(&session, &ids, now, lease);
+        assert_eq!((first.ids.len(), first.reoffered), (1, 0));
+        assert!(leases.take(&session, &ids, now, lease).ids.is_empty());
+        // No ack ever came: the path was lost, so offer it again, and say so.
+        let again = leases.take(&session, &ids, now + lease, lease);
+        assert_eq!((again.ids.len(), again.reoffered), (1, 1));
+    }
+
+    #[test]
+    fn a_lapsed_lease_is_remembered_for_the_log_but_not_for_ever() {
+        let session = SessionId(Arc::from("s"));
+        let (m, other) = ([id("m")], [id("other")]);
+        let lease = Duration::from_secs(60);
+        let now = Instant::now();
+        let mut leases = Leases::default();
+        leases.take(&session, &m, now, lease);
+        // Another reader's take after m's lease lapsed doesn't forget it.
+        leases.take(&session, &other, now + lease * 2, lease);
+        assert_eq!(
+            leases.take(&session, &m, now + lease * 3, lease).reoffered,
+            1
+        );
+        // An hour after it lapsed, it's forgotten: a first offer again.
+        let later = now + lease * 4 + FORGET_LAPSED;
+        assert_eq!(leases.take(&session, &m, later, lease).reoffered, 0);
+    }
+
+    #[test]
+    fn an_acked_message_offered_again_is_not_a_reoffer() {
+        let session = SessionId(Arc::from("s"));
+        let ids = [id("m")];
+        let lease = Duration::from_secs(60);
+        let now = Instant::now();
+        let mut leases = Leases::default();
+        leases.take(&session, &ids, now, lease);
+        leases.release(&session, &ids);
+        assert_eq!(leases.take(&session, &ids, now + lease, lease).reoffered, 0);
     }
 
     #[test]
@@ -799,9 +896,9 @@ mod lease_tests {
         let now = Instant::now();
         let mut leases = Leases::default();
         leases.take(&a, &ids, now, lease);
-        assert_eq!(leases.take(&b, &ids, now, lease).len(), 1);
+        assert_eq!(leases.take(&b, &ids, now, lease).ids.len(), 1);
         leases.release(&a, &ids);
-        assert_eq!(leases.take(&a, &ids, now, lease).len(), 1);
+        assert_eq!(leases.take(&a, &ids, now, lease).ids.len(), 1);
     }
 }
 

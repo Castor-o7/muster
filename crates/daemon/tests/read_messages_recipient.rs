@@ -48,6 +48,8 @@ fn session(id: &str, client: &str) -> Session {
         project: None,
         channels_enabled: None,
         acks_pushes: None,
+        harness: None,
+        identity: None,
     }
 }
 
