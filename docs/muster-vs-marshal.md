@@ -47,7 +47,7 @@ its mail.
 
 Everything else in the layer is additive, so a user who wants none of it can
 turn the hooks off and be back where upstream is today. Turning them off means
-disabling the plugin's hooks, or Claude Code's `disableAllHooks`. The PR also
+installing the MCP server without the plugin (its `.mcp.json` alone), or Claude Code's `disableAllHooks`. The PR also
 keeps upstream's behaviour where it can: a hook listener that can't bind is
 logged, and the daemon keeps running.
 
