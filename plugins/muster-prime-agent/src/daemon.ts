@@ -190,6 +190,7 @@ export class MusterDaemon {
     const item = this.sessions.get(sessionId);
     if (!item) return;
     this.sessions.delete(sessionId);
+    this.shown.delete(sessionId); // its shown ids end with it (MUS-90)
     this.emitDel(item);
     if (this.sessions.size === 0 && this.livenessTimer) {
       clearInterval(this.livenessTimer);
@@ -271,7 +272,8 @@ export class MusterDaemon {
   }
 
   /** Claim a message for showing. False if a push or a drain already showed it,
-   *  so the caller skips it. Ids are forgotten after ten minutes. */
+   *  so the caller skips it. Ids are forgotten after ten minutes, and all of
+   *  a session's when it deregisters. */
   claimShown(sessionId: string, messageId: string): boolean {
     const now = Date.now();
     let ids = this.shown.get(sessionId);
