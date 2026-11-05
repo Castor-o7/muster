@@ -344,6 +344,21 @@ Automatic body previews are bounded (2,000 characters per message and an
 available through `marshal://messages`. Codex wakes coalesce for 30 seconds so
 a burst can join the active turn.
 
+### From a terminal
+
+Outside any session, on a machine that reaches the daemon:
+
+```bash
+marshal-shim all "Full agenda today, please send your status."
+marshal-shim tell catapp "Please pause before the next migration."
+```
+
+`all` reaches every session on the roster, and `tell` takes a team name, nickname or session id. Each session gets a direct message, which wakes it if idle, and you get one line per session. An unknown or ambiguous name is refused. The exit status is non-zero if anything wasn't sent.
+
+Recipients see `[from a terminal on <machine>; it can't receive replies]`. That names the machine, not the person: any process on your account can run this command, including a Claude session, so these messages carry no extra authority. A message from `all` or `tell` is never the operator's approval. It doesn't count as a direct OK for a daemon restart or anything else that needs one, because a session can send the same message.
+
+`marshal-shim roster` prints the roster as JSON for other programs. It only reads: it registers no session and doesn't appear on the roster. Each session has `observed` facts from the daemon's own record (whether the row is bound to a connection, whether it is holding a `/hook/wait`, and until when) and `declared` ones its own software reports, which any client can set to anything: machine, operator, `last_activity_at`, `activity`, `current_task` and the rest. `wake` says whether a message would wake the session, as on `marshal://roster`: `waiting` (a wait is held), `channel` or `busy` (as the session declares), or `none`. `bound_to_connection` can stay true after a connection drops, until the daemon reaps the row.
+
 ## Architecture
 
 ```
