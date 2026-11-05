@@ -5,10 +5,12 @@
 //!
 //! Each session's facts are split by who set them:
 //!
-//! - `observed`: the daemon's own record. myko sets `client_id` from the
-//!   connection, and the daemon records a `WakeWatcher` while `/hook/wait` is
-//!   held. They show a connection or a wait exists, not that the session behind
-//!   it is working.
+//! - `recorded`: the daemon's record. myko fills `client_id` from the
+//!   connection, and the daemon's hook listener writes a `WakeWatcher` while
+//!   `/hook/wait` is held. But any connected client can also write either: it
+//!   can SET a `WakeWatcher`, or SET another session's id and rebind it. So
+//!   these are the daemon's record, not proof, and even when true they show a
+//!   connection or a wait, not that the session behind it is working.
 //! - `declared`: what the session's own software reports, including its machine,
 //!   operator and `last_activity_at`. Any client can set these to anything.
 
@@ -54,7 +56,7 @@ fn view(
                 "session_id": id,
                 "nickname": nickname,
                 "wake": wake_state(s, watchers, now_ms).as_str(),
-                "observed": {
+                "recorded": {
                     // The row is bound to a connection. It can outlast that
                     // connection until the daemon's sweep reaps it.
                     "bound_to_connection": s.client_id.is_some(),
@@ -150,17 +152,17 @@ mod tests {
     }
 
     #[test]
-    fn claims_are_kept_apart_from_what_the_daemon_established() {
+    fn claims_are_kept_apart_from_the_daemons_record() {
         let v = view(&[session()], &[], &[], 100);
         let row = &v["sessions"][0];
         assert_eq!(v["read_at"], 100);
         assert_eq!(row["declared"]["machine"], "host-a");
-        assert!(row["observed"].get("machine").is_none());
-        assert!(row["observed"].get("operator").is_none());
+        assert!(row["recorded"].get("machine").is_none());
+        assert!(row["recorded"].get("operator").is_none());
         assert_eq!(row["declared"]["current_task"], "anything at all");
         assert_eq!(row["declared"]["last_activity_at"], 2);
-        assert!(row["observed"].get("current_task").is_none());
-        assert!(row["observed"].get("last_activity_at").is_none());
+        assert!(row["recorded"].get("current_task").is_none());
+        assert!(row["recorded"].get("last_activity_at").is_none());
     }
 
     #[test]
@@ -173,9 +175,9 @@ mod tests {
         };
         let v = view(&[session()], &[], &[watcher(101)], 100);
         assert_eq!(v["sessions"][0]["wake"], "waiting");
-        assert_eq!(v["sessions"][0]["observed"]["waiting_until"], 101);
+        assert_eq!(v["sessions"][0]["recorded"]["waiting_until"], 101);
         let v = view(&[session()], &[], &[watcher(100)], 100);
         assert_eq!(v["sessions"][0]["wake"], "none");
-        assert_eq!(v["sessions"][0]["observed"]["waiting"], false);
+        assert_eq!(v["sessions"][0]["recorded"]["waiting"], false);
     }
 }
