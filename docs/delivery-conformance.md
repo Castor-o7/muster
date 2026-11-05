@@ -42,7 +42,6 @@ passing, the suite fails until it's taken off the list.
 
 | Cells | Story | What fails |
 |---|---|---|
-| `claude`, `claude-tls` × 8 | MUS-71 | The send says `wake: expected` to a session the roster calls `wake: none`. |
 | `codex` × 6 | MUS-74 | The Codex bridge wakes a session while the operator has paused wakes. It never checks the pause. |
 | `codex` × 5 | MUS-76 | After a restart without Postgres, an idle Codex session is off the roster until its next hook: the bridge registers a thread only on `thread/started`. |
 

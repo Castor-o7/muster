@@ -49,8 +49,6 @@ const QUIET_FOR: Duration = Duration::from_secs(4);
 /// Cells expected to fail today, each with the story that fixes it. The
 /// suite reports them as known failures, and fails if one passes.
 const KNOWN_FAILURES: &[(&str, &str, &str)] = &[
-    ("claude", "wake-none-not-expected", "MUS-71"),
-    ("claude-tls", "wake-none-not-expected", "MUS-71"),
     ("codex", "operator-pause-stops-wakes", "MUS-74"),
     ("codex", "daemon-restart-mid-wait", "MUS-76"),
 ];

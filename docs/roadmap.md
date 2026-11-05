@@ -507,10 +507,16 @@ Rally.
   `SendMessage` reports `wake: expected` for any recipient with a live `client_id`
   (`crates/entities/src/send_message.rs`). So a Claude session whose MCP shim is connected, with no
   waiter and channels off, reads `wake: none` on the roster while a sender is told `wake: expected`.
-  The reverse mismatch exists too: the roster calls a Codex session `wake: none` though its
-  bridge wakes it, because the bridge leaves no trace on the row. Done when: the send result
-  agrees with the roster, a Codex bridge's session still counts as a wake path, and the
-  conformance suite's `wake-none-not-expected` cells pass and leave `KNOWN_FAILURES`.
+  Done when: the send result says `expected` only when the roster would say `waiting` (a live
+  waiter) and wakes aren't paused, a live client alone no longer counts, and the conformance
+  suite's `wake-none-not-expected` cells pass and leave `KNOWN_FAILURES`. A bridge-watched Codex
+  thread reads `none`/`unobserved` in both places until MUS-77.
+- [ ] **MUS-77: Show a Codex bridge's wake path on the roster.** From MUS-71. The roster calls a
+  Codex session `wake: none`, and a send to it says `wake: unobserved`, though its bridge will
+  start a turn, because the bridge leaves no trace on the row: Codex's MCP shim registers no
+  session, and the bridge writes no `WakeWatcher`. Done when: the bridge refreshes a
+  `WakeWatcher` for each thread it can wake, so the roster says `waiting` and a send says
+  `expected` for it, and stops when it can't (paused per MUS-74, or the app-server is gone).
 - [ ] **MUS-74: The Codex bridge ignores the operator's pause.** From MUS-69. `muster-daemon
   pause` stops Claude's waiter (`/hook/wait` hands out nothing) and the live push, but
   `codex_bridge.rs` sends `turn/start` for any unread direct message without checking it, so a
