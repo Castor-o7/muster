@@ -44,7 +44,6 @@ passing, the suite fails until it's taken off the list.
 |---|---|---|
 | `claude`, `claude-tls` × 8 | MUS-71 | The send says `wake: expected` to a session the roster calls `wake: none`. |
 | `codex` × 6 | MUS-74 | The Codex bridge wakes a session while the operator has paused wakes. It never checks the pause. |
-| all × 3b, `codex` × 3 | MUS-75 | A prompt hook's mail is marked read once the daemon has flushed the reply. If the reply is then lost, the mail is gone, though the hook-delivery doc says a dropped hook leaves it unread. |
 | `codex` × 5 | MUS-76 | After a restart without Postgres, an idle Codex session is off the roster until its next hook: the bridge registers a thread only on `thread/started`. |
 
 ## The harnesses
@@ -121,12 +120,6 @@ These are listed so nobody reads the grid as more than it is.
   written. Recording both is below. The shim reads only a few fields from each
   (the ids and cwd), so the risk is small.
 - **Codex runs in plain mode only.** It has no `codex-tls` column yet.
-- **The suite retries one refusal** (MUS-78). A freshly connected shim's
-  first write can still be refused with "has no session on the roster" when
-  its registration takes longer than MUS-72's 5 s hold, as on a slow runner.
-  The suite's MCP helper retries that refusal for up to 15 s, so a slow
-  registration isn't reported as a delivery failure. The retry comes out
-  when MUS-78 is fixed.
 - **Restarts are tested without Postgres** (MUS-76). Mail sent before a
   restart and not yet delivered lives only in memory, and is lost with it.
   Scenario 5 sends after the restart. The durable case needs a database in CI.

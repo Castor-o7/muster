@@ -52,10 +52,6 @@ const KNOWN_FAILURES: &[(&str, &str, &str)] = &[
     ("claude", "wake-none-not-expected", "MUS-71"),
     ("claude-tls", "wake-none-not-expected", "MUS-71"),
     ("codex", "operator-pause-stops-wakes", "MUS-74"),
-    ("claude", "lost-hook-reply-redelivers", "MUS-75"),
-    ("claude-tls", "lost-hook-reply-redelivers", "MUS-75"),
-    ("codex", "lost-hook-reply-redelivers", "MUS-75"),
-    ("codex", "dropped-ack-redelivers", "MUS-75"),
     ("codex", "daemon-restart-mid-wait", "MUS-76"),
 ];
 
@@ -432,28 +428,7 @@ impl Mcp {
     }
 
     /// Call a tool and return its JSON result.
-    ///
-    /// MUS-78: a freshly connected shim's first write can still beat its
-    /// registration (MUS-72 holds it for at most 5 s, which a slow machine or
-    /// a just-restarted TLS daemon can outlast), and the daemon refuses it
-    /// with "has no session on the roster". Retry that one refusal for a
-    /// while; nothing is stored when it's refused. Remove this when MUS-78 is
-    /// fixed.
     fn tool(&mut self, name: &str, args: Value) -> Result<Value, String> {
-        let deadline = Instant::now() + Duration::from_secs(15);
-        loop {
-            match self.tool_once(name, args.clone()) {
-                Err(e)
-                    if e.contains("has no session on the roster") && Instant::now() < deadline =>
-                {
-                    thread::sleep(Duration::from_millis(250));
-                }
-                other => return other,
-            }
-        }
-    }
-
-    fn tool_once(&mut self, name: &str, args: Value) -> Result<Value, String> {
         let r = self.rpc("tools/call", json!({"name": name, "arguments": args}))?;
         let text = r["content"][0]["text"].as_str().unwrap_or_default();
         if r["isError"] == json!(true) {
