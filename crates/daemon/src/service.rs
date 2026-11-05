@@ -84,6 +84,7 @@ pub fn render(kind: Kind, exe: &Path, tls: bool, log_dir: &Path) -> String {
             } else {
                 ""
             };
+            let exe = systemd_quote(&exe.to_string());
             format!(
                 "# Written by `muster-daemon service --apply`.\n\
                  [Unit]\n\
@@ -129,6 +130,20 @@ pub fn render(kind: Kind, exe: &Path, tls: bool, log_dir: &Path) -> String {
                  </plist>\n"
             )
         }
+    }
+}
+
+/// A path as one `ExecStart=` word. `%` starts a systemd specifier, so it's
+/// doubled. A path with whitespace, quotes or backslashes is double-quoted,
+/// with `"` and `\` escaped inside.
+fn systemd_quote(s: &str) -> String {
+    let s = s.replace('%', "%%");
+    if s.chars()
+        .any(|c| c.is_whitespace() || matches!(c, '"' | '\'' | '\\'))
+    {
+        format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+    } else {
+        s
     }
 }
 
@@ -218,15 +233,31 @@ mod tests {
     }
 
     #[test]
+    fn an_awkward_path_stays_one_word_in_exec_start() {
+        let text = render(
+            Kind::Systemd,
+            Path::new("/home/j d/a&b/100%/muster-daemon"),
+            false,
+            Path::new("/l"),
+        );
+        assert!(
+            text.contains("\nExecStart=\"/home/j d/a&b/100%%/muster-daemon\"\n"),
+            "{text}"
+        );
+        assert_eq!(systemd_quote(r#"/a"b\c"#), r#""/a\"b\\c""#);
+        assert_eq!(systemd_quote("/plain/path"), "/plain/path");
+    }
+
+    #[test]
     fn the_launchd_agent_keeps_the_daemon_alive() {
         let text = render(
             Kind::Launchd,
-            Path::new("/Users/a&b/muster-daemon"),
+            Path::new("/Users/a b/x&<y>/muster-daemon"),
             true,
             Path::new("/Users/a/Library/Logs"),
         );
         assert!(text.contains("<string>dev.muster.daemon</string>"));
-        assert!(text.contains("<string>/Users/a&amp;b/muster-daemon</string>"));
+        assert!(text.contains("<string>/Users/a b/x&amp;&lt;y&gt;/muster-daemon</string>"));
         assert!(text.contains("<key>RunAtLoad</key>\n  <true/>"));
         assert!(text.contains("<key>SuccessfulExit</key>\n    <false/>"));
         assert!(text.contains("<key>MUSTER_TLS</key>"));
