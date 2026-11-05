@@ -271,6 +271,14 @@ Where the build differs from, or adds to, the text above:
 - **The give-up** is `LINK_GIVE_UP` (24 h): queued mail older than that, for a
   link that's down, is refused back to its sender as a message labelled from
   the far session; remote rows unseen that long are dropped.
+- **Answers are scoped to their link and connection.** `stored`, `deferred` and
+  `refused` act only on an outbound entry queued for the answering link and
+  sent on this connection; anything else is logged and ignored. Otherwise one
+  link could drop, refuse, or (by `deferred`) redirect mail queued for another.
+  Found by the watchman in review.
+- **Remote senders are stored as `sid@link`**, never their bare id, so their
+  mail can't pass for a local session's, even if a local session later takes
+  that bare id. Found by the watchman in review.
 - **Not in v1:** `muster-shim tell` resolves names on the roster itself, so it
   doesn't take `nickname@link` yet. `send_message` does.
 

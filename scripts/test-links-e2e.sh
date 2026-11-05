@@ -112,19 +112,6 @@ MAIL=$(waitmail 16656 $L_TOKEN $SL 20)
 check "after the restart, the queued message arrives" '[[ $MAIL == *"sent while lhost was down"* ]]'
 check "once" '[[ $(waitmail 16656 $L_TOKEN $SL 3) != *"sent while lhost was down"* ]]'
 
-# Token kinds are kept apart at the gate.
-LINK_TOKEN=$(awk '{print $4}' $WORK/D/state/links)
-MCODE=$(T env $L_ENV $BIN/muster-daemon pair --name m1 --address 127.0.0.1:16655 2>/dev/null | awk '{print $3}')
-INV=$(python3 -I -c 'import sys,json,base64; s=sys.argv[1].split(":",2)[2]; print(json.loads(base64.urlsafe_b64decode(s+"="*(-len(s)%4)))["invite"])' "$MCODE")
-MTOKEN=$(curl -sk -m 5 -X POST -H "Authorization: Bearer $INV" https://127.0.0.1:16655/pair | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["token"])')
-UPGRADE=(-H "Connection: Upgrade" -H "Upgrade: websocket" -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==")
-check "a machine's token can't open a link (403)" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_code} --http1.1 $UPGRADE -H "Authorization: Bearer $MTOKEN" https://127.0.0.1:16655/link) == 403 ]]'
-check "a link's token can't open myko (403)" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_code} --http1.1 $UPGRADE -H "Authorization: Bearer $LINK_TOKEN" https://127.0.0.1:16655/myko) == 403 ]]'
-check "or the hooks (403)" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_code} -H "Authorization: Bearer $LINK_TOKEN" -X POST https://127.0.0.1:16655/hook/session-start -d "{}") == 403 ]]'
-
-# A misbehaving peer holding D's link token. D is stopped first so it can't
-# take the link back mid-test.
-kill $DPID; wait $DPID 2>/dev/null
 PEER=$WORK/peer.py
 cat >$PEER <<'PY'
 import base64, json, os, socket, ssl, sys
@@ -168,7 +155,7 @@ if scenario == "version":
     sys.exit()
 send({"type": "hello", "name": "dhost", "version": 1})
 until("hello")
-fake = "f0000000-0000-4000-8000-0000000000ff"
+fake = os.environ.get("FAKE_ID", "f0000000-0000-4000-8000-0000000000ff")
 send({"type": "roster", "sessions": [{"session_id": fake, "nickname": "fake-peer"}, {"session_id": local_id, "nickname": "evil-twin"}]})
 if scenario == "forged":
     send({"type": "deliver", "id": "x1", "from": "a0000000-0000-4000-8000-00000000dead", "to": local_id, "body": "forged", "sent_at": 0})
@@ -187,10 +174,51 @@ elif scenario == "flood":
     # A resend of a stored message is stored again, not duplicated.
     send({"type": "deliver", "id": "flood-0", "from": fake, "to": local_id, "body": "flood 0", "sent_at": 0})
     print("RESEND " + json.dumps(until("stored")))
+elif scenario == "answers":
+    # Answer for a message queued for another link: every answer must be ignored.
+    other = os.environ["OTHER_ID"]
+    send({"type": "deferred", "id": other, "retry_after": 1})
+    send({"type": "refused", "id": other, "why": "lies from another link"})
+    send({"type": "stored", "id": other})
+    import time; time.sleep(2)
+    print("ANSWERED")
 elif scenario == "big":
     send_raw(b'"' + b"x" * (200 * 1024) + b'"')
     print("CLOSED" if until("never") is None else "OPEN")
 PY
+
+# One link can't act on mail queued for another: a second link, ehost,
+# answers for a message waiting in L's outbox for dhost.
+kill $DPID; wait $DPID 2>/dev/null
+OUT=$(mcp $WORK/L ws://127.0.0.1:16655 $SL "[[\"sleep\",3],[\"send\",\"$SD_ADDR\",\"queued for dhost only\"]]")
+QUEUED_ID=$(print -r -- "$OUT" | grep -o '\\"message_id\\": \\"[^\\]*' | head -1 | sed 's/.*\\"//')
+check "mail for dhost queues while D is down" '[[ -n $QUEUED_ID && $OUT == *link_up*false* ]]'
+ECODE=$(T env $L_ENV $BIN/muster-daemon pair --name ehost --link --address 127.0.0.1:16655 2>/dev/null)
+ECODE=${ECODE#muster-daemon link }
+EINV=$(python3 -I -c 'import sys,json,base64; s=sys.argv[1].split(":",2)[2]; print(json.loads(base64.urlsafe_b64decode(s+"="*(-len(s)%4)))["invite"])' "$ECODE")
+E_TOKEN=$(curl -sk -m 5 -X POST -H "Authorization: Bearer $EINV" https://127.0.0.1:16655/pair | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["token"])')
+OUT=$(FAKE_ID=e0000000-0000-4000-8000-0000000000ee OTHER_ID=$QUEUED_ID perl -e 'alarm 30; exec @ARGV' python3 -I $PEER $E_TOKEN answers $SL 2>&1)
+check "ehost's answers about dhost's message are ignored" '[[ $OUT == *ANSWERED* ]] && [[ $(grep -c "ehost: ignored an answer about a message it wasn.t sent" $WORK/L.log) -ge 3 ]]'
+check "and its sender gets no forged refusal" '[[ $(waitmail 16656 $L_TOKEN $SL 2) != *"lies from another link"* ]]'
+start_d
+D_TOKEN=$(<$WORK/D/muster/local-token)
+register 16756 $D_TOKEN $SD right >/dev/null
+MAIL=$(waitmail 16756 $D_TOKEN $SD 20)
+check "and it still reaches dhost, not ehost, when D is back" '[[ $MAIL == *"queued for dhost only"* ]]'
+
+# Token kinds are kept apart at the gate.
+LINK_TOKEN=$(awk '{print $4}' $WORK/D/state/links)
+MCODE=$(T env $L_ENV $BIN/muster-daemon pair --name m1 --address 127.0.0.1:16655 2>/dev/null | awk '{print $3}')
+INV=$(python3 -I -c 'import sys,json,base64; s=sys.argv[1].split(":",2)[2]; print(json.loads(base64.urlsafe_b64decode(s+"="*(-len(s)%4)))["invite"])' "$MCODE")
+MTOKEN=$(curl -sk -m 5 -X POST -H "Authorization: Bearer $INV" https://127.0.0.1:16655/pair | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["token"])')
+UPGRADE=(-H "Connection: Upgrade" -H "Upgrade: websocket" -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==")
+check "a machine's token can't open a link (403)" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_code} --http1.1 $UPGRADE -H "Authorization: Bearer $MTOKEN" https://127.0.0.1:16655/link) == 403 ]]'
+check "a link's token can't open myko (403)" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_code} --http1.1 $UPGRADE -H "Authorization: Bearer $LINK_TOKEN" https://127.0.0.1:16655/myko) == 403 ]]'
+check "or the hooks (403)" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_code} -H "Authorization: Bearer $LINK_TOKEN" -X POST https://127.0.0.1:16655/hook/session-start -d "{}") == 403 ]]'
+
+# A misbehaving peer holding D's link token. D is stopped first so it can't
+# take the link back mid-test.
+kill $DPID; wait $DPID 2>/dev/null
 peer() { perl -e 'alarm 30; exec @ARGV' python3 -I $PEER $LINK_TOKEN "$@" $SL 2>&1; }
 check "a hello with another protocol version closes the link" '[[ $(peer version) == CLOSED ]] && grep -q "speaks link protocol 99" $WORK/L.log'
 OUT=$(peer forged)

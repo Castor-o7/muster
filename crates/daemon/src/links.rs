@@ -397,28 +397,54 @@ fn handle_frame(
             },
             up_since.elapsed() < RECIPIENT_GRACE,
         )),
+        // An answer counts only for a message this connection sent to this
+        // link and is still waiting on. Anything else, such as another link's
+        // message id, is ignored: acting on it would let one link drop, refuse
+        // or redirect mail queued for another.
         Frame::Stored { id } => {
-            in_flight.remove(&id);
-            drop_outbox(&ctx, &id);
+            if let Some(entry) = answerable(&ctx, label, &id, in_flight) {
+                let _ = ctx.emit_del(&*entry);
+            }
             None
         }
         Frame::Deferred { id, retry_after } => {
-            in_flight.remove(&id);
-            let retry_at =
-                chrono::Utc::now().timestamp_millis() + (retry_after.clamp(1, 3600) * 1000) as i64;
-            let _ = ctx.emit_set(&MessageLink {
-                id: MessageLinkId(Arc::from(id.as_str())),
-                link: label.to_string(),
-                outbound: true,
-                remote_id: None,
-                retry_at: Some(retry_at),
-                note: Some("the far daemon's rate limit".into()),
-            });
+            if let Some(entry) = answerable(&ctx, label, &id, in_flight) {
+                let retry_at = chrono::Utc::now().timestamp_millis()
+                    + (retry_after.clamp(1, 3600) * 1000) as i64;
+                let mut held = (*entry).clone();
+                held.retry_at = Some(retry_at);
+                held.note = Some("the far daemon's rate limit".into());
+                let _ = ctx.emit_set(&held);
+            }
             None
         }
         Frame::Refused { id, why } => {
-            in_flight.remove(&id);
-            refuse_back(&ctx, label, &id, &why);
+            if answerable(&ctx, label, &id, in_flight).is_some() {
+                refuse_back(&ctx, label, &id, &why);
+            }
+            None
+        }
+    }
+}
+
+/// The outbox entry an answer from `label` about `id` may act on: one this
+/// connection sent and is waiting on, queued for `label` itself. Taken out of
+/// `in_flight` when found.
+fn answerable(
+    ctx: &CommandContext,
+    label: &str,
+    id: &str,
+    in_flight: &mut HashMap<String, Instant>,
+) -> Option<Arc<MessageLink>> {
+    let entry = ctx
+        .exec_query(GetAllMessageLinks {})
+        .unwrap_or_default()
+        .into_iter()
+        .find(|e: &Arc<MessageLink>| e.outbound && e.id.0.as_ref() == id);
+    match entry {
+        Some(e) if e.link == label && in_flight.remove(id).is_some() => Some(e),
+        _ => {
+            log::warn!("[link] {label}: ignored an answer about a message it wasn't sent");
             None
         }
     }
@@ -633,10 +659,13 @@ fn receive(ctx: &CommandContext, label: &str, d: Delivery<'_>, grace: bool) -> F
             retry_after: retry_after_secs(&why),
         };
     }
+    // The sender is stored under its link-namespaced id (`sid@link`), never its
+    // bare id, so its mail can't look like a local session's, even if a local
+    // session later registers that bare id. Replies resolve through it.
     let msg = Message {
         response_required,
         id: local_id.clone(),
-        from_session_id: SessionId(Arc::from(from)),
+        from_session_id: SessionId(Arc::from(RemoteSession::make_id(from, label).as_str())),
         to_session_id: Some(SessionId(Arc::from(to))),
         to_room_id: None,
         to_operator: None,
@@ -716,16 +745,19 @@ fn due_outbox(hub: &Hub, label: &str, in_flight: &mut HashMap<String, Instant>) 
     out
 }
 
-fn drop_outbox(ctx: &CommandContext, id: &str) {
+fn drop_outbox(ctx: &CommandContext, label: &str, id: &str) {
     let entries: Vec<Arc<MessageLink>> = ctx.exec_query(GetAllMessageLinks {}).unwrap_or_default();
-    if let Some(e) = entries.iter().find(|e| e.outbound && e.id.0.as_ref() == id) {
+    if let Some(e) = entries
+        .iter()
+        .find(|e| e.outbound && e.link == label && e.id.0.as_ref() == id)
+    {
         let _ = ctx.emit_del(&**e);
     }
 }
 
 /// Drop the outbox entry `id` and tell its sender why the far side won't take it.
 fn refuse_back(ctx: &CommandContext, label: &str, id: &str, why: &str) {
-    drop_outbox(ctx, id);
+    drop_outbox(ctx, label, id);
     let found: Vec<Arc<Message>> = ctx
         .exec_query(GetMessagesByIds {
             ids: vec![MessageId(Arc::from(id))],
@@ -743,7 +775,7 @@ fn refuse_back(ctx: &CommandContext, label: &str, id: &str, why: &str) {
     let notice = Message {
         response_required: false,
         id: notice_id.clone(),
-        from_session_id: to,
+        from_session_id: SessionId(Arc::from(RemoteSession::make_id(&to.0, label).as_str())),
         to_session_id: Some(original.from_session_id.clone()),
         to_room_id: None,
         to_operator: None,

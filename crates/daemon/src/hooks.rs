@@ -596,12 +596,16 @@ fn surface_unread(cmd_ctx: &CommandContext, sid: &str) -> (String, Vec<MessageId
             .iter()
             .find(|l| !l.outbound && l.id.0.as_ref() == m.message_id.0.as_ref())
             .map(|l| l.link.as_str());
+        // A linked sender is stored as `sid@link` (MUS-66).
         let sender = match via {
             Some(link) => remotes
                 .iter()
-                .find(|r| r.link == link && r.session_id == from)
+                .find(|r| r.link == link && r.id.0.as_ref() == from)
                 .map(|r| r.address())
-                .unwrap_or_else(|| format!("{}@{link}", muster_entities::nickname(from))),
+                .unwrap_or_else(|| {
+                    let bare = from.rsplit_once('@').map_or(from, |(sid, _)| sid);
+                    format!("{}@{link}", muster_entities::nickname(bare))
+                }),
             None => nickname_for(cmd_ctx, from).unwrap_or_else(|_| muster_entities::nickname(from)),
         };
         let (preview, truncated) = context_preview(&m.body, per_message_chars);
