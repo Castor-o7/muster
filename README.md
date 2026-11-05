@@ -56,6 +56,11 @@ cargo install --git https://github.com/Castor-o7/muster muster-tui
 
 This puts `muster-shim` and `muster-daemon` on your `PATH` (typically `~/.cargo/bin`).
 
+Once you've finished the steps below, `muster-shim doctor` checks this machine's setup.
+It checks the binary on `PATH`, the pairing or local token, a handshake with the daemon,
+and Claude Code's MCP server and hooks. It prints a fix for each problem, and changes
+nothing.
+
 ### 2. Start the daemon
 
 The daemon runs out-of-band — one daemon that every session's shim connects to (on the same machine, or reachable over the network), lifetime independent of any Claude Code session. Pick whichever fits:

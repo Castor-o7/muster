@@ -69,6 +69,25 @@ impl WakeState {
             WakeState::None => "none",
         }
     }
+
+    /// Whether the daemon saw this itself. Only `Waiting` is observed;
+    /// `Channel` and `Busy` are what the session says about itself (MUS-52).
+    pub fn is_observed(self) -> bool {
+        matches!(self, WakeState::Waiting)
+    }
+
+    /// A one-line explanation for a UI tooltip, saying whether the state was
+    /// observed or declared.
+    pub fn explain(self) -> &'static str {
+        match self {
+            WakeState::Waiting => "observed: the daemon holds a current wait for this session",
+            WakeState::Channel => "declared: the session says it has a live channel",
+            WakeState::Busy => {
+                "declared: the session reports a turn in progress; its wait starts again when the turn ends"
+            }
+            WakeState::None => "no sign a message would wake it; it reads mail on its next turn",
+        }
+    }
 }
 
 /// Work out a session's wake state. Pure, so each reader gets the same answer.
@@ -185,5 +204,16 @@ mod tests {
         let mut s = session("a");
         s.activity = Some("busy".into());
         assert_eq!(wake_state(&s, &[], 0), WakeState::Busy);
+    }
+
+    #[test]
+    fn only_waiting_is_observed() {
+        assert!(WakeState::Waiting.is_observed());
+        for declared in [WakeState::Channel, WakeState::Busy, WakeState::None] {
+            assert!(!declared.is_observed(), "{declared:?}");
+        }
+        assert!(WakeState::Waiting.explain().starts_with("observed"));
+        assert!(WakeState::Channel.explain().starts_with("declared"));
+        assert!(WakeState::Busy.explain().starts_with("declared"));
     }
 }

@@ -72,6 +72,13 @@ jobs:
         run: cargo build --workspace && ./scripts/test-gate-e2e.sh
       - name: Links between daemons end-to-end (MUS-66)
         run: ./scripts/test-links-e2e.sh
+      # MUS-58: the sweeper starts only once myko has replayed Postgres, so an
+      # ad-hoc room membership survives a restart. Uses the job's Postgres
+      # service, in a table of its own.
+      - name: Restart with Postgres end-to-end (MUS-58)
+        env:
+          RESTART_E2E_POSTGRES_URL: postgres://conformance:conformance@127.0.0.1:5432/conformance
+        run: ./scripts/test-restart-e2e.sh
       # The TypeScript plugins' fakes run under bun (MUS-69 stage 3). Download
       # the pinned release from bun's GitHub releases and check it against the
       # SHA-256 below, from that release's SHASUMS256.txt. No third-party

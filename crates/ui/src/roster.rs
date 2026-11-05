@@ -7,7 +7,9 @@
 //! the Session detail pane.
 
 use leptos::prelude::*;
-use muster_entities::{GetAllSessions, Session};
+use muster_entities::{
+    GetAllSessions, GetAllWakeWatchers, Session, WakeState, WakeWatcher, wake_state,
+};
 use pulse_leptos_ui::{EmptyState, SearchField};
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -25,6 +27,8 @@ fn last_seen_ms(s: &Session) -> i64 {
 #[component]
 pub fn RosterPanel() -> impl IntoView {
     let (sessions, loaded) = myko_leptos::live_query_loaded::<GetAllSessions>(|| GetAllSessions {});
+    // The daemon's wait records, for the observed `waiting` wake state (MUS-52).
+    let watchers = myko_leptos::live_query::<GetAllWakeWatchers>(|| GetAllWakeWatchers {});
     let now = time::use_now();
     let nick = nick::use_nicknames();
     let focus = use_focus();
@@ -126,6 +130,7 @@ pub fn RosterPanel() -> impl IntoView {
                             <th>"project"</th>
                             <th>"branch"</th>
                             <th>"status"</th>
+                            <th title="whether a message would wake it: solid is observed by the daemon, ? is the session's own claim">"wake"</th>
                             <th class="c-num">"seen"</th>
                         </tr>
                     </thead>
@@ -134,13 +139,13 @@ pub fn RosterPanel() -> impl IntoView {
                         view! {
                             <tbody>
                                 <tr class="grp-row">
-                                    <td colspan="6">
+                                    <td colspan="7">
                                         <span class="grp">{host}</span>
                                         <span class="grp-n">{format!("{count}")}</span>
                                     </td>
                                 </tr>
                                 {members.into_iter().map(|s| view! {
-                                    <RosterRow session=s now=now nick=nick focus=focus />
+                                    <RosterRow session=s now=now nick=nick focus=focus watchers=watchers />
                                 }).collect_view()}
                             </tbody>
                         }
@@ -154,7 +159,13 @@ pub fn RosterPanel() -> impl IntoView {
 }
 
 #[component]
-fn RosterRow(session: Arc<Session>, now: Now, nick: Nicknames, focus: Focus) -> impl IntoView {
+fn RosterRow(
+    session: Arc<Session>,
+    now: Now,
+    nick: Nicknames,
+    focus: Focus,
+    watchers: ReadSignal<Vec<Arc<WakeWatcher>>>,
+) -> impl IntoView {
     let id = session.id.0.to_string();
     let sid = nick::short_id(&id);
     // The operator's `/rename` name for this session, when set — the human
@@ -208,6 +219,15 @@ fn RosterRow(session: Arc<Session>, now: Now, nick: Nicknames, focus: Focus) -> 
         view! { <td class=cls title=seen_abs.clone()>{format!("{} ago", time::humanize_age(age))}</td> }
     };
 
+    // Wake state (MUS-52): live, since a waiter's record expires on the clock
+    // as well as when the watcher list changes.
+    let wake_session = Arc::clone(&session);
+    let wake = move || {
+        let w = watchers.with(|ws| wake_state(&wake_session, ws, now.ms() as i64));
+        let (cls, text) = wake_cell(w);
+        view! { <td class=cls title=w.explain()>{text}</td> }
+    };
+
     let click_id = id.clone();
     view! {
         <tr class=row_class on:click=move |_| focus.toggle_session(click_id.clone())>
@@ -225,6 +245,7 @@ fn RosterRow(session: Arc<Session>, now: Now, nick: Nicknames, focus: Focus) -> 
             <td class=format!("c-status {task_dim}")>
                 <span class="ellip" title=task_title>{task_str}</span>
             </td>
+            {wake}
             {seen}
         </tr>
     }
@@ -249,6 +270,17 @@ fn opt_status(v: &Option<String>) -> (&'static str, String) {
 /// The live turn-state dot → (`class`, hover title). `busy` = actively working
 /// (pulses), `shell` = in a shell command, `idle` = awaiting input, absent =
 /// unknown (harness without a manifest / older build).
+/// Class and text for a wake cell. Only `waiting` is observed by the daemon;
+/// `channel` and `busy` are the session's own claims, so they carry a `?`.
+fn wake_cell(w: WakeState) -> (&'static str, &'static str) {
+    match w {
+        WakeState::Waiting => ("c-wake wake-observed", "● waiting"),
+        WakeState::Channel => ("c-wake wake-declared", "channel?"),
+        WakeState::Busy => ("c-wake wake-declared", "busy?"),
+        WakeState::None => ("c-wake dim", "—"),
+    }
+}
+
 fn activity_indicator(a: Option<&str>) -> (&'static str, &'static str) {
     match a {
         Some("busy") => ("act-dot act-busy", "working"),
@@ -281,6 +313,28 @@ const ROSTER_CSS: &str = r#"
 .roster-t td.c-name .act-shell { background: var(--color-warning); }
 .roster-t td.c-name .act-idle { background: var(--color-text-secondary); opacity: 0.35; }
 .roster-t td.c-name .act-none { background: transparent; box-shadow: inset 0 0 0 1px var(--color-border); }
+.roster-t td.c-wake { white-space: nowrap; }
+.roster-t td.wake-observed { color: var(--color-success); }
+.roster-t td.wake-declared { color: var(--color-warning); font-style: italic; }
 @keyframes act-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 .roster-t .kind-badge { margin-left: 8px; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-text-secondary); border: 1px solid var(--color-border); padding: 0 4px; border-radius: 3px; }
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::{WakeState, wake_cell};
+
+    #[test]
+    fn wake_cell_tells_observed_from_declared() {
+        assert_eq!(wake_cell(WakeState::Waiting).0, "c-wake wake-observed");
+        assert_eq!(
+            wake_cell(WakeState::Channel),
+            ("c-wake wake-declared", "channel?")
+        );
+        assert_eq!(
+            wake_cell(WakeState::Busy),
+            ("c-wake wake-declared", "busy?")
+        );
+        assert_eq!(wake_cell(WakeState::None).1, "—");
+    }
+}

@@ -71,6 +71,14 @@ const FLAKY: &[(&str, &str, &str, &str)] = &[
     ),
     (
         "claude-tls",
+        "restart-keeps-identity",
+        "MUS-93",
+        "failed in CI on #133 (236ec03, run 42086972236) with the same missed takeover as \
+         unread-mail-follows-a-restart in that run: the new session kept its fresh nickname \
+         for 20 s. Passed 7 of 7 on a1, including under full CPU load",
+    ),
+    (
+        "claude-tls",
         "unread-mail-follows-a-restart",
         "MUS-93",
         "failed in CI on main's push of #134 (081e389, run 42075687566): the new session never \
@@ -229,7 +237,8 @@ impl Daemon {
             .unwrap();
         let child = self
             .command()
-            .env("RUST_LOG", "info")
+            // Debug for succession, so a missed takeover shows each verdict.
+            .env("RUST_LOG", "info,daemon::succession=debug")
             .stdout(log.try_clone().unwrap())
             .stderr(log)
             .spawn()
@@ -2178,7 +2187,26 @@ fn run_cell(harness: &Harness, scenario: Scenario, name: &str) -> Outcome {
         .map(|(_, _, story)| *story);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut cell = Cell::new(harness.mode, (harness.make)(), postgres.as_deref());
-        scenario(&mut cell)
+        let result = scenario(&mut cell);
+        // CONFORMANCE_DAEMON_LOG=1 prints it for passing cells too.
+        if std::env::var_os("CONFORMANCE_DAEMON_LOG").is_some() && result.is_ok() {
+            eprintln!(
+                "--- {} / {name} passed\n--- daemon log:\n{}--- end of daemon log",
+                harness.name,
+                daemon_log_excerpt(&cell.daemon.log())
+            );
+        }
+        if let Err(e) = &result {
+            // CI keeps no daemon logs, so a failure (FLAKY ones too) prints
+            // the daemon's identity and hook lines, where a missed takeover
+            // or a lost delivery shows its cause (MUS-93).
+            eprintln!(
+                "--- {} / {name} failed: {e}\n--- daemon log ([identity], [hook], warnings):\n{}--- end of daemon log",
+                harness.name,
+                daemon_log_excerpt(&cell.daemon.log())
+            );
+        }
+        result
     }))
     .unwrap_or_else(|panic| {
         Err(panic
@@ -2211,6 +2239,22 @@ fn opencode_skips_what_every_push_plugin_skips() {
         names(OPENCODE_NOT_APPLICABLE),
         names(PUSH_PLUGIN_NOT_APPLICABLE)
     );
+}
+
+/// The daemon log lines that explain a failed cell: identity decisions, hook
+/// traffic and anything at warn or above, at most the last 200 of them.
+fn daemon_log_excerpt(log: &str) -> String {
+    let lines: Vec<&str> = log
+        .lines()
+        .filter(|l| {
+            l.contains("[identity]")
+                || l.contains("[hook]")
+                || l.contains(" WARN ")
+                || l.contains(" ERROR ")
+        })
+        .collect();
+    let from = lines.len().saturating_sub(200);
+    lines[from..].iter().map(|l| format!("{l}\n")).collect()
 }
 
 /// A `FLAKY` entry must name a real cell, or it quietly covers nothing.

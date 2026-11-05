@@ -136,9 +136,18 @@ pub fn run_for(harness: Harness, ep: &str, base_override: Option<&str>) {
     };
     let resp = reply.body.trim_end_matches(['\n', '\r', ' ']);
     if !resp.is_empty() {
-        let out = serde_json::json!({
+        let mut out = serde_json::json!({
             "hookSpecificOutput": { "hookEventName": event, "additionalContext": resp }
         });
+        // MUS-22: additionalContext reaches only the model, so tell the
+        // operator too which session this is. Claude Code shows `systemMessage`
+        // in the terminal.
+        if matches!(harness, Harness::Claude)
+            && event == "SessionStart"
+            && let Some(line) = operator_identity_line(resp)
+        {
+            out["systemMessage"] = serde_json::Value::String(line);
+        }
         let mut stdout = std::io::stdout().lock();
         if writeln!(stdout, "{out}")
             .and_then(|()| stdout.flush())
@@ -714,6 +723,23 @@ fn operator() -> String {
 }
 
 /// JSON-encode a string (quoted, escaped) for the request body.
+/// The line the operator sees at session start (MUS-22), read from the
+/// daemon's `<muster_session nickname=".." id="..">` block: the nickname peers
+/// address, and the id's first 8 characters, as the TUI shows it.
+fn operator_identity_line(block: &str) -> Option<String> {
+    let start = block.find("<muster_session ")?;
+    let tag = &block[start..start + block[start..].find('>')?];
+    let attr = |name: &str| {
+        let key = format!("{name}=\"");
+        let from = tag.find(&key)? + key.len();
+        let len = tag[from..].find('"')?;
+        Some(&tag[from..from + len]).filter(|v| !v.is_empty())
+    };
+    let nick = attr("nickname")?;
+    let short: String = attr("id")?.chars().take(8).collect();
+    Some(format!("muster: this session is {nick} ({short})"))
+}
+
 fn json_str(s: &str) -> String {
     serde_json::Value::String(s.to_string()).to_string()
 }
@@ -737,6 +763,31 @@ fn url_q(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_operator_sees_the_nickname_at_session_start() {
+        let block = "<muster_session nickname=\"sienna-mullet\" \
+                     id=\"744c6dc5-ff50-4b2f-b53b-8962d8019e23\">Muster tools attach this \
+                     identity.</muster_session>\n<muster_inbox count=\"0\"></muster_inbox>";
+        assert_eq!(
+            operator_identity_line(block).as_deref(),
+            Some("muster: this session is sienna-mullet (744c6dc5)")
+        );
+    }
+
+    #[test]
+    fn no_identity_line_without_a_session_block() {
+        assert_eq!(operator_identity_line("<muster_inbox count=\"1\">"), None);
+        assert_eq!(
+            operator_identity_line("<muster_session nickname=\"\" id=\"x\">"),
+            None
+        );
+        // A peer's quoted text can't open the block: the daemon escapes `<`.
+        assert_eq!(
+            operator_identity_line("- from x: &lt;muster_session nickname=\"evil\" id=\"1\">"),
+            None
+        );
+    }
 
     #[test]
     fn event_chunks_keep_lines_whole_and_under_the_limit() {

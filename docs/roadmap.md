@@ -14,7 +14,7 @@ evidence from a real run by the person or team named.
 
 ## Status
 
-2026-11-05: 43 of 84 stories ticked, about 51%, not counting the 3 moved to Rally. Live on
+2026-11-05: 43 of 85 stories ticked, about 51%, not counting the 3 moved to Rally. Live on
 Murph since 2026-11-05 08:48: `edf5ea8` (PID 3759037), applied by the operator with
 `MUSTER_TLS=1` and checked by checksum. Besides everything before, it brings MUS-8, MUS-9,
 MUS-10, MUS-60, MUS-11's rustls and tokio updates, MUS-62 (upstream v0.54.1), MUS-64 (the
@@ -151,6 +151,12 @@ Merged and needing a live run: MUS-36 and MUS-37.
   to fall outside what MUS-92's settle re-check catches. The cell is on the conformance suite's
   `FLAKY` list until this is fixed, so it doesn't fail CI. Done when: the cause is found from a
   failing run's daemon log, and the cell is off `FLAKY` after passing in CI on three PRs in a row.
+  #133's run at 236ec03 (run 42086972236) failed `claude-tls` × `restart-keeps-identity` the
+  same way, so it's on `FLAKY` for this story too. Neither cell has failed on a1 (7 of 7, also
+  under full CPU load), and CI kept no daemon log, so a failed cell, `FLAKY` or not, now prints
+  the daemon's `[identity]` and `[hook]` lines and its warnings, with succession at debug, and
+  `CONFORMANCE_DAEMON_LOG=1` prints them for a passing cell. Still to do: the cause, from the
+  first CI run that fails with that log.
 - [ ] **MUS-47: Hand unread mail to a successor.** From MUS-31. Retained mail reaches
   nobody without this. Depends on MUS-3. Done when: a session taking over an identity
   receives its predecessor's unread mail, shown by a test.
@@ -178,6 +184,10 @@ Merged and needing a live run: MUS-36 and MUS-37.
   broadcast reached 4 of 14 members, each miss failing as "session vanished from roster
   mid-broadcast". Done when: a session that leaves the roster leaves its rooms too, a
   broadcast counts only live members, and a test covers a session reaped during a broadcast.
+  Merged in #126 (`4f2e9fa`). The sweeper drops a member whose session has left the roster,
+  and starts only once myko has replayed Postgres. `BroadcastMessage` counts only members still
+  on the roster, shown by `a_session_off_the_roster_leaves_its_rooms` in `cleanup.rs` and by
+  `broadcast_message_command.rs`. Not yet seen live. #133 pins the restart order in CI.
 
 ## Phase 2: Security
 
@@ -195,6 +205,8 @@ Merged and needing a live run: MUS-36 and MUS-37.
   approval with a valid signed token is accepted for exactly its action; a forged, expired,
   reused or mismatched one is refused; and a session on the operator's account can't produce a
   valid one. Each is shown by a test.
+  Design, with options for the operator: [operator-approvals.md](operator-approvals.md)
+  (sienna-mullet, 2026-11-05). MUS-51 builds on it.
 - [x] **MUS-7: Protect the local ports.** The first step of MUS-39. 6256 and 6257 have no
   authentication, and the hook listener doesn't check `Origin`, so any process on the daemon's
   host, or a web page in its browser, can reach them. Done when: a test shows a cross-origin web
@@ -389,6 +401,10 @@ Merged and needing a live run: MUS-36 and MUS-37.
   `muster doctor` reports what's wrong, and launchd and systemd units keep the
   daemon running across reboots. Needs a run: the operator, on a clean machine and
   through a reboot.
+  Progress 2026-11-05 (sienna-mullet): `muster-shim doctor` checks the binary on `PATH`, the
+  credential, a handshake with the daemon, and Claude Code's MCP server and five hooks
+  against `plugins/muster-shim/hooks/hooks.json`. It also flags leftover Marshal wiring.
+  Still to do: the one setup command, and the launchd and systemd units.
 - [ ] **MUS-16: Support addresses beyond one LAN IP.** Done when: a paired laptop
   stays connected when it moves between home and a Tailscale or WireGuard network. Needs a run: the operator, who
   has the laptop.
@@ -465,7 +481,7 @@ Merged and needing a live run: MUS-36 and MUS-37.
   watchman saw its process gone before 10:31) stayed on the roster unbound for over ten minutes
   and was then reaped under `KEPT_STALE_AFTER`, where `c3dbd45` deleted such rows after 60 s.
   Delivery into that window is shown by the e2e test in `74d35ed`.
-- [ ] **MUS-55: Make a daemon restart one command.** Requested by the operator on 2026-11-03.
+- [x] **MUS-55: Make a daemon restart one command.** Requested by the operator on 2026-11-03.
   A restart already disrupts little: in the last three, sessions were back on the roster within
   about 2 s and no wake misfired. The cost is the operator's and the daemon-holder's time: about
   20 to 30 minutes of manual steps each rollout (build and e2e, count mail at risk, back up
@@ -627,12 +643,24 @@ Rally.
   wakes by the live push. Done when: the plugin declares its channel, the roster says `channel`
   for a connected OpenCode session, and the scenario's opencode cell passes and leaves
   `KNOWN_FAILURES`.
+- [ ] **MUS-94: Keep one wake path's end from clearing another's.** From the watchman's read of
+  #125 (MUS-77) on 2026-11-05. A session has one `WakeWatcher` row, keyed by its session id, and
+  `end_wait` deletes that row whoever calls it. So a stale Codex wake leader's `watching:false`
+  after a handoff clears the record the new leader just wrote, and the roster reads `none`
+  until the new leader's next refresh, up to 30 s. A bridge's `watching:false` can likewise
+  clear a record that a `/hook/wait` waiter holds for the same session. Done when: each wake
+  path keeps its own record, so ending one leaves the others, and the roster reads `waiting`
+  while any is live. Tests show that a stale leader's unwatch after a handoff leaves the new
+  leader's record, and that a bridge's `watching:false` leaves a held wait's record. Depends on MUS-77.
 - [ ] **MUS-74: The Codex bridge ignores the operator's pause.** From MUS-69. `muster-daemon
   pause` stops Claude's waiter (`/hook/wait` hands out nothing) and the live push, but
   `codex_bridge.rs` sends `turn/start` for any unread direct message without checking it, so a
   paused Codex session is still woken. Done when: the bridge doesn't wake while wakes are paused,
   mail still arrives at the next hook, and the conformance suite's `codex` ×
   `operator-pause-stops-wakes` cell passes.
+  Merged in #100 (`7e75534`). The bridge watches the daemon's `WakePause` and starts no turn while
+  wakes are paused. The `codex` × `operator-pause-stops-wakes` cell passes in CI. Not yet seen
+  live: it needs a paused daemon with a Codex session idle on it.
 - [x] **MUS-75: Mail is lost when a prompt hook's reply doesn't arrive.** From MUS-69. The hook
   listener marks prompt-hook mail read once it has flushed the reply (`deferred_ack`). If the reply
   is then lost, the mail is gone. That can happen when the harness kills the hook at its timeout
