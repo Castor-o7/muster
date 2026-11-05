@@ -116,8 +116,29 @@ fn eventually(within: Duration, mut f: impl FnMut() -> bool) -> bool {
 /// The hook's write: the whole row, from a copy read before the shim's
 /// registration landed, so with no client.
 fn stale_daemon_write(ctx: &MykoServerContext, id: &str) {
-    let ev = MEvent::from_item(&row(id), MEventType::SET, &Uuid::new_v4().to_string());
+    stale_daemon_write_with(ctx, id, None);
+}
+
+/// The same, from a copy that still names an older connection.
+fn stale_daemon_write_with(ctx: &MykoServerContext, id: &str, client: Option<ClientId>) {
+    let mut r = row(id);
+    r.client_id = client;
+    let ev = MEvent::from_item(&r, MEventType::SET, &Uuid::new_v4().to_string());
     ctx.apply_event_batch(vec![ev]).expect("apply SET");
+}
+
+fn register(shim: &MykoClient, ctx: &MykoServerContext, sid: &str) -> ClientId {
+    let before = client_of(ctx, sid);
+    shim.send_event(MEvent::from_item(&row(sid), MEventType::SET, "shim"))
+        .expect("send");
+    assert!(
+        eventually(Duration::from_secs(5), || {
+            let now = client_of(ctx, sid);
+            now.is_some() && now != before
+        }),
+        "the registration binds the row"
+    );
+    client_of(ctx, sid).unwrap()
 }
 
 #[test]
@@ -139,6 +160,53 @@ fn a_stale_daemon_write_doesnt_unbind_a_live_session() {
         "the binding to the still-connected shim is put back; got {:?}",
         client_of(&ctx, &sid)
     );
+}
+
+/// The repair's own SET triggers the saga again, which must do nothing: one
+/// repair write, not a loop.
+#[test]
+fn a_repair_is_written_once() {
+    let (ctx, addr) = setup();
+    let shim = connect(&addr);
+    let sid = Uuid::new_v4().to_string();
+    let bound = register(&shim, &ctx, &sid);
+    stale_daemon_write(&ctx, &sid);
+    assert!(eventually(Duration::from_secs(5), || client_of(&ctx, &sid)
+        .as_ref()
+        == Some(&bound)));
+    std::thread::sleep(Duration::from_millis(1500));
+    assert_eq!(daemon::binding_repair::repairs_for(&sid), 1);
+    assert_eq!(client_of(&ctx, &sid).as_ref(), Some(&bound));
+}
+
+/// A shim that reconnects gets a new client id, while its old connection may
+/// linger in the Client store for a while. A stale write, naming no client or
+/// the old one, is bound to the newest connection, never back to the old.
+#[test]
+fn a_moved_session_follows_its_newest_connection() {
+    let (ctx, addr) = setup();
+    let old_shim = connect(&addr);
+    let new_shim = connect(&addr);
+    let sid = Uuid::new_v4().to_string();
+    let old = register(&old_shim, &ctx, &sid);
+    let new = register(&new_shim, &ctx, &sid);
+    assert_ne!(old, new);
+    for stale in [None, Some(old.clone())] {
+        stale_daemon_write_with(&ctx, &sid, stale.clone());
+        assert!(
+            eventually(Duration::from_secs(5), || client_of(&ctx, &sid).as_ref()
+                == Some(&new)),
+            "a stale write naming {stale:?} is bound to the newest connection; got {:?}",
+            client_of(&ctx, &sid)
+        );
+    }
+    std::thread::sleep(Duration::from_millis(1000));
+    assert_eq!(
+        client_of(&ctx, &sid).as_ref(),
+        Some(&new),
+        "and it stays there"
+    );
+    drop(old_shim);
 }
 
 #[test]

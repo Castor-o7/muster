@@ -4,17 +4,25 @@
 //! arrives over a client's WebSocket. The daemon's own writes, the hooks'
 //! `register_hook_session` above all, write a whole row built from a copy they
 //! read moments before. If the shim's registration lands between that read and
-//! that write, the copy has no `client_id`, the write clears the binding, and
-//! every send from the session is refused as unregistered until the shim
-//! notices and registers again. That was seen on 2026-11-02.
+//! that write, the copy has the wrong `client_id`: none, or an older
+//! connection's. The write clears or stales the binding, and every send from
+//! the session is refused as unregistered until the shim registers again. That
+//! was seen on 2026-11-02.
 //!
 //! Narrowing the window wouldn't close it, since the read can lag the shim's
 //! write by however long the store takes to apply it. So this repairs the
-//! effect instead, whatever caused it. Each `Session` SET that carries a
-//! client is remembered. When a later SET leaves the stored row with no
-//! client, and the client it was last bound to is still connected, the binding
-//! is put back. A row whose client has really gone (the sweeper's demotion,
-//! MUS-54) is left alone, because that client isn't connected.
+//! effect instead, whatever caused it:
+//!
+//! - Every `Session` SET that names a client is noted, in the order each
+//!   client was first seen for that session. Client ids are per connection, so
+//!   the newest one seen is the shim's current connection.
+//! - When a SET leaves the stored row with no client, or with an older client
+//!   than the newest one still connected, the row is bound to that newest
+//!   connected client again.
+//! - A row whose clients have all gone (the sweeper's demotion, MUS-54) is left
+//!   unbound, because none of them is connected.
+//!
+//! The repair's own SET names the newest client, so it triggers nothing more.
 
 use std::{
     collections::HashMap,
@@ -35,8 +43,21 @@ use myko::{
 /// Force-link the saga and command registrations.
 pub fn link() {}
 
-/// Session id → the client it was last bound to over its WebSocket.
-static BOUND: LazyLock<Mutex<HashMap<Arc<str>, ClientId>>> = LazyLock::new(Default::default);
+/// Session id → the clients seen bound to it, oldest first.
+static SEEN: LazyLock<Mutex<HashMap<Arc<str>, Vec<ClientId>>>> = LazyLock::new(Default::default);
+
+/// Session id → how many times its binding has been put back.
+static REPAIRS: LazyLock<Mutex<HashMap<Arc<str>, usize>>> = LazyLock::new(Default::default);
+
+/// How many times this daemon has put `session_id`'s binding back.
+pub fn repairs_for(session_id: &str) -> usize {
+    REPAIRS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(session_id)
+        .copied()
+        .unwrap_or(0)
+}
 
 #[myko_saga]
 pub struct KeepClientBindingSaga;
@@ -47,24 +68,29 @@ impl SagaHandler for KeepClientBindingSaga {
     const EVENT_TYPE: MEventType = MEventType::SET;
 
     fn handle(session: Session, _event: MEvent, _ctx: Arc<SagaContext>) -> Option<Self::Command> {
-        let mut bound = BOUND.lock().unwrap_or_else(|e| e.into_inner());
-        match &session.client_id {
-            Some(cid) => {
-                bound.insert(session.id.0.clone(), cid.clone());
-                None
-            }
-            // Only a session that had a binding can have lost one.
-            None => bound
-                .contains_key(&session.id.0)
-                .then(|| KeepClientBinding {
-                    session_id: session.id.0.to_string(),
-                }),
+        let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+        let clients = seen.entry(session.id.0.clone()).or_default();
+        if let Some(cid) = &session.client_id
+            && !clients.contains(cid)
+        {
+            clients.push(cid.clone());
         }
+        // A SET naming the newest client seen is the shim's own, or a repair:
+        // nothing to do. Anything else may have dropped or staled the binding.
+        let current = clients
+            .last()
+            .is_some_and(|newest| session.client_id.as_ref() == Some(newest));
+        if clients.is_empty() || current {
+            return None;
+        }
+        Some(KeepClientBinding {
+            session_id: session.id.0.to_string(),
+        })
     }
 }
 
-/// Server-internal: if `session_id`'s row has no client but the client it was
-/// last bound to is still connected, bind it again.
+/// Server-internal: bind `session_id`'s row to the newest of its clients that's
+/// still connected, if the stored row isn't bound to it.
 #[myko_command]
 pub struct KeepClientBinding {
     pub session_id: String,
@@ -77,40 +103,53 @@ impl CommandHandler for KeepClientBinding {
 }
 
 fn restore_if_lost(ctx: &CommandContext, session_id: &str) -> Result<(), CommandError> {
-    let Some(cid) = BOUND
+    let clients: Vec<ClientId> = SEEN
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .get(session_id)
         .cloned()
+        .unwrap_or_default();
+    if clients.is_empty() {
+        return Ok(());
+    }
+    let connected: Vec<ClientId> = ctx
+        .exec_query(GetAllClients {})?
+        .iter()
+        .map(|c| c.id.clone())
+        .collect();
+    let Some(newest_live) = clients
+        .iter()
+        .rev()
+        .find(|c| connected.contains(c))
+        .cloned()
     else {
+        // Every client it was bound to has gone: a pull row now, rightly unbound.
+        SEEN.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(session_id);
         return Ok(());
     };
     // Decide on the row as stored now, not the event that triggered this: a
-    // later write may already have put the binding back.
+    // later write may already have put the binding right.
     let sessions: Vec<Arc<Session>> = ctx.exec_query(GetAllSessions {})?;
     let Some(row) = sessions.iter().find(|s| s.id.0.as_ref() == session_id) else {
         return Ok(());
     };
-    if row.client_id.is_some() {
-        return Ok(());
-    }
-    let connected = ctx
-        .exec_query(GetAllClients {})?
-        .iter()
-        .any(|c| c.id == cid);
-    if !connected {
-        // Its client has gone: the row is a pull row now, rightly unbound.
-        BOUND
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(session_id);
+    if row.client_id.as_ref() == Some(&newest_live) {
         return Ok(());
     }
     log::info!(
-        "[binding] session {session_id} lost its binding to live client {} in a daemon write; restoring it",
-        cid.0
+        "[binding] session {session_id} was left bound to {:?} by a daemon write; binding it to its live client {} again",
+        row.client_id.as_ref().map(|c| c.0.as_ref()),
+        newest_live.0
     );
     let mut restored = (**row).clone();
-    restored.client_id = Some(cid);
-    ctx.emit_set(&restored)
+    restored.client_id = Some(newest_live);
+    ctx.emit_set(&restored)?;
+    *REPAIRS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .entry(Arc::from(session_id))
+        .or_default() += 1;
+    Ok(())
 }
