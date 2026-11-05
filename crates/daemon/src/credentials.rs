@@ -643,6 +643,8 @@ mod tests {
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
         // SAFETY: this is the only test in the crate that reads or sets the
         // config directory, and it runs in its own process when run alone.
+        // `tests/isolated_state.rs` fails if any other library code reads or
+        // sets it, so this process-wide value can't redirect anything else.
         unsafe { std::env::set_var("XDG_CONFIG_HOME", &dir) };
         let first = ensure_local_token().unwrap();
         let path = dir
