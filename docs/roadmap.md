@@ -164,6 +164,10 @@ Merged and needing a live run: MUS-36 and MUS-37.
   the daemon's `[identity]` and `[hook]` lines and its warnings, with succession at debug, and
   `CONFORMANCE_DAEMON_LOG=1` prints them for a passing cell. Still to do: the cause, from the
   first CI run that fails with that log.
+  The plain `claude` form fails too, even after #156's re-check: `claude` ×
+  `restart-keeps-identity` failed at the full 20 s on main's push of 65d922b (run 42107003441)
+  and on #125 at 0adfa2c (run 42111510686), so it's on `FLAKY` for this story as well (#175). The
+  #125 run printed the daemon's `[identity]` lines for the failed cell, so it can supply that log.
 - [x] **MUS-47: Hand unread mail to a successor.** From MUS-31. Retained mail reaches
   nobody without this. Depends on MUS-3. Done when: a session taking over an identity
   receives its predecessor's unread mail, shown by a test.
@@ -403,6 +407,15 @@ Merged and needing a live run: MUS-36 and MUS-37.
   Linux x86_64 under the names install-codex.sh asks for, with one SHA256SUMS. workflow_dispatch
   is a dry run that only uploads artifacts; a `v*` tag also makes a draft release, which stays
   unpublished until Josh publishes it. Left: a tag and a published release, on Josh's word.
+- [x] **MUS-96: The installer checks its download, and release binaries are stripped.** From
+  MUS-14's review. Done when: `scripts/install-codex.sh` fetches SHA256SUMS from the same release,
+  checks the shim against it with sha256sum (or `shasum -a 256` on macOS), and refuses to run it on
+  a mismatch, a missing entry, a missing SHA256SUMS or no tool to check with; a fixture test
+  shows a tampered shim refused; and the release workflow strips the binaries, keeping its smoke
+  test, SHA-pinned actions and no cache. `scripts/test-install-codex.sh` runs in CI with a fake
+  curl: 9 checks pass, and 7 of them fail against the installer from before. This guards against a
+  corrupt or swapped download, not a tampered release, since both files come from the same
+  release; signing waits for Josh's Apple developer setup.
 - [ ] **MUS-91: Keep `windows-cross-check` from timing out.** It hit its 20-minute limit on #110,
   #113 and #124, and a re-run passed each time. Every time it was the apt step: `mingw-w64` pulls
   278 MB (the i686 and x86_64 toolchains, C and C++), which normally takes 7 s, but the Azure
@@ -426,6 +439,8 @@ Merged and needing a live run: MUS-36 and MUS-37.
 - [ ] **MUS-16: Support addresses beyond one LAN IP.** Done when: a paired laptop
   stays connected when it moves between home and a Tailscale or WireGuard network. Needs a run: the operator, who
   has the laptop.
+  Design, with options for the operator: [remote-access.md](remote-access.md) (sienna-mullet,
+  2026-11-05). It bears on MUS-56.
 - [x] **MUS-17: Keep messages across daemon restarts without Postgres.** Check
   first whether myko allows it. Done when: an unread message survives a daemon
   restart with no Postgres configured.

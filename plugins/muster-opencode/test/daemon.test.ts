@@ -65,4 +65,13 @@ describe("a message is shown once, by a push or a drain", () => {
     daemon.claimShown("ses_a", "pushed");
     expect(await daemon.drainInbox("ses_a")).toBeNull();
   });
+
+  test("a session's shown ids go when it deregisters", () => {
+    const daemon = make();
+    daemon.registerSession("ses_gone");
+    expect(daemon.claimShown("ses_gone", "m1")).toBe(true);
+    expect((daemon as any).shown.has("ses_gone")).toBe(true);
+    daemon.deregisterSession("ses_gone");
+    expect((daemon as any).shown.has("ses_gone")).toBe(false);
+  });
 });

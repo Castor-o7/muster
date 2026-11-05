@@ -10,7 +10,9 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  check:
+  # The workspace checks and the end-to-end scripts. Delivery conformance runs
+  # beside it in its own job, since together they outgrew one 30-minute job.
+  tests:
     runs-on: ubuntu-latest
     # Backstop so a stuck step fails in minutes instead of GitHub's 6-hour default.
     timeout-minutes: 30
@@ -72,6 +74,10 @@ jobs:
         run: cargo build --workspace && ./scripts/test-gate-e2e.sh
       - name: Links between daemons end-to-end (MUS-66)
         run: ./scripts/test-links-e2e.sh
+      # MUS-96: install-codex.sh runs the shim only when it matches the release's SHA256SUMS.
+      # A fake curl serves a local fixture, so nothing is downloaded.
+      - name: Installer checks its download (MUS-96)
+        run: sh scripts/test-install-codex.sh
       # MUS-58: the sweeper starts only once myko has replayed Postgres, so an
       # ad-hoc room membership survives a restart. Uses the job's Postgres
       # service, in a table of its own.
@@ -82,6 +88,48 @@ jobs:
       # MUS-17: the same with no database and the store in a file.
       - name: Restart with the store in a file end-to-end (MUS-17)
         run: ./scripts/test-restart-file-e2e.sh
+      - name: Test simulation fixture and scoring contracts
+        run: python3 -m unittest discover -s scripts/sandbox -v
+      # How much room the job left, kept in the log even when a step failed (MUS-87).
+      - name: Disk headroom
+        if: always()
+        run: |
+          df -h /
+          du -sh target 2>/dev/null || true
+
+  # MUS-69's delivery conformance grid, in its own job so it runs beside
+  # `tests` rather than after it.
+  conformance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+    # The suite's restart cells persist to Postgres (MUS-76).
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: conformance
+          POSTGRES_PASSWORD: conformance
+          POSTGRES_DB: conformance
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U conformance"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 15
+    steps:
+      - uses: actions/checkout@v4
+      # As in `tests` (MUS-87).
+      - name: Free runner disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup "$AGENT_TOOLSDIRECTORY"
+          df -h /
+      - run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config libssl-dev zsh netcat-openbsd
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       # The TypeScript plugins' fakes run under bun (MUS-69 stage 3). Download
       # the pinned release from bun's GitHub releases and check it against the
       # SHA-256 below, from that release's SHASUMS256.txt. No third-party
@@ -121,14 +169,28 @@ jobs:
           CONFORMANCE_POSTGRES_URL: postgres://conformance:conformance@127.0.0.1:5432/conformance
           CONFORMANCE_REQUIRE_POSTGRES: "1"
         run: cargo build --workspace && cargo test -p muster-shim --test conformance -- --ignored --nocapture
-      - name: Test simulation fixture and scoring contracts
-        run: python3 -m unittest discover -s scripts/sandbox -v
-      # How much room the job left, kept in the log even when a step failed (MUS-87).
       - name: Disk headroom
         if: always()
         run: |
           df -h /
           du -sh target 2>/dev/null || true
+
+  # The status main's ruleset requires. It passes only when `tests` and
+  # `conformance` both passed. It always runs, because a required check that's
+  # skipped would count as passing.
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [tests, conformance]
+    if: always()
+    steps:
+      - name: Both jobs passed
+        env:
+          TESTS: ${{ needs.tests.result }}
+          CONFORMANCE: ${{ needs.conformance.result }}
+        run: |
+          echo "tests: $TESTS, conformance: $CONFORMANCE"
+          test "$TESTS" = success && test "$CONFORMANCE" = success
 
   # The workspace tests on macOS (MUS-13), where operators run Muster day to day:
   # Apple Silicon (macos-15 is arm64), the system's TLS (Security.framework rather than OpenSSL) and
