@@ -342,6 +342,13 @@ Merged and needing a live run: MUS-36 and MUS-37.
 - [ ] **MUS-14: Publish prebuilt binaries.** There are no releases yet, so
   `scripts/install-codex.sh` can't work and the plugins aren't on npm. Done when: macOS and Linux can
   install without a Rust toolchain.
+- [ ] **MUS-91: Keep `windows-cross-check` from timing out.** It hit its 20-minute limit on #110,
+  #113 and #124, and a re-run passed each time. Every time it was the apt step: `mingw-w64` pulls
+  278 MB (the i686 and x86_64 toolchains, C and C++), which normally takes 7 s, but the Azure
+  mirror sent it at about 70 KB/s (a 35 MB package took 5 to 9 minutes). The cache and the build
+  were fine: passing runs take 35 to 109 s, 247 s cold. Done when: the job installs only the x86_64
+  C cross-compiler, the apt step has its own limit so a stalled mirror fails fast and names the
+  step, and `windows-cross-check` passes without a re-run on three PRs in a row.
 - [ ] **MUS-15: One-command setup.** Done when: one command sets up a new machine,
   `muster doctor` reports what's wrong, and launchd and systemd units keep the
   daemon running across reboots. Needs a run: the operator, on a clean machine and
