@@ -14,6 +14,7 @@ mod channels;
 mod codex_bridge;
 mod codex_hook;
 mod codex_setup;
+mod doctor;
 mod link;
 mod mcp;
 mod refusal;
@@ -157,6 +158,14 @@ fn main() -> Result<()> {
                 .build()
                 .context("building tokio runtime")?
                 .block_on(roster_read::run());
+        }
+        // Report what's wrong with this machine's setup (MUS-15). Read-only.
+        Some("doctor") if argv.next().is_none() => {
+            return tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .context("building tokio runtime")?
+                .block_on(doctor::run());
         }
         // Store the code `muster-daemon pair` printed, so this machine reaches
         // the daemon through its TLS gate. See `link`.
@@ -694,8 +703,17 @@ async fn serve() -> Result<()> {
                 if current == last_branch {
                     return;
                 }
-                last_branch = current.clone();
-                let id = session_for_watch.lock().unwrap().id.clone();
+                let previous_branch = std::mem::replace(&mut last_branch, current.clone());
+                let (id, followed) = {
+                    let s = session_for_watch.lock().unwrap();
+                    let followed = followed_current_task(
+                        &cwd_for_watch,
+                        previous_branch.as_deref(),
+                        current.as_deref(),
+                        s.current_task.as_deref(),
+                    );
+                    (s.id.clone(), followed)
+                };
                 let arc_branch = current.as_deref().map(Arc::<str>::from);
                 let _ = client_for_watch.send_command::<muster_entities::SetSessionGitBranch, ()>(
                     &muster_entities::SetSessionGitBranch {
@@ -703,8 +721,20 @@ async fn serve() -> Result<()> {
                         git_branch: arc_branch,
                     },
                 );
+                if let Some(task) = &followed {
+                    let _ = client_for_watch
+                        .send_command::<muster_entities::SetSessionCurrentTask, ()>(
+                            &muster_entities::SetSessionCurrentTask {
+                                id: session_for_watch.lock().unwrap().id.clone(),
+                                current_task: task.as_deref().map(Arc::<str>::from),
+                            },
+                        );
+                }
                 if let Ok(mut s) = session_for_watch.lock() {
                     s.git_branch = current;
+                    if let Some(task) = followed {
+                        s.current_task = task;
+                    }
                 }
                 log::info!("[muster-shim] git branch changed -> {last_branch:?}; pushed to roster");
             },
@@ -1373,8 +1403,8 @@ fn detect_project_basename(cwd: &str) -> Option<String> {
 /// `pulse work` workspace (`.workspaces/<name>/…`, named for its task) and then
 /// a non-trunk git branch. Trunk names carry no routing signal and stay `None`.
 /// An explicit `set_status` always overwrites this. The workspace source is
-/// fixed for the session's life; the branch source is read once and the HEAD
-/// watcher does not re-derive it on checkout.
+/// fixed for the session's life; the branch source follows checkouts through
+/// [`followed_current_task`] (MUS-26).
 fn default_current_task(cwd: &str, git_branch: Option<&str>) -> Option<String> {
     let mut components = std::path::Path::new(cwd).components();
     while let Some(component) = components.next() {
@@ -1387,6 +1417,25 @@ fn default_current_task(cwd: &str, git_branch: Option<&str>) -> Option<String> {
     git_branch
         .filter(|branch| !matches!(*branch, "main" | "master" | "dev" | "develop" | "trunk"))
         .map(str::to_string)
+}
+
+/// The `current_task` a checkout should leave behind (MUS-26), or `None` to
+/// leave it alone. The task follows the branch only while it still holds the
+/// default derived from the branch being left, so text a session set with
+/// `set_status` is never overwritten. The one blind spot: text that happens to
+/// equal that default is indistinguishable from it.
+fn followed_current_task(
+    cwd: &str,
+    previous_branch: Option<&str>,
+    new_branch: Option<&str>,
+    current_task: Option<&str>,
+) -> Option<Option<String>> {
+    let was_default = default_current_task(cwd, previous_branch);
+    if current_task != was_default.as_deref() {
+        return None;
+    }
+    let next = default_current_task(cwd, new_branch);
+    (next != was_default).then_some(next)
 }
 
 /// Resolve which HUMAN drives this session, as an email — the canonical id
@@ -1477,8 +1526,8 @@ fn detect_host() -> HostInfo {
 #[cfg(test)]
 mod tests {
     use super::{
-        ROSTER_MISS_TICKS, default_current_task, detect_git_branch, registered_on_roster,
-        resolve_git_head_dir, roster_miss_step,
+        ROSTER_MISS_TICKS, default_current_task, detect_git_branch, followed_current_task,
+        registered_on_roster, resolve_git_head_dir, roster_miss_step,
     };
     use muster_entities::{Session, SessionId};
     use std::process::Command;
@@ -1511,6 +1560,54 @@ mod tests {
         assert_eq!(
             default_current_task("/root/pulse/.workspaces", Some("lv-a57b")),
             Some("lv-a57b".into())
+        );
+    }
+
+    #[test]
+    fn current_task_follows_a_checkout_while_it_is_the_default() {
+        // The roadmap's case: the roster said feature/comments on feature/search.
+        assert_eq!(
+            followed_current_task(
+                "/repo",
+                Some("feature/comments"),
+                Some("feature/search"),
+                Some("feature/comments"),
+            ),
+            Some(Some("feature/search".into()))
+        );
+        // Onto trunk the default is no task, so the stale branch name clears.
+        assert_eq!(
+            followed_current_task("/repo", Some("feature/x"), Some("main"), Some("feature/x")),
+            Some(None)
+        );
+        // Off trunk with no task set, the new branch becomes the task.
+        assert_eq!(
+            followed_current_task("/repo", Some("main"), Some("fix/y"), None),
+            Some(Some("fix/y".into()))
+        );
+    }
+
+    #[test]
+    fn current_task_keeps_text_the_session_set() {
+        assert_eq!(
+            followed_current_task(
+                "/repo",
+                Some("feature/x"),
+                Some("feature/y"),
+                Some("reviewing #140"),
+            ),
+            None
+        );
+        // Cleared with set_status on a branch: stays cleared.
+        assert_eq!(
+            followed_current_task("/repo", Some("feature/x"), Some("feature/y"), None),
+            None
+        );
+        // A pulse workspace name is fixed for the session's life.
+        let cwd = "/root/pulse/.workspaces/lv-1141/muster";
+        assert_eq!(
+            followed_current_task(cwd, Some("a"), Some("b"), Some("lv-1141")),
+            None
         );
     }
 
