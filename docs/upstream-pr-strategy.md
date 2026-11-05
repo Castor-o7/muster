@@ -125,10 +125,18 @@ each opened after the one before it has merged:
 5. **Later, still additive:** daemon links (TLS only) and the conformance suite
    (test only).
 
-**Not sent as PRs: the default changes.** Inbox quoting (#141 already escapes the
-same bodies), durability's retention and keep-alive, Other's empty-`to` refusal and
-first-write wait, and MUS-76's Codex re-register. They're written up for lucid-max
-as proposals, one issue each or one list, so upstream decides whether it wants them.
+**Not sent as PRs: the default changes.** They go upstream as **one issue**
+(lucid-max's answer 3), drafted in [upstream-issue-defaults.md](upstream-issue-defaults.md).
+The operator files it. The commissioner checked each item against `9b00c6f`:
+- **Still real:** refusing an empty `to` (`resolve_recipient("")` prefix-matches every
+  session, so with one session the message goes to its sender); the first-write
+  hold; keep-alive while a waiter is held (the WS reap on `STALE_AFTER` doesn't
+  check `WakeWatcher`); and MUS-76's Codex re-register, not yet traced in
+  upstream's `codex_bridge`.
+- **Optional:** inbox quoting. #141 already escapes bodies and frames them as
+  untrusted.
+- **Dropped:** keeping mail for a reaped session. Upstream already keeps DMs and read
+  marks through the DEL, and only `MESSAGE_TTL` (14 days) removes them.
 
 **Levi: on hold.** L1, L2 and L3 are already open upstream as ignition-is-go/levi
 **#43** (the review gate), **#44** (`levi check-events`) and **#45**
@@ -155,7 +163,7 @@ them, and they override anything the rest of this doc says:
 | 2 | Squash-friendly branches, or squash before opening? | **Yes to both**: keep branches squash-friendly, and squash before opening if necessary. |
 | 3 | Default changes: one issue or one each? | **One issue** listing them all. |
 | 4 | Wait for #143 and #59, or build on them? | **Build on them.** |
-| 5 | The Gate: the split, a myko hook or vendored myko-server, port 6158 | **"myko server"**. Which of the two this means is being confirmed with the operator. The split and port 6158 are still open. |
+| 5 | The Gate: the split, a myko hook or vendored myko-server, port 6158 | **Vendor myko-server** (the operator confirmed the meaning). The Gate goes with our vendored myko-server copy and its `RequestFilter` diff, not a hook upstream in ignition-is-go/myko. The split and port 6158 are still open, so the TLS → pairing → myko-listener split stands as our proposal. |
 | 6 | Zoo run for additive PRs with no agent-facing text? | **Not needed.** |
 | 7 | Fork-PR Actions approval? | **Yes, but don't wait for it.** Open PRs without waiting for fork CI. |
 
