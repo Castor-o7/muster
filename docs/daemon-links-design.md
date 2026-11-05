@@ -1,7 +1,8 @@
 # Design: messaging between daemons (G5, MUS-66)
 
-Status: **draft for the watchman (grand-photon).** Nothing is built until this
-is approved. Written by modest-roach, 2026-11-04, against Muster main at
+Status: **approved by the watchman (grand-photon), 2026-11-04,** with the
+changes folded in below (message ids, `deferred`, `nickname@link`, version
+mismatch) and the answers under "Decisions". Written by modest-roach, 2026-11-04, against Muster main at
 `d9c35d3` with the optional TLS gate from #89 (MUS-64). Names are Muster's;
 `scripts/rename-to-marshal.sh` maps them for an eventual upstream PR.
 
@@ -90,7 +91,18 @@ link.
 | `hello {name, version}` | both, first | who this is; the protocol version (1) |
 | `roster {sessions: [...]}` | both | a full snapshot of this daemon's **local** sessions, sent after `hello` and again on change (at most once a second) |
 | `deliver {id, from, to, body, response_required, sent_at}` | both | a direct message from one of the sender's local sessions to one of the receiver's local sessions |
-| `stored {id}` / `refused {id, why}` | both | the answer to one `deliver` |
+| `stored {id}` | both | the `deliver` with this id is stored (or was already) |
+| `deferred {id, retry_after}` | both | not now: a rate limit was hit; send it again after `retry_after` seconds |
+| `refused {id, why}` | both | never: unknown recipient, a forged `from`, a body too large, or a `to` that isn't local |
+
+`id` in these frames is always the **sender's** message id. `deferred` is
+retryable, so a long outbox flush after an outage that runs into the receiver's
+rate limits slows down rather than losing mail. `refused` is permanent.
+
+**Versions.** `hello` carries the protocol version. On a mismatch the side that
+notices logs both versions and closes the link. There is no partial protocol
+and no downgrade. The dialer keeps retrying with backoff, so the link comes back
+once both sides run the same version.
 
 A roster entry carries what peers need to choose a recipient and nothing more:
 session id, nickname, host name, operator, project, `current_task`, activity,
@@ -106,14 +118,24 @@ the daemon that owns the session.
   bindings, the sweeper and the roster's own bookkeeping never mistake a far
   session for a local one.
 - **Resolving a recipient.** `SendMessage`'s resolver tries local sessions first,
-  then remote ones (by id, prefix or nickname). A remote recipient makes the
+  then remote ones (by id, prefix or nickname): **a bare name prefers local.**
+  `nickname@link` (e.g. `fuzzy-otter@murph`) names a remote session
+  explicitly, so a sender can still reach it if a local session later gets that
+  nickname. A remote recipient makes the
   `Message` carry `via_link: Some(link)` and `forwarded_at: None`. The sender's
   result says `delivery: "remote"` (or `"queued_remote"` while the link is
   down), so the sending agent knows it isn't a local inbox.
+- **Remote mail gets a local id.** A `deliver` is stored under a fresh local
+  message id, never the sender's: Muster's idempotent sends derive ids, so
+  storing a peer's id would let a malicious link send `deliver {id: X}` first
+  and squat an id a local send will use later. The receiver keeps
+  `(link, remote_id)` beside the message for dedup, and answers `stored` with
+  the remote id.
 - **Outbox.** The link task sends every `Message` with its `via_link` and
   `forwarded_at: None`, in `sent_at` order, and sets `forwarded_at` on
-  `stored`. With Postgres, the outbox survives a restart, because it's just
-  messages. `refused` turns into a notice to the sender, as MUS-48 does for
+  `stored`. On `deferred` it waits `retry_after` and resends that message
+  before later ones, so order holds. With Postgres, the outbox survives a
+  restart, because it's just messages. `refused` turns into a notice to the sender, as MUS-48 does for
   mail unread at reap.
 - **Roster for agents.** `muster://roster` and `muster-shim roster` list remote
   sessions after local ones, each with `"via": "murph"` and `"link_up"`. Inbox
@@ -150,6 +172,7 @@ Delivery is **at least once, deduplicated by message id**:
   snapshots. Then each side resends every outbox message that never got
   `stored`, in order. The receiver drops a `deliver` whose id it already holds
   and answers `stored`, so a resend after a lost `stored` isn't duplicated.
+  Dedup is by `(link, remote_id)`, never by local id.
 - **The receiver had stored it but crashed before answering:** it's resent,
   found by id and acknowledged. With Postgres the id survives the crash.
   Without it the first copy died with the daemon, so storing the resend is
@@ -160,7 +183,7 @@ Delivery is **at least once, deduplicated by message id**:
   down, so the sending agent isn't told "delivered".
 - **While the link is down,** remote sessions stay on the roster with
   `link_up: false` and their last-seen time, and sends to them queue. After 24
-  hours down, the rows are dropped, queued messages are refused back to their
+  hours down (`LINK_GIVE_UP`, a constant, with no variable), the rows are dropped, queued messages are refused back to their
   senders as a notice, and sends answer "no session" again.
 - **A recipient reaped on the far side** gets the existing MUS-46 and MUS-48
   treatment there. The sender's daemon only learns `stored`.
@@ -185,8 +208,10 @@ New in `docs/threat-model.md` when the code lands. A link adds one attacker:
 | Send as one of *our* sessions, or as a third daemon's | The receiver accepts a `deliver` only if `from` is in that link's **own last roster** and isn't a local session id or another link's. A `roster` naming an id that's local, or held by another link, is refused and logged. Remote rows are keyed by `(link, id)`. |
 | Read mail that isn't for it | It receives only `deliver` frames for sessions it advertised. Nothing else crosses: no myko frames and no subscriptions. |
 | Use the link as a relay to a third daemon | No transitive forwarding. A daemon advertises only local sessions, and a `deliver` whose `to` is remote is refused. |
+| Squat a local message id | Remote mail is stored under a fresh local id; the peer's id is kept only as `(link, remote_id)` for dedup. |
 | Flood | Each link gets the machine-level rate limit (MUS-60) as one machine named after the link, and each remote sender gets the session limit (MUS-9). One `/link` connection per link: a new one replaces the old. Roster at most 512 sessions, frames at most 128 KiB, bodies at most 64 KiB, as today. |
 | Pass the sender allowlist | The allowlist (MUS-10) matches a remote sender by its **link name**, not its self-reported host. `allow murph` admits the link; a remote session calling itself `a1` doesn't become `a1`. |
+| Drown the receiver in an outbox flush | Rate-limited mail gets `deferred` with `retry_after`, and the sender slows down. Nothing is dropped, and nothing gets past the limit. |
 | Spoof host or operator on its sessions | Shown as reported, but always beside `via <link>`, and never used for bindings, the allowlist or operator routing. |
 | Replay a captured `deliver` | TLS stops capture on the wire. A replay from the peer itself is deduplicated by id. |
 | Keep a revoked link open | `unpair` on the listener ends the open link within 5 s (the gate's existing revocation check), and `unlink` on the dialer closes it. |
@@ -194,7 +219,9 @@ New in `docs/threat-model.md` when the code lands. A link adds one attacker:
 
 What a link does **not** protect: the far daemon's operator can read every
 message sent to their sessions, and see our sessions' nicknames, hosts,
-projects, tasks and activity. Linking is trusting that operator with that much.
+projects, `current_task` text and activity. `current_task` is free text an agent
+writes, so it can name work in progress. Linking is trusting that operator with
+all of that. Today both daemons are the same operator's.
 
 ## Tests (the "done when")
 
@@ -209,13 +236,14 @@ projects, tasks and activity. Linking is trusting that operator with that much.
 - A Zoo run (G8): two agents on two linked daemons coordinating a handoff.
 - The real a1↔Murph run, with the operator's OK for Murph's part.
 
-## Questions for the watchman
+## Decisions (watchman, 2026-11-04)
 
-1. **One dialer, both directions** (above), or both sides dialing? One is simpler
-   and fits NAT. Its cost is that only the dialer can re-establish the link.
-2. **Roster fields across the link:** no cwd, pid or branch (above). Is
-   `current_task` acceptable to share?
-3. **Operator-addressed messages across a link** (to `joshd@…` reaching the
-   operator's most active agent on either daemon): left out of v1. Do you want
-   it in?
-4. **24 hours** before a down link's rows and queue give up: is that right?
+1. **One dialer, both directions.**
+2. **`current_task` is shared** across a link, and the threat model says so.
+3. **Operator-addressed messages across a link** stay out of v1. Operator
+   routing has its own open issue.
+4. **24 hours** before a down link gives up: the constant `LINK_GIVE_UP`.
+
+Changes asked for and folded in above: remote mail stored under a fresh local
+id; `deferred` for retryable rate-limit answers; `nickname@link` addressing;
+closing on a `hello` version mismatch.
