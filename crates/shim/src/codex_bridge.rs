@@ -666,9 +666,12 @@ fn same_cwd(first: &Path, second: &Path) -> bool {
 
         comparable(first).eq_ignore_ascii_case(&comparable(second))
     }
+    // `codex_thread_cwd` canonicalizes, and on macOS a temp dir under
+    // `/var/folders` canonicalizes to `/private/var/folders` (MUS-96).
     #[cfg(not(windows))]
     {
-        first == second
+        let canonical = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        canonical(first) == canonical(second)
     }
 }
 

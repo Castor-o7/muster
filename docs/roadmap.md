@@ -663,6 +663,23 @@ Rally.
   path keeps its own record, so ending one leaves the others, and the roster reads `waiting`
   while any is live. Tests show that a stale leader's unwatch after a handoff leaves the new
   leader's record, and that a bridge's `watching:false` leaves a held wait's record. Depends on MUS-77.
+- [x] **MUS-95: Shim tests never see the real home.** From the a1 run for MUS-88. On a paired
+  Mac, `resume_channel_detect` started `muster-shim` with the developer's HOME: the shim found the
+  real pairing in `~/.config/muster` and connected to the live daemon, so
+  `warns_when_daemon_unreachable` failed and `silent_when_daemon_reachable` hung, and a test run
+  touched a real roster. Four more test files also started the shim with the real HOME. Done when:
+  every shim test starts the shim with an isolated home and config, it never reads
+  `~/.config/muster/pairing`, and a guard fails a test that would. Done: `tests/common::shim()`
+  sets HOME, `XDG_CONFIG_HOME`, `USERPROFILE` and `APPDATA` to a temporary home, and all 14 places
+  the tests start the shim go through it. `isolated_home.rs` fails any test file that starts the
+  binary directly, and checks the isolated home isn't the real one and holds no pairing. On a1,
+  with the real pairing in place, all of `muster-shim`'s tests pass.
+- [x] **MUS-96: A Codex working-directory test fails on macOS.** From the same run.
+  `recovery_tracks_codex_effective_working_directory` compared `codex_thread_cwd`, which
+  canonicalizes, with the raw temp path, and on macOS `/var/folders` canonicalizes to
+  `/private/var/folders`. It passed on Linux, where the temp dir isn't a symlink. Done when: it
+  passes on macOS and Linux. Done: the test's `same_cwd` canonicalizes both sides on Unix, as it
+  already did on Windows. It's test-only code, so production is unchanged.
 - [ ] **MUS-74: The Codex bridge ignores the operator's pause.** From MUS-69. `muster-daemon
   pause` stops Claude's waiter (`/hook/wait` hands out nothing) and the live push, but
   `codex_bridge.rs` sends `turn/start` for any unread direct message without checking it, so a

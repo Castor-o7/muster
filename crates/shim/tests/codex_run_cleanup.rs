@@ -1,5 +1,7 @@
 #![cfg(target_os = "linux")]
 
+mod common;
+
 use std::{
     fs,
     os::unix::fs::PermissionsExt,
@@ -192,7 +194,7 @@ fn start_launcher(exit_tui: bool) -> RunningLauncher {
     fs::set_permissions(&codex, fs::Permissions::from_mode(0o755))
         .expect("make fake Codex executable");
 
-    let child = Command::new(env!("CARGO_BIN_EXE_muster-shim"))
+    let child = common::shim()
         .arg("codex-run")
         .env("MUSTER_CODEX_BIN", &codex)
         .env("FAKE_CODEX_MARKER", &marker)

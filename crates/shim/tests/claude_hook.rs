@@ -4,14 +4,15 @@
 //! that every hook the plugin ships answers for the event it is registered
 //! under.
 
+mod common;
+
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-const SHIM: &str = env!("CARGO_BIN_EXE_muster-shim");
 const HOOK_INPUT: &str = r#"{"session_id":"itest-claude","cwd":"/tmp/proj"}"#;
 const HOOKS_JSON: &str = include_str!("../../../plugins/muster-shim/hooks/hooks.json");
 
@@ -66,7 +67,7 @@ fn fake_hook_listener(reply: &'static str) -> (String, mpsc::Receiver<Seen>) {
 
 /// Run `muster-shim <args>` with the hook JSON on stdin; return stdout.
 fn run_hook(args: &[&str], base: &str) -> String {
-    let mut child = Command::new(SHIM)
+    let mut child = common::shim()
         .args(args)
         .env("MUSTER_BASE_URL", base)
         .stdin(Stdio::piped())
@@ -211,7 +212,7 @@ fn temp_config(name: &str) -> std::path::PathBuf {
 }
 
 fn spawn_waiter(base: &str, config: &std::path::Path) -> std::process::Child {
-    let mut child = Command::new(SHIM)
+    let mut child = common::shim()
         .args(["claude-hook", "wait"])
         .env("MUSTER_BASE_URL", base)
         .env("XDG_CONFIG_HOME", config)
@@ -287,7 +288,7 @@ fn a_refused_waiter_tells_the_session_once_per_cause() {
 fn a_refused_watch_says_so_on_stdout_where_monitor_sees_it() {
     let base = refusing_listener(1);
     let config = temp_config("watch-refused");
-    let mut child = Command::new(SHIM)
+    let mut child = common::shim()
         .args(["watch", "11111111-1111-4111-8111-111111111111", &base])
         .env("XDG_CONFIG_HOME", config)
         .stdout(Stdio::piped())
