@@ -392,9 +392,9 @@ async fn run_daemon(tls_flag: bool) -> Result<()> {
     let public_bind = resolve_bind("MUSTER_BIND", DEFAULT_BIND)?;
     let hook_bind = resolve_bind("MUSTER_HOOK_BIND", DEFAULT_HOOK_BIND)?;
     let state_dir = daemon::credentials::state_dir()?;
-    let has_pairings = !daemon::credentials::token_names(&state_dir)
-        .unwrap_or_default()
-        .is_empty();
+    // Fails closed: an unreadable tokens file stops the daemon (MUS-85).
+    let has_pairings = daemon::mode::has_pairings(&state_dir)
+        .map_err(|why| anyhow::anyhow!("muster-daemon: {why}"))?;
     let mode = daemon::mode::resolve(
         tls_flag,
         std::env::var(daemon::mode::ENV).ok().as_deref(),
