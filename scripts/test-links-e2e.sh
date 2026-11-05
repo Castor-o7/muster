@@ -96,6 +96,7 @@ check "and shares no cwd" '[[ $OUT != *"/tmp/left"* ]]'
 SL_ADDR=$(print -r -- "$OUT" | python3 -I -c 'import json,sys; l=sys.stdin.read(); print(json.loads(l.split("REMOTE ",1)[1])["address"]) if "REMOTE " in l else print("")')
 OUT=$(mcp $WORK/D ws://127.0.0.1:16755 $SD "[[\"wait_remote\",\"$SL\"],[\"send\",\"$SL_ADDR\",\"hello across the link\"]]")
 check "a session on D sends to nickname@lhost" '[[ $OUT == *via_link*lhost* ]]'
+[[ $OUT == *via_link*lhost* ]] || print -r -- "send from D: $OUT"
 MAIL=$(waitmail 16656 $L_TOKEN $SL)
 check "and L's session gets it, from nickname@dhost" '[[ $MAIL == *"hello across the link"* && $MAIL == *"@dhost"* ]]'
 SD_ADDR=$(print -r -- "$MAIL" | grep -o "from [a-z]*-[a-z]*@dhost" | head -1 | cut -c6-)
