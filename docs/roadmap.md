@@ -368,9 +368,13 @@ Merged and needing a live run: MUS-36 and MUS-37.
 
 ## Phase 3: Portability
 
-- [ ] **MUS-13: Run CI on macOS.** Done when: CI runs on macOS and passes,
+- [x] **MUS-13: Run CI on macOS.** Done when: CI runs on macOS and passes,
   including `recovery_tracks_codex_effective_working_directory`, which fails on
-  macOS today.
+  macOS today. *Done 2026-11-05 (#163): a `macos-15` (arm64) job runs the
+  workspace tests beside the Linux job, cached, in about 6 minutes. The test
+  failed only because its `#[cfg(test)]` helper compared a resolved path with
+  one as given, and macOS's `/var` is a symlink; it now resolves both. GitHub no
+  longer runs `macos-14`.*
 - [x] **MUS-87: Keep CI from running out of disk or failing on a download.** Found on #113's
   run (42043766050): the `check` job builds the workspace, runs the gate and links e2e, installs
   bun and the plugins' `node_modules`, and builds again for conformance, and the ubuntu runner
