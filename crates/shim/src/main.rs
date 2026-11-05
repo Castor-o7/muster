@@ -14,6 +14,7 @@ mod channels;
 mod codex_bridge;
 mod codex_hook;
 mod codex_setup;
+mod doctor;
 mod link;
 mod mcp;
 mod refusal;
@@ -157,6 +158,14 @@ fn main() -> Result<()> {
                 .build()
                 .context("building tokio runtime")?
                 .block_on(roster_read::run());
+        }
+        // Report what's wrong with this machine's setup (MUS-15). Read-only.
+        Some("doctor") if argv.next().is_none() => {
+            return tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .context("building tokio runtime")?
+                .block_on(doctor::run());
         }
         // Store the code `muster-daemon pair` printed, so this machine reaches
         // the daemon through its TLS gate. See `link`.

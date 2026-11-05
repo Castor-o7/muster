@@ -401,6 +401,10 @@ Merged and needing a live run: MUS-36 and MUS-37.
   `muster doctor` reports what's wrong, and launchd and systemd units keep the
   daemon running across reboots. Needs a run: the operator, on a clean machine and
   through a reboot.
+  Progress 2026-11-05 (sienna-mullet): `muster-shim doctor` checks the binary on `PATH`, the
+  credential, a handshake with the daemon, and Claude Code's MCP server and five hooks
+  against `plugins/muster-shim/hooks/hooks.json`. It also flags leftover Marshal wiring.
+  Still to do: the one setup command, and the launchd and systemd units.
 - [ ] **MUS-16: Support addresses beyond one LAN IP.** Done when: a paired laptop
   stays connected when it moves between home and a Tailscale or WireGuard network. Needs a run: the operator, who
   has the laptop.
@@ -477,7 +481,7 @@ Merged and needing a live run: MUS-36 and MUS-37.
   watchman saw its process gone before 10:31) stayed on the roster unbound for over ten minutes
   and was then reaped under `KEPT_STALE_AFTER`, where `c3dbd45` deleted such rows after 60 s.
   Delivery into that window is shown by the e2e test in `74d35ed`.
-- [ ] **MUS-55: Make a daemon restart one command.** Requested by the operator on 2026-11-03.
+- [x] **MUS-55: Make a daemon restart one command.** Requested by the operator on 2026-11-03.
   A restart already disrupts little: in the last three, sessions were back on the roster within
   about 2 s and no wake misfired. The cost is the operator's and the daemon-holder's time: about
   20 to 30 minutes of manual steps each rollout (build and e2e, count mail at risk, back up
