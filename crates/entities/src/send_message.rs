@@ -173,6 +173,14 @@ impl CommandHandler for SendMessage {
         // policy — resolution used to live only in the shim, so plugin/HTTP
         // callers could address by exact id alone. Accepts id / nickname /
         // operator (human-via-agent) / id-prefix; see `resolve_recipient`.
+        // An empty recipient would match every id by prefix and could land on
+        // the sender itself.
+        if self.to_session_id.0.trim().is_empty() {
+            return Err(err(
+                &ctx,
+                "no recipient: `to` is empty; name a session by nickname, id or operator email (see marshal://roster)",
+            ));
+        }
         let (recipient, to_operator) =
             resolve_recipient(&ctx, &sessions, self.to_session_id.0.as_ref())?;
 
