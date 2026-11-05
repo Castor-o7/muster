@@ -142,6 +142,8 @@ struct Daemon {
     mode: Mode,
     /// `MYKO_POSTGRES_URL`, and the events table this daemon alone uses.
     postgres: Option<(String, String)>,
+    /// `MUSTER_PERSIST=file`: keep the store in the state directory (MUS-17).
+    persist_file: bool,
     bind: u16,
     hook: u16,
     myko: u16,
@@ -149,7 +151,7 @@ struct Daemon {
 }
 
 impl Daemon {
-    fn start(mode: Mode, postgres: Option<&str>) -> Self {
+    fn start(mode: Mode, postgres: Option<&str>, persist_file: bool) -> Self {
         let table = format!(
             "conformance_{}",
             &uuid::Uuid::new_v4().simple().to_string()[..16]
@@ -158,6 +160,7 @@ impl Daemon {
             dir: tempfile::tempdir().unwrap(),
             mode,
             postgres: postgres.map(|url| (url.to_string(), table)),
+            persist_file,
             bind: free_port(),
             hook: free_port(),
             myko: free_port(),
@@ -192,6 +195,10 @@ impl Daemon {
             ("MUSTER_MYKO_BIND".into(), addr(self.myko)),
         ]
         .into_iter()
+        .chain(
+            self.persist_file
+                .then(|| ("MUSTER_PERSIST".to_string(), "file".to_string())),
+        )
         .chain(self.postgres.iter().flat_map(|(url, table)| {
             [
                 ("MYKO_POSTGRES_URL".to_string(), url.clone()),
@@ -212,6 +219,7 @@ impl Daemon {
             "MUSTER_DAEMON_ADDRESS",
             "MYKO_ADDRESS",
             "MYKO_POSTGRES_URL",
+            "MUSTER_PERSIST",
         ] {
             cmd.env_remove(var);
         }
@@ -1346,8 +1354,13 @@ struct Cell {
 }
 
 impl Cell {
-    fn new(mode: Mode, mut harness: Box<dyn FakeHarness>, postgres: Option<&str>) -> Self {
-        let daemon = Daemon::start(mode, postgres);
+    fn new(
+        mode: Mode,
+        mut harness: Box<dyn FakeHarness>,
+        postgres: Option<&str>,
+        persist_file: bool,
+    ) -> Self {
+        let daemon = Daemon::start(mode, postgres, persist_file);
         let proxy = HookProxy::start(daemon.hook_addr());
         harness.start(&daemon, &proxy);
         let sender_id = uuid::Uuid::new_v4().to_string();
@@ -1435,6 +1448,7 @@ const SCENARIOS: &[(&str, Scenario)] = &[
         "restart-without-mail-stays-idle-pg",
         restart_without_mail_stays_idle,
     ),
+    ("restart-keeps-unread-mail-file", restart_keeps_unread_mail),
     ("operator-pause-stops-wakes", operator_pause_stops_wakes),
     ("resume-wakes-held-mail", resume_wakes_held_mail),
     ("broadcast-never-wakes", broadcast_never_wakes),
@@ -1686,8 +1700,12 @@ fn restart_without_mail_stays_idle(c: &mut Cell) -> Result<(), String> {
     Ok(())
 }
 
-/// Scenario 5b (Postgres): Mail sent before a restart, while the session was busy,
-/// is kept, and wakes the session once it goes idle after the restart.
+/// Scenarios whose daemon keeps its store in a file, with no Postgres (MUS-17).
+const FILE_SCENARIOS: &[&str] = &["restart-keeps-unread-mail-file"];
+
+/// Scenario 5b (Postgres), and 5e with the store in a file instead (MUS-17): Mail
+/// sent before a restart, while the session was busy, is kept, and wakes the
+/// session once it goes idle after the restart.
 fn restart_keeps_unread_mail(c: &mut Cell) -> Result<(), String> {
     let t = token("before-restart");
     c.send(&t)?;
@@ -2183,6 +2201,10 @@ const PUSH_PLUGIN_NOT_APPLICABLE: &[(&str, &str)] = &[
         "restart-keeps-unread-mail",
         "a busy plugin takes the push into its running turn, so nothing is unread at the restart",
     ),
+    (
+        "restart-keeps-unread-mail-file",
+        "a busy plugin takes the push into its running turn, so nothing is unread at the restart",
+    ),
 ];
 
 /// OpenCode's, which differ from Pi's only in why the roster can't say none: its plugin doesn't
@@ -2241,7 +2263,12 @@ fn run_cell(harness: &Harness, scenario: Scenario, name: &str) -> Outcome {
         .find(|(h, s, _)| *h == harness.name && *s == name)
         .map(|(_, _, story)| *story);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let mut cell = Cell::new(harness.mode, (harness.make)(), postgres.as_deref());
+        let mut cell = Cell::new(
+            harness.mode,
+            (harness.make)(),
+            postgres.as_deref(),
+            FILE_SCENARIOS.contains(&name),
+        );
         let result = scenario(&mut cell);
         // CONFORMANCE_DAEMON_LOG=1 prints it for passing cells too.
         if std::env::var_os("CONFORMANCE_DAEMON_LOG").is_some() && result.is_ok() {

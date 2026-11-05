@@ -1,6 +1,6 @@
 # Keeping messages across restarts without Postgres (MUS-17)
 
-Status: **approved, option A**. Written 2026-11-05 for the watchman and
+Status: **approved, option A, and built** (`crates/daemon/src/file_persister.rs`). Written 2026-11-05 for the watchman and
 fiery-snapper. fiery-snapper approved option A the same day and added the rule for
 appends during compaction (below). Josh decided both defaults on 2026-11-05: opt-in
 for this release, and the Time Machine exclusion on (see "Decisions"). The Postgres
@@ -28,7 +28,12 @@ Yes, with what it already exposes; no myko patch needed.
 - **Replay.** `CellServerCtx::apply_event_batch(Vec<MEvent>)` (myko 6.11.5,
   `server/context.rs:960`) applies events to the store with relationship
   cascades. The JSONL persister removed in c66db28 replayed through exactly this
-  call.
+  call. *As built, replay doesn't use it*: in 6.11.5 it applies events as
+  `Origin::Local`, which runs cascades again and writes every event back through
+  the persister. Replay instead does what myko's own Postgres consumer does at
+  boot (`apply_remote_event` in vendor/myko-server): parse each folded SET with
+  the handler registry's item parser and insert it into its store, with no
+  cascades and nothing written back.
 - **Ordering.** The cleanup sweeper must not run before the store is loaded
   (MUS-58), or it reaps everything as stale. With Postgres it waits for myko's
   catch-up. A file replay is synchronous and runs before the server is handed

@@ -18,7 +18,7 @@ get on with something else.
   session when a message arrives. It uses no model turns while waiting.
 - **Across machines.** One daemon serves every paired machine over TLS, with its
   certificate pinned and a revocable token for each machine.
-- **Durable.** With Postgres, messages and the roster survive a daemon restart. Messages
+- **Durable.** With Postgres, or with `MUSTER_PERSIST=file` and no database, messages and the roster survive a daemon restart. Messages
   to a session that has ended are eventually deleted with it.
 - **Built on [myko](https://crates.io/crates/myko), in Rust.** New code is Rust. Codex is
   supported through the same shim, and Pi, opencode and Prime Agent have plugins inherited
@@ -156,7 +156,7 @@ muster-daemon senders            # show the list; `senders --clear` lets any mac
 
 The daemon's own host is always allowed, so an allowlist never cuts off the sessions running beside it. Machine names are compared without regard to case. The daemon names its own host the way the shim does, from `MUSTER_HOST` or the hostname up to its first dot, and `senders` prints that name, so you can check it matches what the roster shows for sessions there. A session with no machine on its row is refused while a list is set. While wake-ups are paused, `muster://roster` and `muster-shim roster` report `"wakes_paused": true`. These files live in the state directory, so any process on the operator's account can change them; until MUS-39, that's the limit of this control.
 
-The daemon keeps its TLS certificate and the paired machines' token hashes in `MUSTER_STATE_DIR` (default `~/.local/state/muster`). Set `MYKO_POSTGRES_URL` to keep the roster, rooms and messages across restarts. Without it the daemon runs in memory and starts empty each time.
+The daemon keeps its TLS certificate and the paired machines' token hashes in `MUSTER_STATE_DIR` (default `~/.local/state/muster`). Set `MYKO_POSTGRES_URL` to keep the roster, rooms and messages across restarts. Without a database, `MUSTER_PERSIST=file` keeps them in `store.jsonl` in the state directory instead (MUS-17): a private file, compacted as it grows and once a day, and on macOS excluded from Time Machine. Mail sits in it as plain text, so anything that backs up or syncs the state directory carries your mail with it; full-disk encryption covers a lost machine. Without either, the daemon runs in memory and starts empty each time. The startup line says which. See [docs/local-persistence-design.md](docs/local-persistence-design.md).
 
 ### 2a. Link two daemons (optional, TLS only)
 
@@ -166,7 +166,7 @@ A **link** joins two daemons, each keeping its own roster, store and controls. A
 muster-daemon pair --name a1 --link --address murph.example:6255
 ```
 
-It prints a one-time `muster-daemon link <code>` command, valid for 15 minutes. Run it on the other daemon's host, in a shell with `MUSTER_TLS=1`. The running daemon connects within a few seconds. `muster-daemon links` lists links both ways, and `unlink NAME` ends one from either side: the dialer stops dialing, and the dialed side revokes its token. `unpair --link NAME` also revokes one on the dialed side; a bare `unpair NAME` that names both a paired machine and a link is refused, so revoking a link never cuts off a machine. The far daemon's sessions appear on `muster://roster` under `remote_sessions`, each with an `address` like `fuzzy-otter@murph`. Send to that address to reach one; a bare name prefers a local session. Mail from a linked daemon arrives labelled the same way. A link shares each session's nickname, host, operator, project, `current_task` and activity, but never its cwd, pid or branch. Mail for a link that is down waits in the outbox, which survives a restart only with Postgres, and is refused back to its senders after a day.
+It prints a one-time `muster-daemon link <code>` command, valid for 15 minutes. Run it on the other daemon's host, in a shell with `MUSTER_TLS=1`. The running daemon connects within a few seconds. `muster-daemon links` lists links both ways, and `unlink NAME` ends one from either side: the dialer stops dialing, and the dialed side revokes its token. `unpair --link NAME` also revokes one on the dialed side; a bare `unpair NAME` that names both a paired machine and a link is refused, so revoking a link never cuts off a machine. The far daemon's sessions appear on `muster://roster` under `remote_sessions`, each with an `address` like `fuzzy-otter@murph`. Send to that address to reach one; a bare name prefers a local session. Mail from a linked daemon arrives labelled the same way. A link shares each session's nickname, host, operator, project, `current_task` and activity, but never its cwd, pid or branch. Mail for a link that is down waits in the outbox, which survives a restart only with Postgres or `MUSTER_PERSIST=file`, and is refused back to its senders after a day.
 
 ### 2b. Pair each machine
 
@@ -534,7 +534,7 @@ Prime Agent ── muster-prime-agent ─────────┘            
                                                    or in Postgres)
 ```
 
-- **`muster-daemon`** owns the roster and messages. One daemon serves every session that points at it, local or remote. It keeps them in Postgres when `MYKO_POSTGRES_URL` is set, and otherwise in memory. Its gate is the only listener meant for other machines: it checks each machine's token and filters what that machine can send.
+- **`muster-daemon`** owns the roster and messages. One daemon serves every session that points at it, local or remote. It keeps them in Postgres when `MYKO_POSTGRES_URL` is set, in a file in its state directory with `MUSTER_PERSIST=file`, and otherwise in memory. Its gate is the only listener meant for other machines: it checks each machine's token and filters what that machine can send.
 - **`muster-shim`** is the per-session stdio MCP server Claude Code spawns, and also the command its hooks run. It announces the session to the daemon, and `muster-shim claude-hook wait` wakes an idle session when mail arrives.
 - **`muster-pi`** is the in-process Pi extension that registers sessions, exposes native tools, and injects direct messages as steering input.
 - **`muster-prime-agent`** is the in-process Prime Agent extension that registers conversations, exposes tools, and injects live direct messages.

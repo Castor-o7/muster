@@ -85,6 +85,9 @@ jobs:
         env:
           RESTART_E2E_POSTGRES_URL: postgres://conformance:conformance@127.0.0.1:5432/conformance
         run: ./scripts/test-restart-e2e.sh
+      # MUS-17: the same with no database and the store in a file.
+      - name: Restart with the store in a file end-to-end (MUS-17)
+        run: ./scripts/test-restart-file-e2e.sh
       - name: Test simulation fixture and scoring contracts
         run: python3 -m unittest discover -s scripts/sandbox -v
       # How much room the job left, kept in the log even when a step failed (MUS-87).

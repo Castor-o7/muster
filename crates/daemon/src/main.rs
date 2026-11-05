@@ -543,7 +543,7 @@ async fn run_daemon(tls_flag: bool) -> Result<()> {
                 "muster-daemon: {stored_links} stored link(s) stay idle: links need TLS (MUS-66)"
             );
         }
-        let server = build_server(public_bind, None);
+        let server = build_server(public_bind, None, &state_dir)?;
         let stop_rx = start_background(&server, &state_dir, false);
         let hooks =
             daemon::http_listener::run_until(hook_bind, Arc::new(server.ctx()), None, stop_rx.1);
@@ -571,7 +571,8 @@ async fn run_daemon(tls_flag: bool) -> Result<()> {
     let server = build_server(
         myko_bind,
         Some(daemon::gate::myko_request_filter(local_token.clone())),
-    );
+        &state_dir,
+    )?;
     let stop_rx = start_background(&server, &state_dir, true);
     // Links to other daemons (MUS-66): dial the stored ones, accept on `/link`.
     let links = Arc::new(daemon::links::Hub {
@@ -615,11 +616,14 @@ async fn run_daemon(tls_flag: bool) -> Result<()> {
 }
 
 /// The myko server on `bind`, with Muster's persisters and, with TLS on, the
-/// request filter that admits only the gates (MUS-59).
+/// request filter that admits only the gates (MUS-59). With `MUSTER_PERSIST=file`
+/// and no Postgres, the store is loaded from the state directory before this
+/// returns, so nothing (the sweeper included) sees it half-loaded (MUS-17).
 fn build_server(
     bind: SocketAddr,
     request_filter: Option<myko_server::router::RequestFilter>,
-) -> MykoServer {
+    state_dir: &std::path::Path,
+) -> Result<MykoServer> {
     // Client/Server entities are WS-bound and always transient — blackhole them
     // so connection bookkeeping never lands in durable storage (a replayed
     // Client would reference a WS connection that no longer exists).
@@ -653,18 +657,41 @@ fn build_server(
     // daemon is still usable in dev / CI without a database, and the roster,
     // rooms, and messages regenerate as sessions reconnect. myko-server handles
     // Postgres replay + live-notify internally — no manual replay/watcher here.
-    builder = match PostgresConfig::from_env() {
-        Some(pg) => {
+    //
+    // Without Postgres, `MUSTER_PERSIST=file` keeps the store in a file in the
+    // state directory instead (MUS-17, opt-in for now: docs/local-persistence-design.md).
+    use daemon::file_persister::{FilePersister, PersistMode, resolve_mode};
+    let postgres = PostgresConfig::from_env();
+    let (mode, note) = resolve_mode(
+        postgres.is_some(),
+        std::env::var(daemon::file_persister::ENV).ok().as_deref(),
+    )
+    .map_err(|why| anyhow::anyhow!("muster-daemon: {why}"))?;
+    if let Some(note) = note {
+        log::warn!("muster-daemon persistence: {note}");
+    }
+    let mut file_store = None;
+    builder = match (mode, postgres) {
+        (PersistMode::Postgres, Some(pg)) => {
             log::info!(
                 "muster-daemon persistence: postgres (events table `{}`)",
                 pg.table
             );
             builder.with_postgres(pg)
         }
-        None => {
+        (PersistMode::File, _) => {
+            let opened = FilePersister::open(state_dir)
+                .map_err(|e| anyhow::anyhow!("muster-daemon: the store file: {e}"))?;
+            let persister: Arc<dyn myko::server::Persister> = opened.persister.clone();
+            file_store = Some(opened);
+            builder.with_default_persister(persister)
+        }
+        _ => {
             log::warn!(
                 "muster-daemon persistence: EPHEMERAL — no MYKO_POSTGRES_URL set; \
-                 roster/rooms/messages will NOT survive a restart"
+                 roster/rooms/messages will NOT survive a restart (set {}=file to keep them in \
+                 the state directory)",
+                daemon::file_persister::ENV
             );
             builder.with_default_persister(blackhole)
         }
@@ -678,7 +705,61 @@ fn build_server(
     if let Some(handle) = server.postgres_producer.clone() {
         session_filter.bind(Arc::new(handle));
     }
-    server
+    if let Some(opened) = file_store {
+        session_filter.bind(opened.persister.clone());
+        let (loaded, unparsed) = load_into_stores(&server, opened.folded.events);
+        log::info!(
+            "muster-daemon persistence: file ({}, {loaded} entities loaded{}){}",
+            opened.path.display(),
+            opened.backup,
+            if opened.folded.torn_tail {
+                "; skipped a last line cut off by a crash"
+            } else {
+                ""
+            }
+        );
+        log::info!(
+            "muster-daemon persistence: loaded {:?}",
+            opened.folded.counts
+        );
+        if unparsed > 0 {
+            log::error!(
+                "muster-daemon persistence: {unparsed} stored entities no longer parse and \
+                 weren't loaded; they stay in the file"
+            );
+        }
+    }
+    Ok(server)
+}
+
+/// Put stored entities straight into myko's stores, as myko's own Postgres
+/// consumer does at boot (`apply_remote_event`): no cascades, which already
+/// ran when they were written, and nothing written back to the store file.
+fn load_into_stores(server: &MykoServer, events: Vec<myko::wire::MEvent>) -> (usize, usize) {
+    let handlers = server.handler_registry();
+    let registry = server.registry();
+    let (mut loaded, mut unparsed) = (0, 0);
+    for event in events {
+        let parsed = handlers
+            .item_parser(&event.item_type)
+            .and_then(|parse| parse(event.item).ok());
+        match parsed {
+            Some(item) => {
+                registry
+                    .get_or_create(item.entity_type())
+                    .insert(item.id(), item);
+                loaded += 1;
+            }
+            None => {
+                log::error!(
+                    "muster-daemon persistence: a stored {} doesn't parse",
+                    event.item_type
+                );
+                unparsed += 1;
+            }
+        }
+    }
+    (loaded, unparsed)
 }
 
 type StopChannel = (

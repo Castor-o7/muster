@@ -441,14 +441,21 @@ Merged and needing a live run: MUS-36 and MUS-37.
   has the laptop.
   Design, with options for the operator: [remote-access.md](remote-access.md) (sienna-mullet,
   2026-11-05). It bears on MUS-56.
-- [ ] **MUS-17: Keep messages across daemon restarts without Postgres.** Check
+- [x] **MUS-17: Keep messages across daemon restarts without Postgres.** Check
   first whether myko allows it. Done when: an unread message survives a daemon
   restart with no Postgres configured.
   *Design approved 2026-11-05 (fiery-snapper, option A: an append-only JSONL
   file in the state directory, compacted; myko allows it through its `Persister`
-  trait and `apply_event_batch`). Decided by Josh on 2026-11-05: opt-in with
-  `MUSTER_PERSIST=file` for this release, and the store excluded from Time
-  Machine by default. See [local-persistence-design.md](local-persistence-design.md).*
+  trait, and replay loads the stores as myko's Postgres consumer does). Decided by
+  Josh on 2026-11-05: opt-in with `MUSTER_PERSIST=file` for this release, and the
+  store excluded from Time Machine by default. See
+  [local-persistence-design.md](local-persistence-design.md).* *Built 2026-11-05:
+  `crates/daemon/src/file_persister.rs`. Conformance cell 5e
+  (`restart-keeps-unread-mail-file`) passes for claude, claude-tls, codex and
+  codex-tls with no Postgres, and `scripts/test-restart-file-e2e.sh` (in CI) checks
+  unread mail, read state and an ad hoc membership across a restart, which the
+  same script without the setting loses. Making it the default waits on Josh,
+  after a release.*
 - [ ] **MUS-18: Extend pairing to Codex.** Codex goes through the Rust shim. Done
   when: Codex can connect through the gate. The Pi, opencode and Prime Agent plugins
   are left out under the language decision.
