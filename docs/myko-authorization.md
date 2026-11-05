@@ -71,6 +71,45 @@ about to apply, with an identity myko attached to the connection itself.
    that route to paired machines today, and with the hook it could be opened with the
    same checks.
 
+### Who may set the machine header
+
+The principal is only as good as the header it's built from. The gate strips
+`X-Muster-Machine` from what a paired machine sends and sets it from the verified token.
+But not every connection to myko comes through that path:
+
+- **The loopback local port.** The gate's local path is reached with the local token.
+- **myko's own listener.** It admits anything carrying the local token.
+- **Plain mode.** No gate at all.
+
+The local token is readable by every process in the operator's account, sessions
+included. A local process could therefore dial myko with the local token and its own
+`X-Muster-Machine: a1`, and be taken as that paired machine.
+
+So the request filter must build a machine principal from the header **only on a
+connection it knows the gate forwarded**, and treat the header as hostile everywhere
+else. Two ways to know:
+
+- **A per-boot gate secret.** The daemon makes a random secret at start and keeps it in
+  memory only, never on disk. The gate adds `X-Muster-Gate: <secret>` to what it forwards
+  for a paired machine, alongside the machine header. The filter accepts
+  `X-Muster-Machine` only with a matching secret, compared in constant time. Because the
+  gate and myko run in the same process, nothing else can read the secret, except by
+  reading the daemon's memory. That's out of scope on macOS's hardened runtime, and on
+  Linux it's limited by `ptrace_scope`; on a default Ubuntu it needs root.
+- **A separate internal listener.** The gate forwards paired machines' connections to a
+  listener only it dials, for example a Unix socket in a root- or daemon-only directory,
+  and the filter takes the header only from there. That's stronger, but a bigger change.
+  It could also be in-process: MUS-59 noted that myko's per-connection handlers are
+  public.
+
+On any other connection, the filter **refuses** a request that carries
+`X-Muster-Machine` or `X-Muster-Gate`, rather than ignoring them, so a spoof is logged.
+Without them, the principal is `local`, which is what the daemon's own host gets today. In
+plain mode every connection is `local`, as now, because plain mode has no machine
+identities (MUS-64). Tests: a spoofed `X-Muster-Machine` on the loopback local port, and
+on myko's own listener, with and without a guessed `X-Muster-Gate`, is refused, and a
+paired machine through the TLS gate gets its machine principal.
+
 Muster's authorizer is then today's rules, moved: the allowlists, ownership through the
 bindings file, and the `host` and `operator` attestation. Attestation is a rewrite, not a
 check, so it needs either a `normalize` callback beside `authorize_event`, or the
