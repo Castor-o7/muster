@@ -28,7 +28,7 @@ use std::{
     process::{Child, ChildStdin, Command, Stdio},
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicUsize, Ordering},
         mpsc,
     },
     thread,
@@ -51,11 +51,16 @@ const QUIET_FOR: Duration = Duration::from_secs(4);
 const KNOWN_FAILURES: &[(&str, &str, &str)] = &[
     ("claude", "wake-none-not-expected", "MUS-71"),
     ("claude-tls", "wake-none-not-expected", "MUS-71"),
+    ("codex", "operator-pause-stops-wakes", "MUS-72"),
+    ("claude", "lost-hook-reply-redelivers", "MUS-73"),
+    ("claude-tls", "lost-hook-reply-redelivers", "MUS-73"),
+    ("codex", "lost-hook-reply-redelivers", "MUS-73"),
+    ("codex", "dropped-ack-redelivers", "MUS-73"),
+    ("codex", "daemon-restart-mid-wait", "MUS-74"),
 ];
 
 /// Harnesses in the grid that have no fake yet, with the stage that adds one.
 const NOT_YET: &[(&str, &str)] = &[
-    ("codex", "MUS-69 stage 2"),
     ("opencode", "MUS-69 stage 3"),
     ("pi", "MUS-69 stage 3"),
     ("prime-agent", "MUS-69 stage 3"),
@@ -242,50 +247,65 @@ impl Drop for Daemon {
 // ---------------------------------------------------------------------------
 // A fault-injecting proxy in front of the hook listener
 
-/// Forwards hook requests to the daemon, and can drop `/hook/ack` so a
-/// delivery's ack never arrives. Every shim request is `Connection: close`.
+/// Where a delivery's acknowledgement gets lost, which depends on how the
+/// harness acks.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum AckFault {
+    /// The harness acks with its own `/hook/ack` request (Claude's waiter):
+    /// that request never reaches the daemon.
+    DropAckRequests,
+    /// The daemon acks once it has flushed a hook's reply (`deferred_ack`):
+    /// the reply to a request starting with this path is read from the
+    /// daemon, then lost before the harness gets it.
+    DropReplies(&'static str),
+}
+
+/// Forwards hook requests to the daemon, and can lose a delivery's ack on the
+/// way (`AckFault`). Every shim request is `Connection: close`.
 struct HookProxy {
     base: String,
-    drop_acks: Arc<AtomicBool>,
-    dropped: Arc<AtomicUsize>,
+    fault: Arc<std::sync::Mutex<Option<AckFault>>>,
+    faulted: Arc<AtomicUsize>,
 }
 
 impl HookProxy {
     fn start(upstream: SocketAddr) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
-        let drop_acks = Arc::new(AtomicBool::new(false));
-        let dropped = Arc::new(AtomicUsize::new(0));
-        let (drop_flag, drop_count) = (drop_acks.clone(), dropped.clone());
+        let fault = Arc::new(std::sync::Mutex::new(None));
+        let faulted = Arc::new(AtomicUsize::new(0));
+        let (f, n) = (fault.clone(), faulted.clone());
         thread::spawn(move || {
             for client in listener.incoming().flatten() {
-                let (drop_flag, drop_count) = (drop_flag.clone(), drop_count.clone());
+                let (f, n) = (f.clone(), n.clone());
                 thread::spawn(move || {
-                    let _ = forward(client, upstream, &drop_flag, &drop_count);
+                    let fault = *f.lock().unwrap();
+                    let _ = forward(client, upstream, fault, &n);
                 });
             }
         });
         Self {
             base,
-            drop_acks,
-            dropped,
+            fault,
+            faulted,
         }
     }
 
-    fn drop_acks(&self, on: bool) {
-        self.drop_acks.store(on, Ordering::SeqCst);
+    fn set_fault(&self, fault: Option<AckFault>) {
+        *self.fault.lock().unwrap() = fault;
     }
 
-    fn acks_dropped(&self) -> usize {
-        self.dropped.load(Ordering::SeqCst)
+    /// How many acks the fault has lost so far.
+    fn faulted(&self) -> usize {
+        self.faulted.load(Ordering::SeqCst)
     }
 }
 
 fn forward(
     mut client: TcpStream,
     upstream: SocketAddr,
-    drop_acks: &AtomicBool,
-    dropped: &AtomicUsize,
+    fault: Option<AckFault>,
+    faulted: &AtomicUsize,
 ) -> std::io::Result<()> {
     let mut reader = BufReader::new(client.try_clone()?);
     let mut head = String::new();
@@ -308,14 +328,25 @@ fn forward(
     }
     let mut body = vec![0; content_length];
     reader.read_exact(&mut body)?;
-    if head.starts_with("POST /hook/ack") && drop_acks.load(Ordering::SeqCst) {
+    if fault == Some(AckFault::DropAckRequests) && head.starts_with("POST /hook/ack") {
         // The ack is lost on the way: the daemon never hears it.
-        dropped.fetch_add(1, Ordering::SeqCst);
+        faulted.fetch_add(1, Ordering::SeqCst);
         return Ok(());
     }
     let mut up = TcpStream::connect(upstream)?;
     up.write_all(head.as_bytes())?;
     up.write_all(&body)?;
+    if let Some(AckFault::DropReplies(prefix)) = fault
+        && head.starts_with(&format!("POST {prefix}"))
+    {
+        // Take the whole reply, so the daemon has flushed it, then lose it.
+        let mut reply = Vec::new();
+        up.read_to_end(&mut reply)?;
+        if reply.windows(13).any(|w| w == b"<muster_inbox") {
+            faulted.fetch_add(1, Ordering::SeqCst);
+        }
+        return Ok(());
+    }
     std::io::copy(&mut up, &mut client)?;
     Ok(())
 }
@@ -493,6 +524,11 @@ trait FakeHarness {
     /// boundary): what was injected, if anything.
     fn busy_boundary(&mut self) -> Option<String>;
     fn session_id(&self) -> &str;
+    /// Where this harness's acks can be lost.
+    fn ack_fault(&self) -> AckFault;
+    /// Whether the harness's MCP shim attaches to the session's roster row
+    /// (Claude's does; Codex's registers no session, `MUSTER_HARNESS=codex`).
+    fn mcp_attaches(&self) -> bool;
 }
 
 /// Claude Code, as `plugins/muster-shim/hooks/hooks.json` wires it: the
@@ -643,11 +679,333 @@ impl FakeHarness for FakeClaude {
     fn session_id(&self) -> &str {
         &self.session_id
     }
+
+    fn ack_fault(&self) -> AckFault {
+        AckFault::DropAckRequests
+    }
+
+    fn mcp_attaches(&self) -> bool {
+        true
+    }
 }
 
 impl Drop for FakeClaude {
     fn drop(&mut self) {
         if let Some(mut child) = self.waiter.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+/// The Codex version the fake's fixtures are pinned to.
+const CODEX_VERSION: &str = "0.163.0";
+
+/// A Codex fixture, with the thread id and cwd filled in.
+fn codex_fixture(name: &str, thread_id: &str, cwd: &str) -> Value {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(format!("codex-{CODEX_VERSION}"))
+        .join(format!("{name}.json"));
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("fixture {}: {e}", path.display()))
+        .replace("{{thread_id}}", thread_id)
+        .replace("{{cwd}}", cwd);
+    serde_json::from_str(&text).unwrap_or_else(|e| panic!("fixture {}: {e}", path.display()))
+}
+
+/// The one thread a fake app-server hosts.
+struct AppThread {
+    /// A turn is running, so `turn/start` is refused.
+    busy: bool,
+    /// `turn/start` requests accepted so far.
+    turns: usize,
+}
+
+/// A Codex app-server with one thread, attached to a TUI: every connection
+/// gets `thread/started` for it, and `turn/start` is accepted while the thread
+/// is idle (and then a turn runs, so it's busy) and refused while it's busy.
+struct FakeAppServer {
+    endpoint: String,
+    thread: Arc<std::sync::Mutex<AppThread>>,
+    stop: Option<mpsc::Sender<()>>,
+    join: Option<thread::JoinHandle<()>>,
+}
+
+impl FakeAppServer {
+    fn start(thread_id: String, cwd: String) -> Self {
+        let state = Arc::new(std::sync::Mutex::new(AppThread {
+            busy: true,
+            turns: 0,
+        }));
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let endpoint = format!("ws://{}", listener.local_addr().unwrap());
+        let (stop, stopped) = mpsc::channel::<()>();
+        let shared = state.clone();
+        let join = thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .unwrap();
+            rt.block_on(async move {
+                let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+                let accept = async {
+                    loop {
+                        let Ok((stream, _)) = listener.accept().await else {
+                            continue;
+                        };
+                        let (state, tid, cwd) = (shared.clone(), thread_id.clone(), cwd.clone());
+                        tokio::spawn(async move {
+                            // A bridge that's killed resets without a close
+                            // handshake; that's cleanup, not a finding.
+                            let _ = serve_app_server(stream, state, tid, cwd).await;
+                        });
+                    }
+                };
+                tokio::select! {
+                    () = accept => {}
+                    _ = tokio::task::spawn_blocking(move || stopped.recv()) => {}
+                }
+            });
+        });
+        Self {
+            endpoint,
+            thread: state,
+            stop: Some(stop),
+            join: Some(join),
+        }
+    }
+
+    fn turns(&self) -> usize {
+        self.thread.lock().unwrap().turns
+    }
+
+    fn set_busy(&self, busy: bool) {
+        self.thread.lock().unwrap().busy = busy;
+    }
+}
+
+impl Drop for FakeAppServer {
+    fn drop(&mut self) {
+        drop(self.stop.take());
+        if let Some(join) = self.join.take() {
+            let _ = join.join();
+        }
+    }
+}
+
+async fn serve_app_server(
+    stream: tokio::net::TcpStream,
+    state: Arc<std::sync::Mutex<AppThread>>,
+    thread_id: String,
+    cwd: String,
+) -> Result<(), String> {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message as Frame;
+
+    let mut ws = tokio_tungstenite::accept_async(stream)
+        .await
+        .map_err(|e| e.to_string())?;
+    let fixture = |name: &str| codex_fixture(name, &thread_id, &cwd);
+    let mut announced = false;
+    while let Some(frame) = ws.next().await {
+        let Ok(Frame::Text(text)) = frame else {
+            continue;
+        };
+        let Ok(req) = serde_json::from_str::<Value>(text.as_ref()) else {
+            continue;
+        };
+        let method = req["method"].as_str().unwrap_or_default();
+        let reply = match method {
+            "initialize" => Some(json!({"id": req["id"], "result": fixture("initialize-result")})),
+            "initialized" => {
+                // An attached TUI's thread: every client hears about it.
+                if !announced {
+                    announced = true;
+                    ws.send(Frame::Text(fixture("thread-started").to_string().into()))
+                        .await
+                        .map_err(|e| e.to_string())?;
+                }
+                None
+            }
+            "turn/start" if req["params"]["threadId"] == json!(thread_id) => {
+                let mut t = state.lock().unwrap();
+                if t.busy {
+                    Some(json!({"id": req["id"], "error": fixture("turn-start-busy-error")}))
+                } else {
+                    t.busy = true;
+                    t.turns += 1;
+                    Some(json!({"id": req["id"], "result": fixture("turn-start-result")}))
+                }
+            }
+            "turn/start" => Some(json!({
+                "id": req["id"],
+                "error": {"code": -32602, "message": "no such thread"}
+            })),
+            // Anything else the bridge asks gets an empty result, so it
+            // never hangs waiting on the fake.
+            _ if req.get("id").is_some() => Some(json!({"id": req["id"], "result": {}})),
+            _ => None,
+        };
+        if let Some(reply) = reply {
+            ws.send(Frame::Text(reply.to_string().into()))
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+/// Codex, as `muster-shim codex-run` sets it up: the real `codex-bridge`
+/// watching the daemon and a (fake) shared app-server, and the `codex-hook`
+/// commands Codex's hooks run. An idle thread is woken by the bridge's
+/// `turn/start`; the turn's `UserPromptSubmit` hook then injects the inbox,
+/// and the daemon acks it once that reply is flushed.
+struct FakeCodex {
+    thread_id: String,
+    cwd: String,
+    hook_base: String,
+    env: Vec<(String, String)>,
+    app: Option<FakeAppServer>,
+    bridge: Option<Child>,
+    turns_before: usize,
+}
+
+impl FakeCodex {
+    fn new() -> Self {
+        Self {
+            thread_id: uuid::Uuid::new_v4().to_string(),
+            cwd: "/tmp/conformance-codex".into(),
+            hook_base: String::new(),
+            env: Vec::new(),
+            app: None,
+            bridge: None,
+            turns_before: 0,
+        }
+    }
+
+    fn app(&self) -> &FakeAppServer {
+        self.app.as_ref().expect("started")
+    }
+
+    /// Run a Codex command hook and return what it injected.
+    fn run_hook(&self, event: &str, fixture: &str) -> Option<String> {
+        let input = codex_fixture(fixture, &self.thread_id, &self.cwd).to_string();
+        let mut child = Command::new(SHIM)
+            .args(["codex-hook", event, &self.hook_base])
+            .env_remove("MUSTER_DAEMON_ADDRESS")
+            .env_remove("MYKO_ADDRESS")
+            .envs(self.env.iter().cloned())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn codex-hook");
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
+        let v: Value = serde_json::from_slice(&out.stdout).ok()?;
+        let text = v["hookSpecificOutput"]["additionalContext"].as_str()?;
+        (!text.is_empty()).then(|| text.to_string())
+    }
+}
+
+impl FakeHarness for FakeCodex {
+    fn start(&mut self, daemon: &Daemon, proxy: &HookProxy) {
+        let tmp = daemon.dir.path().join("tmp");
+        std::fs::create_dir_all(&tmp).unwrap();
+        self.hook_base = proxy.base.clone();
+        self.env = vec![
+            (
+                "XDG_CONFIG_HOME".into(),
+                daemon.config_dir().display().to_string(),
+            ),
+            (
+                "HOME".into(),
+                daemon.dir.path().join("home").display().to_string(),
+            ),
+            ("MUSTER_HOST".into(), "conformance".into()),
+            ("MUSTER_BASE_URL".into(), proxy.base.clone()),
+            ("TMPDIR".into(), tmp.display().to_string()),
+        ];
+        let app = FakeAppServer::start(self.thread_id.clone(), self.cwd.clone());
+        let ready = daemon.dir.path().join("bridge.ready");
+        let log = std::fs::File::create(daemon.dir.path().join("bridge.log")).unwrap();
+        let bridge = Command::new(SHIM)
+            .args([
+                "codex-bridge",
+                "--endpoint",
+                &app.endpoint,
+                "--daemon",
+                &daemon.ws_address(),
+                "--poll-ms",
+                "100",
+                "--ready-file",
+            ])
+            .arg(&ready)
+            .env_remove("MUSTER_DAEMON_ADDRESS")
+            .env_remove("MYKO_ADDRESS")
+            .envs(self.env.iter().cloned())
+            .env("RUST_LOG", "muster_shim=debug")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(log)
+            .spawn()
+            .expect("spawn codex-bridge");
+        self.app = Some(app);
+        self.bridge = Some(bridge);
+        assert!(
+            wait_until(Duration::from_secs(20), || ready.is_file()),
+            "codex-bridge never became ready; log:\n{}",
+            std::fs::read_to_string(daemon.dir.path().join("bridge.log")).unwrap_or_default()
+        );
+    }
+
+    fn arm_idle(&mut self) {
+        // The turn ends and the thread sits idle in the TUI.
+        self.turns_before = self.app().turns();
+        self.app().set_busy(false);
+    }
+
+    fn wait_for_wake(&mut self, within: Duration) -> Option<String> {
+        let before = self.turns_before;
+        if !wait_until(within, || self.app().turns() > before) {
+            return None;
+        }
+        // The bridge started a turn: Codex runs its UserPromptSubmit hook.
+        Some(
+            self.run_hook("prompt-submit", "user-prompt-submit")
+                .unwrap_or_default(),
+        )
+    }
+
+    fn busy_boundary(&mut self) -> Option<String> {
+        self.app().set_busy(true);
+        self.run_hook("post-tool-use", "post-tool-use")
+    }
+
+    fn session_id(&self) -> &str {
+        &self.thread_id
+    }
+
+    fn ack_fault(&self) -> AckFault {
+        AckFault::DropReplies("/hook/prompt-submit")
+    }
+
+    fn mcp_attaches(&self) -> bool {
+        false
+    }
+}
+
+impl Drop for FakeCodex {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.bridge.take() {
             let _ = child.kill();
             let _ = child.wait();
         }
@@ -749,6 +1107,7 @@ const SCENARIOS: &[(&str, Scenario)] = &[
     ("idle-wakes-on-dm", idle_wakes_on_dm),
     ("busy-gets-it-at-next-hook", busy_gets_it_at_next_hook),
     ("dropped-ack-redelivers", dropped_ack_redelivers),
+    ("lost-hook-reply-redelivers", lost_hook_reply_redelivers),
     ("duplicate-shown-at-most-once", duplicate_shown_at_most_once),
     ("daemon-restart-mid-wait", daemon_restart_mid_wait),
     ("operator-pause-stops-wakes", operator_pause_stops_wakes),
@@ -783,33 +1142,53 @@ fn busy_gets_it_at_next_hook(c: &mut Cell) -> Result<(), String> {
     Ok(())
 }
 
-/// Scenario 3: No loss: when the ack of a delivery is lost, the message comes again
-/// once its lease lapses, and not after a successful ack.
+/// Scenario 3: No loss: when a delivery's ack is lost (Claude: the waiter's
+/// `/hook/ack`; Codex: the hook's reply, which the daemon acks on flush), the
+/// message comes again at the session's next delivery point once the lease
+/// lapses, and not after an ack that arrives.
 fn dropped_ack_redelivers(c: &mut Cell) -> Result<(), String> {
-    c.proxy.drop_acks(true);
+    c.proxy.set_fault(Some(c.harness.ack_fault()));
     c.harness.arm_idle();
     let t = token("ack");
     c.send(&t)?;
-    let first = c.harness.wait_for_wake(WAKE_WITHIN);
-    if !contains(&first, &t) {
-        return Err(format!("first delivery missing; got {first:?}"));
+    let _first = c.harness.wait_for_wake(WAKE_WITHIN);
+    if c.proxy.faulted() == 0 {
+        return Err("no delivery's ack was lost, so the scenario didn't run".into());
     }
-    if c.proxy.acks_dropped() == 0 {
-        return Err("the harness never acked, so nothing was dropped".into());
-    }
-    c.proxy.drop_acks(false);
+    c.proxy.set_fault(None);
     thread::sleep(Duration::from_secs(ACK_LEASE_SECS + 1));
-    c.harness.arm_idle();
-    let second = c.harness.wait_for_wake(WAKE_WITHIN);
-    if !contains(&second, &t) {
+    let again = c.harness.busy_boundary();
+    if !contains(&again, &t) {
         return Err(format!(
-            "not redelivered after the lost ack; got {second:?}"
+            "not delivered again after its ack was lost (message lost); got {again:?}"
         ));
     }
     thread::sleep(Duration::from_secs(ACK_LEASE_SECS + 1));
-    let third = c.harness.busy_boundary();
-    if contains(&third, &t) {
-        return Err("delivered a third time after a successful ack".into());
+    if contains(&c.harness.busy_boundary(), &t) {
+        return Err("delivered again after a successful ack".into());
+    }
+    Ok(())
+}
+
+/// Scenario 3b: No loss on a busy session's hook either: when the reply to a
+/// prompt hook is lost after the daemon sent it (as when the harness kills a
+/// hook at its timeout), the message comes again at the next hook.
+fn lost_hook_reply_redelivers(c: &mut Cell) -> Result<(), String> {
+    c.proxy
+        .set_fault(Some(AckFault::DropReplies("/hook/prompt-submit")));
+    let t = token("reply");
+    c.send(&t)?;
+    let _lost = c.harness.busy_boundary();
+    if c.proxy.faulted() == 0 {
+        return Err("no hook reply carrying mail was lost, so the scenario didn't run".into());
+    }
+    c.proxy.set_fault(None);
+    thread::sleep(Duration::from_secs(ACK_LEASE_SECS + 1));
+    let again = c.harness.busy_boundary();
+    if !contains(&again, &t) {
+        return Err(format!(
+            "not delivered again after the hook's reply was lost (message lost); got {again:?}"
+        ));
     }
     Ok(())
 }
@@ -914,7 +1293,24 @@ fn broadcast_never_wakes(c: &mut Cell) -> Result<(), String> {
 /// sender as `wake: expected` (MUS-71). Here the session's MCP shim is
 /// connected, but no waiter runs and it isn't busy, so nothing can wake it.
 fn wake_none_not_expected(c: &mut Cell) -> Result<(), String> {
-    let row = c.recipient_on_roster()?;
+    let mut row = c.recipient_on_roster()?;
+    if c.harness.mcp_attaches() {
+        // A hook-registered row has pid 0; the session's MCP shim fills it in
+        // when it attaches. Until then the roster says `none` for a different
+        // reason, and the bug can't show.
+        let id = c.recipient();
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while row["pid"].as_u64().unwrap_or(0) == 0 {
+            if Instant::now() >= deadline {
+                return Err("precondition: the session's MCP shim never attached".into());
+            }
+            thread::sleep(Duration::from_millis(250));
+            row = c
+                .sender
+                .row(&id, Duration::from_secs(5))
+                .unwrap_or_default();
+        }
+    }
     if row["wake"] != json!("none") {
         return Err(format!(
             "precondition: the roster should say wake none, says {}",
@@ -939,6 +1335,7 @@ type Harness = (&'static str, Mode, fn() -> Box<dyn FakeHarness>);
 const HARNESSES: &[Harness] = &[
     ("claude", Mode::Plain, || Box::new(FakeClaude::new())),
     ("claude-tls", Mode::Tls, || Box::new(FakeClaude::new())),
+    ("codex", Mode::Plain, || Box::new(FakeCodex::new())),
 ];
 
 enum Outcome {
