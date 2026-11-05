@@ -49,8 +49,8 @@ passing, the suite fails until it's taken off the list.
 
 | Cells | Story | What fails |
 |---|---|---|
-| `pi`, `opencode` × 3 | MUS-81 | A pushed message is marked read when the push reaches the plugin's connection. If the harness then loses it, the next turn's inbox drain finds nothing unread, and the message is gone: the push-side twin of MUS-75. |
-| `pi`, `opencode` × 6b | MUS-82 | While wakes are paused, the push is skipped and the mail stays unread, but resuming pushes nothing again, so a push session isn't woken until its next turn. |
+| `pi`, `opencode`, `prime-agent` × 3 | MUS-81 | A pushed message is marked read when the push reaches the plugin's connection. If the harness then loses it, the next turn's inbox drain finds nothing unread, and the message is gone: the push-side twin of MUS-75. |
+| `pi`, `opencode`, `prime-agent` × 6b | MUS-82 | While wakes are paused, the push is skipped and the mail stays unread, but resuming pushes nothing again, so a push session isn't woken until its next turn. |
 
 ## The harnesses
 
@@ -61,7 +61,7 @@ passing, the suite fails until it's taken off the list.
 | `codex` | Codex, through `muster-shim codex-bridge` and the app-server | plain | built |
 | `opencode` | opencode plugin (`plugins/muster-opencode`) | plain | built |
 | `pi` | Pi plugin (`plugins/muster-pi`) | plain | built |
-| `prime-agent` | Prime Agent plugin (`plugins/muster-prime-agent`) | plain | stage 3 |
+| `prime-agent` | Prime Agent plugin (`plugins/muster-prime-agent`) | plain | built |
 
 ### What the fake Claude assumes
 
@@ -164,11 +164,27 @@ check:
 
 Scenarios 3b and 8 are `n/a`, as for Pi.
 
+### What the fake Prime Agent assumes
+
+Prime Agent runs the pi extension API, so its fake is the fake Pi with Prime
+Agent's session manager, in `plugins/muster-prime-agent/test/conformance-driver.ts`.
+It's pinned to **`@earendil-works/pi-coding-agent` 0.84.0**, the version in
+`plugins/muster-prime-agent/package-lock.json`, and makes Pi's assumptions,
+plus these:
+
+- **The session id comes from `ctx.sessionManager.getSessionId()`**, and
+  `getHeader()` describes the conversation. The fake's header has no
+  `rlmDepth`, so it's a top-level session, which the extension registers. An
+  RLM sub-agent, which it skips, isn't covered.
+- **`ctx.ui.setWidget`** exists alongside `notify` and `setStatus`, for the
+  statusline widget.
+
+Scenarios 3b and 8 are `n/a`, as for Pi.
+
 ## Gaps
 
 These are listed so nobody reads the grid as more than it is.
 
-- **Prime Agent has no fake yet** (stage 3). Its column reads `not yet`.
 - **The plugin columns need bun and the plugin's `node_modules`.** CI downloads
   bun 1.3.14 from its GitHub release, checks it against a SHA-256 committed in
   the workflow, and runs `npm ci` in each plugin. Locally, put bun on `PATH` or
@@ -185,7 +201,9 @@ These are listed so nobody reads the grid as more than it is.
 - **Codex runs in plain mode only.** It has no `codex-tls` column yet.
 - **The Postgres cells need a database** (MUS-76): `CONFORMANCE_POSTGRES_URL`,
   in which each daemon gets its own events table (`conformance_…`) and leaves it
-  behind. Without one they show `no postgres`. CI runs a `postgres:16` service
+  behind. Without one they show `no postgres`. A local run therefore
+  accumulates `conformance_*` tables; drop them with
+  `psql "$CONFORMANCE_POSTGRES_URL" -Atc "select 'drop table ' || tablename || ';' from pg_tables where tablename like 'conformance\_%'" | psql "$CONFORMANCE_POSTGRES_URL"`. CI runs a `postgres:16` service
   and sets `CONFORMANCE_REQUIRE_POSTGRES`, so there a missing database fails.
 - **Pause is only checked on the waiter.** With channels on, `SendMessage`'s
   live push also checks the pause. No harness here uses channels, because the

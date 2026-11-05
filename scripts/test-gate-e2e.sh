@@ -9,7 +9,9 @@ export MUSTER_STATE_DIR=$WORK/state
 export MUSTER_ACK_LEASE_SECS=2
 # Everything down to the plain-mode section runs with the gate on (MUS-64).
 export MUSTER_TLS=1
-export MUSTER_BIND=127.0.0.1:16255 MUSTER_HOOK_BIND=127.0.0.1:16256 MUSTER_INTERNAL_BIND=127.0.0.1:16257 MUSTER_MYKO_BIND=127.0.0.1:16258
+export MUSTER_BIND=127.0.0.1:16255 MUSTER_HOOK_BIND=127.0.0.1:16256 MUSTER_MYKO_BIND=127.0.0.1:16258
+# The retired 6257 alias (MUS-70), set to show the daemon ignores it and says so.
+export MUSTER_INTERNAL_BIND=127.0.0.1:16257
 # A small per-machine cap, so the flood check below can reach it (MUS-9).
 export MUSTER_MAX_CONN_PER_MACHINE=8
 unset MUSTER_BASE_URL MUSTER_DAEMON_ADDRESS
@@ -114,9 +116,8 @@ LOCAL_HOOK='{"session_id":"a0000000-0000-4000-8000-000000000002","cwd":"/tmp/dem
 check "a local process without the token gets 401" '[[ $(curl -s -m 3 -o /dev/null -w %{http_code} -X POST http://127.0.0.1:16256/hook/session-start -d "$LOCAL_HOOK") == 401 ]]'
 check "a browser origin gets 403 at the hook listener" '[[ $(curl -s -m 3 -o /dev/null -w %{http_code} -H "Origin: https://evil.example" -H "Authorization: Bearer $LOCAL_TOKEN" -X POST http://127.0.0.1:16256/hook/session-start -d "$LOCAL_HOOK") == 403 ]]'
 check "a websocket at the hook listener gets 403" '[[ $(curl -s -m 3 -o /dev/null -w %{http_code} --http1.1 -H "Connection: Upgrade" -H "Upgrade: websocket" -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" "http://127.0.0.1:16256/hook/wait?token=$LOCAL_TOKEN") == 403 ]]'
-check "the local gate refuses a websocket without the token" '[[ $(curl -s -m 3 -o /dev/null -w %{http_code} --http1.1 -H "Connection: Upgrade" -H "Upgrade: websocket" -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" http://127.0.0.1:16257/myko) == 401 ]]'
-check "and one from a browser with the token" '[[ $(curl -s -m 3 -o /dev/null -w %{http_code} --http1.1 -H "Origin: https://evil.example" -H "Connection: Upgrade" -H "Upgrade: websocket" -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" "http://127.0.0.1:16257/myko?token=$LOCAL_TOKEN") == 403 ]]'
-check "but admits a local process with it (101)" '[[ $(curl -s -m 3 -o /dev/null -w %{http_code} --http1.1 -H "Connection: Upgrade" -H "Upgrade: websocket" -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" "http://127.0.0.1:16257/myko?token=$LOCAL_TOKEN") == 101 ]]'
+check "the gate's port refuses a local websocket without the token" '[[ $(curl -s -m 3 -o /dev/null -w %{http_code} --http1.1 -H "Connection: Upgrade" -H "Upgrade: websocket" -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" http://127.0.0.1:16255/myko) == 401 ]]'
+check "the retired 6257 alias isn't bound, and setting it says so" '! nc -z 127.0.0.1 16257 2>/dev/null && grep -q "MUSTER_INTERNAL_BIND is ignored" $WORK/daemon.log'
 # myko's own listener answers only what a gate forwarded (MUS-59).
 check "myko's own port refuses a browser websocket" '[[ $(curl -s -m 3 -o /dev/null -w %{http_code} --http1.1 -H "Origin: https://evil.example" -H "Connection: Upgrade" -H "Upgrade: websocket" -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" http://127.0.0.1:16258/myko) == 403 ]]'
 check "and a browser's MCP call" '[[ $(curl -s -m 3 -o /dev/null -w %{http_code} -H "Origin: https://evil.example" -H "Content-Type: application/json" -X POST -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}" http://127.0.0.1:16258/myko/mcp) == 403 ]]'
@@ -291,7 +292,7 @@ lst = socket.socket(); lst.bind(("127.0.0.1", 0)); lst.listen(); port = lst.gets
 def serve():
     while True:
         c, _ = lst.accept()
-        u = socket.create_connection(("127.0.0.1", 16257))
+        u = socket.create_connection(("127.0.0.1", 16255))
         threading.Thread(target=relay_up, args=(c, u), daemon=True).start()
         threading.Thread(target=relay_down, args=(u, c), daemon=True).start()
 threading.Thread(target=serve, daemon=True).start()
@@ -430,7 +431,7 @@ wait $KEEP_WAIT
 check "and a message sent after the drop reaches its held wait" 'grep -q "kept and reachable" $WORK/keep-wait.out'
 
 # SIGTERM ends a held wait with an empty reply marked as a restart, then exits cleanly (MUS-55).
-env XDG_CONFIG_HOME=$WORK/daemon MUSTER_STATE_DIR=$WORK/state3 MUSTER_BIND=127.0.0.1:16455 MUSTER_HOOK_BIND=127.0.0.1:16456 MUSTER_INTERNAL_BIND=127.0.0.1:16457 MUSTER_MYKO_BIND=127.0.0.1:16458 RUST_LOG=info $BIN/muster-daemon >$WORK/stop.log 2>&1 &
+env XDG_CONFIG_HOME=$WORK/daemon MUSTER_STATE_DIR=$WORK/state3 MUSTER_BIND=127.0.0.1:16455 MUSTER_HOOK_BIND=127.0.0.1:16456 MUSTER_MYKO_BIND=127.0.0.1:16458 RUST_LOG=info $BIN/muster-daemon >$WORK/stop.log 2>&1 &
 STOP_PID=$!
 for i in {1..50}; do nc -z 127.0.0.1 16456 2>/dev/null && break; sleep 0.2; done
 curl -s -m 20 -D $WORK/stop-head.txt -o $WORK/stop-body.txt -H "Authorization: Bearer $LOCAL_TOKEN" -X POST "http://127.0.0.1:16456/hook/wait?timeout=15" -d '{"session_id":"a0000000-0000-4000-8000-0000000000d1","cwd":"/tmp/stop"}' &
@@ -444,7 +445,7 @@ check "SIGTERM ends a held wait promptly, marked as a restart" '(( SECONDS - STO
 check "and the daemon then exits cleanly" '[[ $STOP_RC == 0 ]] && grep -q "SIGTERM; ending held waits" $WORK/stop.log'
 
 # A hook port that can't bind stops the daemon, rather than leaving hooks dead.
-env XDG_CONFIG_HOME=$WORK/daemon MUSTER_STATE_DIR=$WORK/state2 MUSTER_BIND=127.0.0.1:16355 MUSTER_INTERNAL_BIND=127.0.0.1:16357 MUSTER_MYKO_BIND=127.0.0.1:16358 RUST_LOG=error perl -e 'alarm 10; exec @ARGV' $BIN/muster-daemon >$WORK/bind.log 2>&1; RC=$?
+env XDG_CONFIG_HOME=$WORK/daemon MUSTER_STATE_DIR=$WORK/state2 MUSTER_BIND=127.0.0.1:16355 MUSTER_MYKO_BIND=127.0.0.1:16358 RUST_LOG=error perl -e 'alarm 10; exec @ARGV' $BIN/muster-daemon >$WORK/bind.log 2>&1; RC=$?
 check "a failed hook bind stops the daemon and says why" '[[ $RC != 0 && $RC != 142 ]] && grep -q "hook listener on 127.0.0.1:16256" $WORK/bind.log'
 
 # A pairing whose fingerprint doesn't match: the hook must get nothing.
@@ -457,14 +458,12 @@ check "wrong certificate fingerprint: waiter tells the session" '[[ $RC == 2 && 
 OUT=$(echo $HOOK | T $BIN/muster-shim claude-hook wait 2>&1); RC=$?
 check "and only once" '[[ $RC == 0 && -z $OUT ]]'
 
-# Unpaired, on the daemon's own host: the shim reaches the local gate with the local token (MUS-7).
+# Unpaired, on the daemon's own host: the shim reaches the gate's port with the local token (MUS-7, MUS-64).
 mkdir -p $WORK/unpaired/muster && cp $WORK/daemon/muster/local-token $WORK/unpaired/muster/
 # HOME too, so a real pairing on the machine running this can't be picked up.
-(sleep 4) | env HOME=$WORK/unpaired XDG_CONFIG_HOME=$WORK/unpaired MUSTER_DAEMON_ADDRESS=ws://127.0.0.1:16257 CLAUDE_CODE_SESSION_ID=e2e-local RUST_LOG=info perl -e "alarm 8; exec @ARGV" $BIN/muster-shim >/dev/null 2>$WORK/local.log
-check "unpaired shim on the daemon host connects through the local gate" 'grep -q "connected to ws://127.0.0.1:16257/myko" $WORK/local.log'
+(sleep 4) | env HOME=$WORK/unpaired XDG_CONFIG_HOME=$WORK/unpaired MUSTER_DAEMON_ADDRESS=ws://127.0.0.1:16255 CLAUDE_CODE_SESSION_ID=e2e-local RUST_LOG=info perl -e "alarm 8; exec @ARGV" $BIN/muster-shim >/dev/null 2>$WORK/local.log
+check "unpaired shim on the daemon host connects through the gate's port" 'grep -q "connected to ws://127.0.0.1:16255/myko" $WORK/local.log'
 check "and its log never shows the local token" '! grep -qF "$LOCAL_TOKEN" $WORK/local.log'
-(sleep 4) | env HOME=$WORK/unpaired XDG_CONFIG_HOME=$WORK/unpaired MUSTER_DAEMON_ADDRESS=ws://127.0.0.1:16255 CLAUDE_CODE_SESSION_ID=e2e-local2 RUST_LOG=info perl -e "alarm 8; exec @ARGV" $BIN/muster-shim >/dev/null 2>$WORK/local2.log
-check "and through the gate's own port (MUS-64)" 'grep -q "connected to ws://127.0.0.1:16255/myko" $WORK/local2.log'
 check "with TLS on, the startup line says so" 'grep -q "TLS gate: on" $WORK/daemon.log'
 
 # Plain mode (MUS-64): no MUSTER_TLS, fresh state, as upstream Marshal runs.

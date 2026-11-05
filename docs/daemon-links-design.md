@@ -156,8 +156,8 @@ same host needs:
   `claude-hook` commands reach it rather than the main daemon.
 
 **Lamplighter's test on Murph.** Run two throwaway daemons, neither of them the
-production one: X on 6265–6268 (`MUSTER_BIND`, `MUSTER_HOOK_BIND`,
-`MUSTER_INTERNAL_BIND`, `MUSTER_MYKO_BIND`) and Y on 6275–6278, each with its own
+production one: X on 6265, 6266 and 6268 (`MUSTER_BIND`, `MUSTER_HOOK_BIND`,
+`MUSTER_MYKO_BIND`) and Y on 6275–6278, each with its own
 `MUSTER_STATE_DIR`, `XDG_CONFIG_HOME` and Postgres database, both with
 `MUSTER_TLS=1`. Pair Y as a link on X, link Y to X, and start one session on
 each. The production daemon is untouched. The **real a1↔Murph run** comes

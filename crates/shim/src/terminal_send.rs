@@ -158,6 +158,7 @@ pub async fn run(target: Target, body: String) -> Result<()> {
         last_tool_at: None,
         project: None,
         channels_enabled: None,
+        acks_pushes: None,
     };
 
     let client = Arc::new(MykoClient::new());
@@ -259,6 +260,7 @@ mod tests {
             host: None,
             project: project.map(str::to_string),
             channels_enabled: None,
+            acks_pushes: None,
         })
     }
 

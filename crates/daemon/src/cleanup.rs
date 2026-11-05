@@ -467,6 +467,7 @@ mod tests {
             host: None,
             project: None,
             channels_enabled: None,
+            acks_pushes: None,
         };
         let event = MEvent::from_item(&session, MEventType::SET, &Uuid::new_v4().to_string());
         ctx.apply_event_batch(vec![event])
@@ -533,6 +534,7 @@ mod tests {
             host: None,
             project: None,
             channels_enabled: None,
+            acks_pushes: None,
         };
         let event = MEvent::from_item(&session, MEventType::SET, &Uuid::new_v4().to_string());
         ctx.apply_event_batch(vec![event])

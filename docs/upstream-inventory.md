@@ -199,7 +199,7 @@ added since the fork need Marshal equivalents.
 |---|---|---|
 | WebSocket (public; the TLS gate when one is set) | 6255 | 6155 |
 | Hook HTTP | 6256 | 6156 |
-| Internal plain WS behind the gate (`MUSTER_INTERNAL_BIND`; shim default `ws://localhost:6257`) | 6257 | none upstream; propose 6157 |
+| Internal plain WS behind the gate (`MUSTER_INTERNAL_BIND`) | 6257, retired in MUS-70 | none; the port/gate series drops it |
 | Myko's own listener (`MUSTER_MYKO_BIND`, #68/#72) | 6258 | none upstream; propose 6158 |
 
 The 6157/6158 numbers are a proposal that follows the +100 shift. Upstream
@@ -213,7 +213,7 @@ and arrive with the PR named.
 | Muster | Marshal | |
 |---|---|---|
 | `MUSTER_BASE_URL`, `_BIND`, `_BIN_DIR`, `_CODEX_APP_SERVER_ENDPOINT`, `_CODEX_APP_SERVER_SOCKET`, `_CODEX_BIN`, `_DAEMON`, `_DAEMON_ADDRESS`, `_DAEMON_BIN`, `_HARNESS`, `_HOOK_BIND`, `_HOST`, `_OPERATOR`, `_STATE_DIR` | same with `MARSHAL_` | existing |
-| `MUSTER_INTERNAL_BIND`, `MUSTER_MYKO_BIND` | `MARSHAL_INTERNAL_BIND`, `MARSHAL_MYKO_BIND` | new, Gate |
+| `MUSTER_MYKO_BIND` | `MARSHAL_MYKO_BIND` | new, Gate (`MUSTER_INTERNAL_BIND` was retired in MUS-70) |
 | `MUSTER_MAX_CONN_HOOKS`, `_MAX_CONN_LOCAL`, `_MAX_CONN_PER_IP`, `_MAX_CONN_PER_MACHINE` | `MARSHAL_…` | new, Gate (#74) |
 | `MUSTER_ACK_LEASE_SECS` | `MARSHAL_ACK_LEASE_SECS` | new, Durability (#22) |
 | `MUSTER_WAITER_LOCK_WAIT_SECS` | `MARSHAL_WAITER_LOCK_WAIT_SECS` | new, Hooks (#6) |
