@@ -109,7 +109,8 @@ upstream to choose (below). Which part is which comes from "Additive features vs
 conflicts" in [muster-vs-marshal.md](muster-vs-marshal.md). Still one PR at a time,
 each opened after the one before it has merged:
 
-1. **M2, the terminal commands** (`marshal-shim tell`/`all`/`roster`;
+1. **OPEN upstream as [ignition-is-go/marshal#168](https://github.com/ignition-is-go/marshal/pull/168)** (opened 2026-11-05 at the operator's direct OK, head `3af92d7`, base `main`). `port/terminal-cmds-v3` is frozen while it's under review: only fixes asked for in review, each cleared with the commissioner first.
+   **M2, the terminal commands** (`marshal-shim tell`/`all`/`roster`;
    [upstream-pr-m2.md](upstream-pr-m2.md); the live cut is `port/terminal-cmds-v2`).
    New subcommands that nothing calls.
 2. **Durability, the additive part only:** the optional `idempotency_key` on send,
