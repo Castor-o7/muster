@@ -55,10 +55,9 @@ use std::{
 
 use anyhow::{Context, Result};
 use futures_util::{SinkExt, StreamExt};
-use hyphae::Gettable;
+use hyphae::{Gettable, Watchable};
 use muster_entities::{
-    GetAllMessageReads, GetAllMessages, GetAllSessions, GetAllWakePauses, Message, MessageRead,
-    Session, SessionId,
+    GetAllSessions, GetAllWakePauses, ReadMessages, ReadMessagesResult, Session, SessionId,
 };
 use myko::client::MykoClient;
 use serde::{Deserialize, Serialize};
@@ -247,6 +246,8 @@ impl WakeLeadership {
 #[derive(Debug)]
 struct BridgeArgs {
     daemon: String,
+    /// `--daemon` was given, which wins over a pairing (MUS-18).
+    daemon_explicit: bool,
     app_server: AppServerEndpoint,
     poll: Duration,
     wake_thread: Option<SessionId>,
@@ -1139,7 +1140,24 @@ pub async fn run(args: &[String]) -> Result<()> {
     }
     muster_entities::link();
 
-    let local_host = short_host();
+    // A paired machine reaches the daemon through its TLS gate (MUS-18), as the
+    // MCP shim does, unless `--daemon` names an address. The gate records the
+    // pairing name as the host of this machine's sessions, so that's the host
+    // to look for on the roster.
+    let pairing = crate::link::load_pairing().filter(|_| !args.daemon_explicit);
+    let local_host = pairing
+        .as_ref()
+        .map_or_else(short_host, |pairing| pairing.name.clone());
+    let (daemon_url, credential) = match &pairing {
+        Some(_) => crate::daemon_address().await?,
+        None => (
+            crate::with_local_token(args.daemon.clone()),
+            crate::refusal::Credential::LocalToken(
+                muster_entities::pairing::config_dir()
+                    .map(|d| d.join(muster_entities::pairing::LOCAL_TOKEN_FILE)),
+            ),
+        ),
+    };
     let hook_base = crate::codex_hook::registration_base(&args.daemon);
     let launcher = args
         .launcher_state_file
@@ -1169,18 +1187,37 @@ pub async fn run(args: &[String]) -> Result<()> {
     let mut reregistered_at: HashMap<String, Instant> = HashMap::new();
     let client = Arc::new(MykoClient::new());
     let sessions = client.watch_query::<GetAllSessions>(GetAllSessions {});
-    let messages = client.watch_query::<GetAllMessages>(GetAllMessages {});
-    let reads = client.watch_query::<GetAllMessageReads>(GetAllMessageReads {});
     // The operator's pause (MUS-10), which the daemon publishes as one
     // `WakePause` record. Claude's waiter honours it at `/hook/wait`; the
     // bridge has to honour it here (MUS-74).
     let pauses = client.watch_query::<GetAllWakePauses>(GetAllWakePauses {});
-    client.set_address(Some(args.daemon.clone()));
+    // While disconnected, ask the daemon once why, and say so if it refused
+    // this bridge's credential (MUS-83), rather than wake nothing in silence.
+    let runtime = tokio::runtime::Handle::current();
+    let probe_url = daemon_url.clone();
+    let conn_guard = client.connection_status().subscribe(move |signal| {
+        if let hyphae::Signal::Value(status) = signal {
+            match &**status {
+                myko::client::ConnectionStatus::Connected(_) => crate::refusal::clear(),
+                myko::client::ConnectionStatus::Disconnected => {
+                    runtime.spawn(crate::refusal::probe(probe_url.clone(), credential.clone()));
+                }
+                _ => {}
+            }
+        }
+    });
+    client.connection_status().own(conn_guard);
+    client.set_address(Some(daemon_url));
 
     log::info!(
-        "[codex-bridge] watching host={local_host} daemon={} app_server={}",
+        "[codex-bridge] watching host={local_host} daemon={} app_server={}{}",
         args.daemon,
-        args.app_server
+        args.app_server,
+        if pairing.is_some() {
+            " (paired, through the gate)"
+        } else {
+            ""
+        }
     );
 
     let mut wake_leadership = WakeLeadership::new(&args.app_server, &args.daemon);
@@ -1260,15 +1297,11 @@ pub async fn run(args: &[String]) -> Result<()> {
             continue;
         }
 
-        let session_snapshot = sessions.get();
-        let message_snapshot = messages.get();
-        let read_snapshot = reads.get();
-        let candidates = unread_local_codex_sessions(
-            &session_snapshot,
-            &message_snapshot,
-            &read_snapshot,
-            &local_host,
-        );
+        let watched = {
+            let registered = registered.lock().unwrap();
+            local_registered_hook_sessions(&sessions.get(), &registered, &local_host)
+        };
+        let candidates = with_unread_mail(&client, watched).await;
         retain_active_cooldowns(&mut cooldowns, now);
 
         for session_id in candidates {
@@ -1298,7 +1331,7 @@ pub async fn run(args: &[String]) -> Result<()> {
 
     registration_task.abort();
     // Keep the client and watched cells live until the loop exits.
-    drop((pauses, reads, messages, sessions, client));
+    drop((pauses, sessions, client));
     Ok(())
 }
 
@@ -1411,6 +1444,7 @@ fn parse_args(args: &[String]) -> Result<BridgeArgs> {
         }
     }
 
+    let daemon_explicit = daemon.is_some();
     let daemon = daemon
         .or_else(crate::read_address_from_config_file)
         .or_else(|| std::env::var(crate::ADDRESS_ENV).ok())
@@ -1454,6 +1488,7 @@ fn parse_args(args: &[String]) -> Result<BridgeArgs> {
 
     Ok(BridgeArgs {
         daemon,
+        daemon_explicit,
         app_server,
         poll: poll_ms.map(Duration::from_millis).unwrap_or(DEFAULT_POLL),
         wake_thread,
@@ -2247,41 +2282,63 @@ fn wakes_paused(pauses: &[Arc<muster_entities::WakePause>]) -> bool {
     pauses.iter().any(|p| p.paused)
 }
 
-/// Direct, unread, hook-owned sessions on this host. Hook-owned Codex sessions
-/// have no WS `client_id`; Claude shims do. The app-server itself is the final
-/// authority: a plain Codex thread is not present there and the wake request
-/// simply fails while its durable inbox remains untouched.
-fn unread_local_codex_sessions(
+/// The hook-owned sessions on this host that this bridge registered. Hook-owned
+/// Codex sessions have no WS `client_id`; Claude shims do. The app-server
+/// itself is the final authority: a thread no longer there just fails to wake,
+/// and its durable inbox is untouched.
+fn local_registered_hook_sessions(
     sessions: &[Arc<Session>],
-    messages: &[Arc<Message>],
-    reads: &[Arc<MessageRead>],
+    registered: &HashMap<String, ThreadRegistration>,
     local_host: &str,
-) -> HashSet<SessionId> {
-    let local_hook_sessions: HashSet<SessionId> = sessions
+) -> Vec<SessionId> {
+    sessions
         .iter()
         .filter(|session| {
             session.client_id.is_none()
+                && registered.contains_key(session.id.0.as_ref())
                 && session
                     .host
                     .as_ref()
                     .is_some_and(|host| host.name == local_host)
         })
         .map(|session| session.id.clone())
-        .collect();
-    let read_pairs: HashSet<(&str, &str)> = reads
-        .iter()
-        .map(|read| (read.message_id.0.as_ref(), read.session_id.0.as_ref()))
-        .collect();
-
-    messages
-        .iter()
-        .filter_map(|message| {
-            let recipient = message.to_session_id.as_ref()?;
-            (local_hook_sessions.contains(recipient)
-                && !read_pairs.contains(&(message.id.0.as_ref(), recipient.0.as_ref())))
-            .then(|| recipient.clone())
-        })
         .collect()
+}
+
+/// How long the bridge waits for one session's `ReadMessages`.
+const UNREAD_CHECK_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Which of `sessions` have unread direct mail, asked as each session with
+/// `ReadMessages` (MUS-18). That's one command per session per tick, but the
+/// gate allows it for a machine's own sessions, where it refuses a paired
+/// machine the whole message and read tables. A failed check counts as no
+/// mail; the next tick asks again.
+async fn with_unread_mail(client: &MykoClient, sessions: Vec<SessionId>) -> HashSet<SessionId> {
+    let mut unread = HashSet::new();
+    for session in sessions {
+        let cell = client.send_command::<ReadMessages, ReadMessagesResult>(&ReadMessages {
+            room: None,
+            from: None,
+            to_session: Some(session.clone()),
+            inbox: false,
+            sent: false,
+            unread: true,
+            since: None,
+            limit: Some(1),
+            as_session: Some(session.clone()),
+        });
+        match crate::tools::await_command(cell, UNREAD_CHECK_TIMEOUT).await {
+            Ok(result) if !result.messages.is_empty() => {
+                unread.insert(session);
+            }
+            Ok(_) => {}
+            Err(error) => log::debug!(
+                "[codex-bridge] couldn't check thread={}'s mail: {error}",
+                session.0
+            ),
+        }
+    }
+    unread
 }
 
 async fn start_thread(app_server: &AppServerEndpoint, session_id: &SessionId) -> Result<String> {
@@ -2492,7 +2549,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use muster_entities::{HostInfo, MessageId, MessageReadId};
+    use muster_entities::HostInfo;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio_tungstenite::{accept_async, connect_async};
 
@@ -2772,19 +2829,6 @@ mod tests {
         })
     }
 
-    fn message(id: &str, recipient: Option<&str>) -> Arc<Message> {
-        Arc::new(Message {
-            response_required: false,
-            id: MessageId(Arc::from(id)),
-            from_session_id: SessionId(Arc::from("sender")),
-            to_session_id: recipient.map(|id| SessionId(Arc::from(id))),
-            to_room_id: None,
-            to_operator: None,
-            body: "hello".into(),
-            sent_at: 2,
-        })
-    }
-
     #[test]
     fn wake_cooldown_survives_an_empty_unread_snapshot() {
         let session = SessionId(Arc::from("thread"));
@@ -2917,37 +2961,23 @@ mod tests {
     }
 
     #[test]
-    fn selects_only_local_hook_owned_sessions_with_unread_direct_messages() {
+    fn watches_only_local_hook_owned_sessions_this_bridge_registered() {
         let sessions = vec![
             session("local-codex", "host-a", true),
+            session("unregistered-codex", "host-a", true),
             session("local-claude", "host-a", false),
             session("remote-codex", "host-b", true),
         ];
-        let messages = vec![
-            message("m-local", Some("local-codex")),
-            message("m-claude", Some("local-claude")),
-            message("m-remote", Some("remote-codex")),
-            message("m-room", None),
-        ];
+        let registered: HashMap<String, ThreadRegistration> =
+            ["local-codex", "local-claude", "remote-codex"]
+                .into_iter()
+                .map(|id| (id.to_string(), registration(id)))
+                .collect();
 
         assert_eq!(
-            unread_local_codex_sessions(&sessions, &messages, &[], "host-a"),
-            HashSet::from([SessionId(Arc::from("local-codex"))])
+            local_registered_hook_sessions(&sessions, &registered, "host-a"),
+            vec![SessionId(Arc::from("local-codex"))]
         );
-    }
-
-    #[test]
-    fn read_direct_message_does_not_trigger() {
-        let sessions = vec![session("local-codex", "host-a", true)];
-        let messages = vec![message("m-local", Some("local-codex"))];
-        let reads = vec![Arc::new(MessageRead {
-            id: MessageReadId(Arc::from("m-local::local-codex")),
-            message_id: MessageId(Arc::from("m-local")),
-            session_id: SessionId(Arc::from("local-codex")),
-            read_at: 3,
-        })];
-
-        assert!(unread_local_codex_sessions(&sessions, &messages, &reads, "host-a").is_empty());
     }
 
     #[test]

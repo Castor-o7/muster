@@ -60,6 +60,7 @@ passing, the suite fails until it's taken off the list.
 | `claude` | Claude Code | plain | built |
 | `claude-tls` | Claude Code | `MUSTER_TLS=1`, as Murph runs: the hooks carry the local token, and the shim connects through the gate's port | built |
 | `codex` | Codex, through `muster-shim codex-bridge` and the app-server | plain | built |
+| `codex-tls` | Codex | `MUSTER_TLS=1`: the bridge and the hooks carry the local token through the gate's port (MUS-18) | built |
 | `opencode` | opencode plugin (`plugins/muster-opencode`) | plain | built |
 | `pi` | Pi plugin (`plugins/muster-pi`) | plain | built |
 | `prime-agent` | Prime Agent plugin (`plugins/muster-prime-agent`) | plain | built |
@@ -199,7 +200,10 @@ These are listed so nobody reads the grid as more than it is.
   bridge's own tests use, because Codex isn't installed where they were
   written. Recording both is below. The shim reads only a few fields from each
   (the ids and cwd), so the risk is small.
-- **Codex runs in plain mode only.** It has no `codex-tls` column yet.
+- **A paired Codex machine isn't a column.** `codex-tls` runs on the daemon's
+  host, as `claude-tls` does. A bridge on a paired machine, over the pairing's
+  tunnel, is checked in `scripts/test-gate-e2e.sh` instead (MUS-18): it
+  registers its thread, is woken through the gate, and says why once unpaired.
 - **The Postgres cells need a database** (MUS-76): `CONFORMANCE_POSTGRES_URL`,
   in which each daemon gets its own events table (`conformance_…`) and leaves it
   behind. Without one they show `no postgres`. A local run therefore

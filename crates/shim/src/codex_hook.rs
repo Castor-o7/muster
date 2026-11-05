@@ -473,7 +473,15 @@ pub(crate) fn register_session(base: &str, session_id: &str, cwd: &str) -> Optio
         url_q(&short_host()),
         url_q(&operator())
     );
-    let response = http_post(base, &path, &body, TIMEOUT)?;
+    // A paired machine registers through the daemon's TLS gate (MUS-18), as its
+    // hooks do, unless `MUSTER_BASE_URL` names the hook listener.
+    let explicit = std::env::var("MUSTER_BASE_URL").is_ok_and(|b| !b.is_empty());
+    let response = match crate::link::load_pairing().filter(|_| !explicit) {
+        Some(pairing) => crate::link::https_post_why(&pairing, &path, &body, TIMEOUT)
+            .ok()
+            .map(|reply| reply.body)?,
+        None => http_post(base, &path, &body, TIMEOUT)?,
+    };
     if let Ok(identity) = serde_json::from_str::<serde_json::Value>(&response)
         && identity.get("session_id").and_then(|v| v.as_str()) == Some(session_id)
         && let Some(nickname) = identity

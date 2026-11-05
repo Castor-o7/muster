@@ -430,6 +430,88 @@ T $BIN/muster-shim tell $KEEP kept and reachable >/dev/null 2>&1
 wait $KEEP_WAIT
 check "and a message sent after the drop reaches its held wait" 'grep -q "kept and reachable" $WORK/keep-wait.out'
 
+# A Codex bridge on a paired machine (MUS-18): it reaches the daemon through the
+# gate's tunnel, registers its thread through the pairing, finds the thread's mail
+# with ReadMessages, and wakes it. Once the machine is unpaired it says why.
+CODEX_THREAD=a0000000-0000-4000-8000-c0dec0dec0de
+mkdir -p $WORK/codexbox
+CODEX_CODE=$(T $BIN/muster-daemon pair --name codex-box 2>/dev/null | awk '{print $3}')
+T env HOME=$WORK/codexbox XDG_CONFIG_HOME=$WORK/codexbox $BIN/muster-shim pair "$CODEX_CODE" >/dev/null
+APPSERVER=$WORK/appserver.py
+cat >$APPSERVER <<'PY'
+# A Codex app-server, as far as the bridge needs one: initialize, a thread/started
+# for one thread, and turn/start, whose thread ids it appends to a file.
+import base64, hashlib, json, socket, sys, threading
+thread_id, cwd, turns, port_file = sys.argv[1:5]
+GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+def read_n(c, n):
+    b = b""
+    while len(b) < n:
+        d = c.recv(n - len(b))
+        if not d: raise EOFError
+        b += d
+    return b
+def recv(c):
+    while True:
+        h = read_n(c, 2); op = h[0] & 15; n = h[1] & 127
+        if n == 126: n = int.from_bytes(read_n(c, 2), "big")
+        elif n == 127: n = int.from_bytes(read_n(c, 8), "big")
+        mask = read_n(c, 4) if h[1] & 128 else b""
+        body = read_n(c, n)
+        if mask: body = bytes(x ^ mask[i % 4] for i, x in enumerate(body))
+        if op == 8: raise EOFError
+        if op == 9: send(c, body, 10); continue
+        if op == 1: return json.loads(body)
+def send(c, data, op=1):
+    if isinstance(data, dict): data = json.dumps(data).encode()
+    n = len(data)
+    head = bytes([128 | op]) + (bytes([n]) if n < 126 else bytes([126]) + n.to_bytes(2, "big") if n < 65536 else bytes([127]) + n.to_bytes(8, "big"))
+    c.sendall(head + data)
+def serve(c):
+    try:
+        req = b""
+        while b"\r\n\r\n" not in req: req += c.recv(1)
+        key = [l.split(b":", 1)[1].strip() for l in req.split(b"\r\n") if l.lower().startswith(b"sec-websocket-key:")][0]
+        accept = base64.b64encode(hashlib.sha1(key + GUID).digest())
+        c.sendall(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: " + accept + b"\r\n\r\n")
+        while True:
+            m = recv(c); method = m.get("method")
+            if method == "initialize":
+                send(c, {"id": m["id"], "result": {"userAgent": "e2e", "platformFamily": "unix", "platformOs": "linux", "codexHome": "/tmp"}})
+            elif method == "initialized":
+                send(c, {"method": "thread/started", "params": {"thread": {"id": thread_id, "sessionId": thread_id, "cwd": cwd}}})
+            elif method == "turn/start":
+                with open(turns, "a") as f: f.write(m["params"]["threadId"] + "\n")
+                send(c, {"id": m["id"], "result": {"turn": {"id": "turn-1"}}})
+            elif method == "thread/list":
+                send(c, {"id": m["id"], "result": {"data": [], "nextCursor": None}})
+            elif "id" in m:
+                send(c, {"id": m["id"], "result": {}})
+    except (OSError, EOFError, IndexError, ValueError): pass
+    finally: c.close()
+lst = socket.socket(); lst.bind(("127.0.0.1", 0)); lst.listen()
+open(port_file, "w").write(str(lst.getsockname()[1]))
+while True:
+    c, _ = lst.accept()
+    threading.Thread(target=serve, args=(c,), daemon=True).start()
+PY
+python3 -I $APPSERVER $CODEX_THREAD /tmp/codexbox $WORK/codex-turns $WORK/appserver.port &
+APP_PID=$!
+for i in {1..50}; do [[ -s $WORK/appserver.port ]] && break; sleep 0.1; done
+env HOME=$WORK/codexbox XDG_CONFIG_HOME=$WORK/codexbox TMPDIR=$WORK/codexbox RUST_LOG=muster_shim=debug $BIN/muster-shim codex-bridge --endpoint ws://127.0.0.1:$(<$WORK/appserver.port) --poll-ms 200 --ready-file $WORK/codexbox/ready >/dev/null 2>$WORK/codex-bridge.log &
+BRIDGE_PID=$!
+for i in {1..100}; do grep -q "registered thread=$CODEX_THREAD" $WORK/codex-bridge.log 2>/dev/null && break; sleep 0.2; done
+check "a paired Codex bridge connects through the gate" 'grep -q "(paired, through the gate)" $WORK/codex-bridge.log'
+check "and registers its thread through the pairing" 'grep -q "registered thread=$CODEX_THREAD" $WORK/codex-bridge.log && [[ $(ROSTER) == *$CODEX_THREAD* ]]'
+T $BIN/muster-shim tell $CODEX_THREAD wake the paired codex thread >/dev/null 2>&1
+for i in {1..50}; do grep -q $CODEX_THREAD $WORK/codex-turns 2>/dev/null && break; sleep 0.2; done
+check "a message to that thread wakes it through the gate" 'grep -q $CODEX_THREAD $WORK/codex-turns 2>/dev/null'
+check "and the bridge's log never shows its token" '! grep -qF "$(python3 -I -c '"'"'import sys,json,base64; s=open(sys.argv[1]).read().strip().split(":",2)[2]; print(json.loads(base64.urlsafe_b64decode(s+"="*(-len(s)%4)))["token"])'"'"' $WORK/codexbox/muster/pairing)" $WORK/codex-bridge.log'
+T $BIN/muster-daemon unpair codex-box >/dev/null
+for i in {1..60}; do grep -q "refused this machine's token (401)" $WORK/codex-bridge.log && break; sleep 0.2; done
+check "once unpaired, the bridge says the daemon refused its token" 'grep -q "the paired daemon refused this machine'"'"'s token (401)" $WORK/codex-bridge.log'
+kill $BRIDGE_PID $APP_PID 2>/dev/null; wait $BRIDGE_PID $APP_PID 2>/dev/null
+
 # SIGTERM ends a held wait with an empty reply marked as a restart, then exits cleanly (MUS-55).
 env XDG_CONFIG_HOME=$WORK/daemon MUSTER_STATE_DIR=$WORK/state3 MUSTER_BIND=127.0.0.1:16455 MUSTER_HOOK_BIND=127.0.0.1:16456 MUSTER_MYKO_BIND=127.0.0.1:16458 RUST_LOG=info $BIN/muster-daemon >$WORK/stop.log 2>&1 &
 STOP_PID=$!

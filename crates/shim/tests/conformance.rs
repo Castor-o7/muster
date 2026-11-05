@@ -1629,6 +1629,13 @@ const HARNESSES: &[Harness] = &[
         needs_bun: false,
     },
     Harness {
+        name: "codex-tls",
+        mode: Mode::Tls,
+        make: || Box::new(FakeCodex::new()),
+        not_applicable: &[],
+        needs_bun: false,
+    },
+    Harness {
         name: "pi",
         mode: Mode::Plain,
         make: || Box::new(FakePlugin::new("muster-pi")),
