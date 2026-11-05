@@ -594,3 +594,23 @@ fn unidentified_caller_errors() {
     );
     assert_eq!(message_count(&ctx), 0);
 }
+
+#[test]
+fn an_empty_recipient_is_refused_not_sent_to_the_sender() {
+    // Found on Murph: `to: ""` matched by prefix and landed on the sender.
+    let ctx = setup();
+    set_session(&ctx, &session("sender", Some("c-sender")));
+    for to in ["", "   "] {
+        let err = SendMessage {
+            response_required: false,
+            to_session_id: SessionId(Arc::from(to)),
+            body: "hi".into(),
+            as_session: None,
+            idempotency_key: None,
+        }
+        .execute(cmd_ctx(&ctx, Some("c-sender")))
+        .expect_err("an empty `to` must be refused");
+        assert!(err.message.contains("`to` is empty"), "{}", err.message);
+    }
+    assert_eq!(message_count(&ctx), 0, "nothing is stored");
+}

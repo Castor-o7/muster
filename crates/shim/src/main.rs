@@ -1051,7 +1051,7 @@ fn roster_miss_step(misses: u32, roster_empty: bool, present: bool) -> (u32, boo
 /// `client_id` doesn't count: the daemon finds a caller by that binding, so every
 /// write would fail "no session on the roster" while the row looks fine. A hook
 /// that read the roster just before our SET landed can leave such a row.
-fn registered_on_roster(sessions: &[Arc<Session>], me: &SessionId) -> bool {
+pub(crate) fn registered_on_roster(sessions: &[Arc<Session>], me: &SessionId) -> bool {
     sessions
         .iter()
         .any(|s| &s.id == me && s.client_id.is_some())
