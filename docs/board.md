@@ -143,9 +143,9 @@ The **lamplighter** owns this: the session that keeps `muster-daemon` and
   needs no restart; the lamplighter records it as current.
 - **Holds.** A red or pending CI run, or a failed preflight, holds the deploy.
   The lamplighter reports the hold and the reason to the watchman, and deploys
-  the next green head. So does a Rally change that can't be rolled back, such as
-  the first record that an older binary can't parse. It goes ahead, but the
-  report says so.
+  the next green head. A Rally change that an older binary can't read back, such
+  as the first `designate --credential`, isn't held, but it ends the rollback
+  window, and the report says so.
 - **Clients too.** On Murph, `muster-shim` is installed with the daemon, and the
   `rally` CLI is the service binary. The watchman updates a1's clients
   (`muster-shim` and the `rally` CLI) after each green `main`, and the
