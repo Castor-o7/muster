@@ -323,6 +323,33 @@ mod tests {
         }
     }
 
+    /// MUS-81: `acksPushes` rides on the `Session` row, so a machine can opt
+    /// its own session in, and the field passes the attestation untouched, but
+    /// it can't opt in a session it doesn't own (which would leave that
+    /// session's pushes unread until an ack that never comes).
+    #[test]
+    fn a_machine_can_set_acks_pushes_on_its_own_session_only() {
+        let dir = dir();
+        let p = dir.path();
+        let acking = |id: &str| {
+            frame(json!({"event": "ws:m:event", "data": {
+                "item": {"id": id, "acksPushes": true},
+                "changeType": "SET",
+                "itemType": "Session",
+                "createdAt": "t",
+            }}))
+        };
+        let Message::Text(text) = check(p, "a1", acking(MINE)).unwrap() else {
+            panic!("a text frame should stay text");
+        };
+        let item = item_of(serde_json::from_str(&text).unwrap());
+        assert_eq!(item["acksPushes"], true);
+        assert!(check(p, "murph", acking(MINE)).is_err());
+        // Nor on another machine's session, however a1 names it.
+        assert!(credentials::claim_machine_session(p, "murph", VICTIM).unwrap());
+        assert!(check(p, "a1", acking(VICTIM)).is_err());
+    }
+
     #[test]
     fn raw_writes_to_other_entities_are_refused() {
         let dir = dir();
