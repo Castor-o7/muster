@@ -54,8 +54,10 @@ before it has merged:
    upstream's standard. Ask before sending any vendored myko-server code.
 
 Levi runs in parallel, since it's a separate repository and doesn't queue behind
-Marshal. **L2** (`levi check-events`) or **L3** (`levi session-start`) goes first,
-because each is small and stands alone. **L1** (the review gate) follows.
+Marshal. L1, L2 and L3 are already open upstream as ignition-is-go/levi **#43**
+(the review gate), **#44** (`levi check-events`) and **#45** (`levi session-start`),
+all opened 2026-11-05. The next step there is review. Nothing more goes to Levi
+until those get feedback.
 
 ### The check before each PR, modelled on upstream's review
 
@@ -73,7 +75,6 @@ because each is small and stands alone. **L1** (the review gate) follows.
 - How they'd like the Gate split, and whether they'll take vendored code.
 - Whether the Zoo run (G8) is still required. It was blocked on Codex on a1 when
   #164 merged.
-- Whether to send M2 and Levi L2/L3 together, or one repository at a time.
 
 ### Who does it
 
