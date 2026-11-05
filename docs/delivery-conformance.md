@@ -10,6 +10,9 @@ cargo build --workspace
 cargo test -p muster-shim --test conformance -- --ignored --nocapture
 ```
 
+The plugin columns also need bun and each plugin's dependencies; see the gaps
+below.
+
 `CONFORMANCE_ONLY=<text>` runs only the cells whose harness or scenario name
 contains it. `CONFORMANCE_GRID=<file>` also writes the grid to a file. CI runs
 the whole suite after `cargo build --workspace`.
@@ -43,6 +46,8 @@ passing, the suite fails until it's taken off the list.
 
 | Cells | Story | What fails |
 |---|---|---|
+| `pi` × 3 | MUS-81 | A pushed message is marked read when the push reaches the plugin's connection. If the harness then loses it, the next turn's inbox drain finds nothing unread, and the message is gone: the push-side twin of MUS-75. |
+| `pi` × 6b | MUS-82 | While wakes are paused, the push is skipped and the mail stays unread, but resuming pushes nothing again, so a push session isn't woken until its next turn. |
 | `codex` × 5 | MUS-76 | After a restart without Postgres, an idle Codex session is off the roster until its next hook: the bridge registers a thread only on `thread/started`. |
 
 ## The harnesses
@@ -53,7 +58,7 @@ passing, the suite fails until it's taken off the list.
 | `claude-tls` | Claude Code | `MUSTER_TLS=1`, as Murph runs: the hooks carry the local token, and the shim connects through the gate's port | built |
 | `codex` | Codex, through `muster-shim codex-bridge` and the app-server | plain | built |
 | `opencode` | opencode plugin (`plugins/muster-opencode`) | plain | stage 3 |
-| `pi` | Pi plugin (`plugins/muster-pi`) | plain | stage 3 |
+| `pi` | Pi plugin (`plugins/muster-pi`) | plain | built |
 | `prime-agent` | Prime Agent plugin (`plugins/muster-prime-agent`) | plain | stage 3 |
 
 ### What the fake Claude assumes
@@ -105,14 +110,46 @@ check:
 - **After a wake, the bridge won't wake the same thread again for 30 s.** So
   scenario 3 checks redelivery at the next hook, not with a second wake.
 
+### What the fake Pi assumes
+
+Pinned to **`@earendil-works/pi-coding-agent` 0.83.0**, the version in
+`plugins/muster-pi/package-lock.json`. The real muster-pi extension runs
+under bun, loaded by `plugins/muster-pi/test/conformance-driver.ts` with a
+stand-in for pi's `ExtensionAPI`. It connects to the daemon itself and takes
+the live push, as it does inside pi. It assumes these behaviours of pi, which
+the suite can't check:
+
+- **`pi.sendMessage(…, { triggerTurn: true })` on an idle session starts a
+  turn** with that message, and on a busy one steers it into the running
+  turn. The fake records the first as the wake and the second as busy
+  delivery.
+- **A turn starts with `before_agent_start`**, and whatever message the
+  handler returns is shown to the model. The fake fires it at each busy
+  boundary and after a wake, which is where muster-pi drains the inbox.
+- **`session_start`, `agent_settled` and `session_shutdown` fire as their
+  names say.** The session id comes from `ctx.sessionManager.getSessionFile()`.
+- **A lost delivery** means `pi.sendMessage` rejects after the extension has
+  received the push, as when pi fails to take the message. That's where the
+  fake loses the ack in scenario 3.
+
+Two scenarios are `n/a` for Pi. A plugin has no prompt hooks, so a hook reply
+can't be lost (3b). And a connected plugin renders pushes, so its roster row
+says `channel`, never `none` (8).
+
 ## Gaps
 
 These are listed so nobody reads the grid as more than it is.
 
-- **opencode, Pi and Prime Agent have no fake yet** (stage 3). Their columns
-  read `not yet`. The TypeScript plugins' own tests don't run in
-  CI either. Stage 3 adds bun to CI, downloaded from bun's GitHub release at a
-  pinned version and checked against a SHA-256 committed in the workflow.
+- **opencode and Prime Agent have no fake yet** (stage 3). Their columns read
+  `not yet`.
+- **The plugin columns need bun and the plugin's `node_modules`.** CI downloads
+  bun 1.3.14 from its GitHub release, checks it against a SHA-256 committed in
+  the workflow, and runs `npm ci` in each plugin. Locally, put bun on `PATH` or
+  set `MUSTER_BUN`, and run `npm ci --workspaces=false` in the plugin's
+  directory. Without bun the plugin cells read `no bun`, and CI fails them
+  (`CONFORMANCE_REQUIRE_BUN`).
+- **The plugins' own `bun test` suites don't run in CI yet.** Only their
+  conformance drivers do.
 - **The fixtures are constructed, not recorded.** The Claude fixtures follow
   Claude Code's documented hook input. The Codex fixtures follow the frames the
   bridge's own tests use, because Codex isn't installed where they were
@@ -147,6 +184,12 @@ fixtures with recorded ones.
 4. Set `CLAUDE_CODE_VERSION` in `conformance.rs` to the new version, update the
    fixture README to say the files are recorded, and update the version above.
 5. Run the suite. If a cell changes, the change is a finding: report it.
+
+For Pi, the pinned thing is the extension API, not recorded data. When
+`@earendil-works/pi-coding-agent` changes in `plugins/muster-pi/package-lock.json`,
+check its `ExtensionAPI` types against the stand-in in `conformance-driver.ts`
+(`on`, `sendMessage`, `registerTool`, `registerCommand`, and the events the
+extension handles), update the version above, and run the suite.
 
 For Codex, with Codex installed:
 

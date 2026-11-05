@@ -48,12 +48,15 @@ const QUIET_FOR: Duration = Duration::from_secs(4);
 
 /// Cells expected to fail today, each with the story that fixes it. The
 /// suite reports them as known failures, and fails if one passes.
-const KNOWN_FAILURES: &[(&str, &str, &str)] = &[("codex", "daemon-restart-mid-wait", "MUS-76")];
+const KNOWN_FAILURES: &[(&str, &str, &str)] = &[
+    ("codex", "daemon-restart-mid-wait", "MUS-76"),
+    ("pi", "dropped-ack-redelivers", "MUS-81"),
+    ("pi", "resume-wakes-held-mail", "MUS-82"),
+];
 
 /// Harnesses in the grid that have no fake yet, with the stage that adds one.
 const NOT_YET: &[(&str, &str)] = &[
     ("opencode", "MUS-69 stage 3"),
-    ("pi", "MUS-69 stage 3"),
     ("prime-agent", "MUS-69 stage 3"),
 ];
 
@@ -496,8 +499,11 @@ trait FakeHarness {
     /// boundary): what was injected, if anything.
     fn busy_boundary(&mut self) -> Option<String>;
     fn session_id(&self) -> &str;
-    /// Where this harness's acks can be lost.
-    fn ack_fault(&self) -> AckFault;
+    /// Lose this harness's delivery acks, or stop losing them, wherever it
+    /// acks: a hook harness through the proxy, a push harness in the harness.
+    fn lose_acks(&mut self, proxy: &HookProxy, on: bool);
+    /// How many acks have been lost so far.
+    fn acks_lost(&mut self, proxy: &HookProxy) -> usize;
     /// Whether the harness's MCP shim attaches to the session's roster row
     /// (Claude's does; Codex's registers no session, `MUSTER_HARNESS=codex`).
     fn mcp_attaches(&self) -> bool;
@@ -658,8 +664,12 @@ impl FakeHarness for FakeClaude {
         &self.session_id
     }
 
-    fn ack_fault(&self) -> AckFault {
-        AckFault::DropAckRequests
+    fn lose_acks(&mut self, proxy: &HookProxy, on: bool) {
+        proxy.set_fault(on.then_some(AckFault::DropAckRequests));
+    }
+
+    fn acks_lost(&mut self, proxy: &HookProxy) -> usize {
+        proxy.faulted()
     }
 
     fn mcp_attaches(&self) -> bool {
@@ -976,8 +986,12 @@ impl FakeHarness for FakeCodex {
         &self.thread_id
     }
 
-    fn ack_fault(&self) -> AckFault {
-        AckFault::DropReplies("/hook/prompt-submit")
+    fn lose_acks(&mut self, proxy: &HookProxy, on: bool) {
+        proxy.set_fault(on.then_some(AckFault::DropReplies("/hook/prompt-submit")));
+    }
+
+    fn acks_lost(&mut self, proxy: &HookProxy) -> usize {
+        proxy.faulted()
     }
 
     fn mcp_attaches(&self) -> bool {
@@ -988,6 +1002,166 @@ impl FakeHarness for FakeCodex {
 impl Drop for FakeCodex {
     fn drop(&mut self) {
         if let Some(mut child) = self.bridge.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+/// bun, for the TypeScript plugins' fakes: `MUSTER_BUN`, else `bun` on PATH.
+fn bun_bin() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("MUSTER_BUN").filter(|p| !p.is_empty()) {
+        return Some(PathBuf::from(path));
+    }
+    std::env::var_os("PATH").and_then(|paths| {
+        std::env::split_paths(&paths)
+            .map(|dir| dir.join("bun"))
+            .find(|bun| bun.is_file())
+    })
+}
+
+/// A TypeScript plugin, loaded by its `test/conformance-driver.ts` with a fake
+/// host that stands in for the harness's API, and driven over the driver's
+/// line protocol. The plugin connects to the daemon itself, as it does inside
+/// its harness, and takes the live push. Its `node_modules` must be installed.
+struct FakePlugin {
+    plugin: &'static str,
+    session_id: String,
+    child: Option<Child>,
+    stdin: Option<ChildStdin>,
+    replies: Option<mpsc::Receiver<String>>,
+}
+
+/// The prefix on the driver's replies, which the plugin's own logging lacks.
+const DRIVER_REPLY: &str = "@@conformance ";
+
+impl FakePlugin {
+    fn new(plugin: &'static str) -> Self {
+        Self {
+            plugin,
+            session_id: String::new(),
+            child: None,
+            stdin: None,
+            replies: None,
+        }
+    }
+
+    fn call(&mut self, cmd: Value) -> Value {
+        let stdin = self.stdin.as_mut().expect("started");
+        writeln!(stdin, "{cmd}").expect("write to the plugin driver");
+        stdin.flush().expect("flush the plugin driver");
+        let wait = cmd["ms"].as_u64().map_or(0, |ms| ms / 1000) + 20;
+        let line = self
+            .replies
+            .as_ref()
+            .expect("started")
+            .recv_timeout(Duration::from_secs(wait))
+            .unwrap_or_else(|_| panic!("{} driver didn't answer {cmd}", self.plugin));
+        let reply: Value = serde_json::from_str(&line).expect("driver reply is JSON");
+        if let Some(e) = reply.get("error") {
+            panic!("{} driver: {e}", self.plugin);
+        }
+        reply
+    }
+
+    fn text(reply: &Value) -> Option<String> {
+        reply["text"].as_str().map(str::to_string)
+    }
+}
+
+impl FakeHarness for FakePlugin {
+    fn start(&mut self, daemon: &Daemon, _proxy: &HookProxy) {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../plugins")
+            .join(self.plugin);
+        assert!(
+            dir.join("node_modules").is_dir(),
+            "{}/node_modules is missing: install it first (npm ci --workspaces=false)",
+            dir.display()
+        );
+        let log =
+            std::fs::File::create(daemon.dir.path().join(format!("{}.log", self.plugin))).unwrap();
+        let mut child = Command::new(bun_bin().expect("bun"))
+            .arg("run")
+            .arg(dir.join("test/conformance-driver.ts"))
+            .current_dir(daemon.dir.path())
+            .env_remove("MYKO_ADDRESS")
+            .env("MUSTER_DAEMON_ADDRESS", daemon.ws_address())
+            .env("MUSTER_HOST", "conformance")
+            .env("MUSTER_OPERATOR", "conformance")
+            .env("HOME", daemon.dir.path().join("home"))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(log)
+            .spawn()
+            .expect("spawn the plugin driver under bun");
+        let stdout = child.stdout.take().unwrap();
+        let (tx, replies) = mpsc::channel();
+        thread::spawn(move || {
+            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                if let Some(reply) = line.strip_prefix(DRIVER_REPLY)
+                    && tx.send(reply.to_string()).is_err()
+                {
+                    break;
+                }
+            }
+        });
+        self.stdin = child.stdin.take();
+        self.child = Some(child);
+        self.replies = Some(replies);
+        let session_file = daemon
+            .dir
+            .path()
+            .join(format!("{}-session.jsonl", self.plugin));
+        let reply = self.call(json!({"cmd": "start", "session_file": session_file}));
+        self.session_id = reply["session_id"]
+            .as_str()
+            .expect("session id")
+            .to_string();
+    }
+
+    fn arm_idle(&mut self) {
+        self.call(json!({"cmd": "arm_idle"}));
+    }
+
+    fn wait_for_wake(&mut self, within: Duration) -> Option<String> {
+        let ms = within.as_millis() as u64;
+        Self::text(&self.call(json!({"cmd": "wait_for_wake", "ms": ms})))
+    }
+
+    fn woken_yet(&mut self) -> bool {
+        self.call(json!({"cmd": "woken_yet"}))["woken"] == json!(true)
+    }
+
+    fn busy_boundary(&mut self) -> Option<String> {
+        Self::text(&self.call(json!({"cmd": "busy_boundary"})))
+    }
+
+    fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
+    fn lose_acks(&mut self, _proxy: &HookProxy, on: bool) {
+        // The daemon marks a pushed message read when the push reaches the
+        // plugin's connection. Lose it after that: the harness's API throws.
+        self.call(json!({"cmd": "lose_deliveries", "on": on}));
+    }
+
+    fn acks_lost(&mut self, _proxy: &HookProxy) -> usize {
+        self.call(json!({"cmd": "lost"}))["lost"]
+            .as_u64()
+            .unwrap_or(0) as usize
+    }
+
+    fn mcp_attaches(&self) -> bool {
+        false
+    }
+}
+
+impl Drop for FakePlugin {
+    fn drop(&mut self) {
+        drop(self.stdin.take());
+        if let Some(mut child) = self.child.take() {
             let _ = child.kill();
             let _ = child.wait();
         }
@@ -1127,15 +1301,15 @@ fn busy_gets_it_at_next_hook(c: &mut Cell) -> Result<(), String> {
 /// message comes again at the session's next delivery point once the lease
 /// lapses, and not after an ack that arrives.
 fn dropped_ack_redelivers(c: &mut Cell) -> Result<(), String> {
-    c.proxy.set_fault(Some(c.harness.ack_fault()));
+    c.harness.lose_acks(&c.proxy, true);
     c.harness.arm_idle();
     let t = token("ack");
     c.send(&t)?;
     let _first = c.harness.wait_for_wake(WAKE_WITHIN);
-    if c.proxy.faulted() == 0 {
+    if c.harness.acks_lost(&c.proxy) == 0 {
         return Err("no delivery's ack was lost, so the scenario didn't run".into());
     }
-    c.proxy.set_fault(None);
+    c.harness.lose_acks(&c.proxy, false);
     thread::sleep(Duration::from_secs(ACK_LEASE_SECS + 1));
     let again = c.harness.busy_boundary();
     if !contains(&again, &t) {
@@ -1335,12 +1509,59 @@ fn wake_none_not_expected(c: &mut Cell) -> Result<(), String> {
 // ---------------------------------------------------------------------------
 // The grid
 
-type Harness = (&'static str, Mode, fn() -> Box<dyn FakeHarness>);
+/// One column of the grid.
+struct Harness {
+    name: &'static str,
+    mode: Mode,
+    make: fn() -> Box<dyn FakeHarness>,
+    /// Scenarios that don't apply to this harness, and why. They show as
+    /// `n/a` in the grid.
+    not_applicable: &'static [(&'static str, &'static str)],
+    /// A TypeScript plugin's fake, which needs bun (`bun_bin`).
+    needs_bun: bool,
+}
 
 const HARNESSES: &[Harness] = &[
-    ("claude", Mode::Plain, || Box::new(FakeClaude::new())),
-    ("claude-tls", Mode::Tls, || Box::new(FakeClaude::new())),
-    ("codex", Mode::Plain, || Box::new(FakeCodex::new())),
+    Harness {
+        name: "claude",
+        mode: Mode::Plain,
+        make: || Box::new(FakeClaude::new()),
+        not_applicable: &[],
+        needs_bun: false,
+    },
+    Harness {
+        name: "claude-tls",
+        mode: Mode::Tls,
+        make: || Box::new(FakeClaude::new()),
+        not_applicable: &[],
+        needs_bun: false,
+    },
+    Harness {
+        name: "codex",
+        mode: Mode::Plain,
+        make: || Box::new(FakeCodex::new()),
+        not_applicable: &[],
+        needs_bun: false,
+    },
+    Harness {
+        name: "pi",
+        mode: Mode::Plain,
+        make: || Box::new(FakePlugin::new("muster-pi")),
+        not_applicable: PUSH_PLUGIN_NOT_APPLICABLE,
+        needs_bun: true,
+    },
+];
+
+/// Scenarios that don't apply to a plugin that takes the live push.
+const PUSH_PLUGIN_NOT_APPLICABLE: &[(&str, &str)] = &[
+    (
+        "lost-hook-reply-redelivers",
+        "no prompt hooks: delivery is the live push and a per-turn inbox drain",
+    ),
+    (
+        "wake-none-not-expected",
+        "a connected plugin renders pushes, so the roster says channel, never none",
+    ),
 ];
 
 enum Outcome {
@@ -1348,15 +1569,23 @@ enum Outcome {
     Fail(String),
     KnownFailure(&'static str),
     UnexpectedPass(&'static str),
+    NotApplicable,
+    NoBun,
 }
 
 fn run_cell(harness: &Harness, scenario: Scenario, name: &str) -> Outcome {
+    if harness.not_applicable.iter().any(|(s, _)| *s == name) {
+        return Outcome::NotApplicable;
+    }
+    if harness.needs_bun && bun_bin().is_none() {
+        return Outcome::NoBun;
+    }
     let known = KNOWN_FAILURES
         .iter()
-        .find(|(h, s, _)| *h == harness.0 && *s == name)
+        .find(|(h, s, _)| *h == harness.name && *s == name)
         .map(|(_, _, story)| *story);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let mut cell = Cell::new(harness.1, (harness.2)());
+        let mut cell = Cell::new(harness.mode, (harness.make)());
         scenario(&mut cell)
     }))
     .unwrap_or_else(|panic| {
@@ -1384,7 +1613,7 @@ fn delivery_conformance() {
         for (name, scenario) in SCENARIOS {
             if only
                 .as_deref()
-                .is_some_and(|o| !name.contains(o) && !harness.0.contains(o))
+                .is_some_and(|o| !name.contains(o) && !harness.name.contains(o))
             {
                 continue;
             }
@@ -1395,10 +1624,12 @@ fn delivery_conformance() {
                 Outcome::KnownFailure(story) => format!("known ({story})"),
                 Outcome::Fail(_) => "FAIL".to_string(),
                 Outcome::UnexpectedPass(story) => format!("PASS? ({story})"),
+                Outcome::NotApplicable => "n/a".to_string(),
+                Outcome::NoBun => "no bun".to_string(),
             };
             eprintln!(
                 "{:<12} {:<30} {:<14} {:.1}s",
-                harness.0,
+                harness.name,
                 name,
                 cell,
                 started.elapsed().as_secs_f32()
@@ -1407,19 +1638,27 @@ fn delivery_conformance() {
                 eprintln!("    why: {e}");
             }
             match outcome {
-                Outcome::Fail(e) => failures.push(format!("{} / {name}: {e}", harness.0)),
+                Outcome::Fail(e) => failures.push(format!("{} / {name}: {e}", harness.name)),
                 Outcome::UnexpectedPass(story) => failures.push(format!(
                     "{} / {name} passes, but KNOWN_FAILURES lists it for {story}: remove it",
-                    harness.0
+                    harness.name
                 )),
+                // CI sets CONFORMANCE_REQUIRE_BUN, so a missing bun there is a
+                // failure, not a quiet gap.
+                Outcome::NoBun if std::env::var_os("CONFORMANCE_REQUIRE_BUN").is_some() => {
+                    failures.push(format!(
+                        "{} / {name}: no bun (set MUSTER_BUN or put bun on PATH)",
+                        harness.name
+                    ));
+                }
                 _ => {}
             }
-            grid.insert((harness.0, name), cell);
+            grid.insert((harness.name, name), cell);
         }
     }
 
     // The grid: one row per scenario, one column per harness.
-    let mut columns: Vec<&str> = HARNESSES.iter().map(|h| h.0).collect();
+    let mut columns: Vec<&str> = HARNESSES.iter().map(|h| h.name).collect();
     columns.extend(NOT_YET.iter().map(|(h, _)| *h));
     let mut table = format!("\n{:<30}", "scenario");
     for col in &columns {
@@ -1441,6 +1680,11 @@ fn delivery_conformance() {
     }
     for (harness, stage) in NOT_YET {
         table.push_str(&format!("not yet: {harness} ({stage})\n"));
+    }
+    for harness in HARNESSES {
+        for (scenario, why) in harness.not_applicable {
+            table.push_str(&format!("n/a: {} × {scenario}: {why}\n", harness.name));
+        }
     }
     eprintln!("{table}");
     if let Ok(path) = std::env::var("CONFORMANCE_GRID") {
