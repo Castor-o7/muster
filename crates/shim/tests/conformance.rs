@@ -275,7 +275,7 @@ impl Daemon {
             Mode::Tls => vec![self.hook, self.bind, self.myko],
             Mode::Plain => vec![self.hook, self.bind],
         };
-        let mut exited = |c: &mut Child| c.try_wait().ok().flatten().is_some();
+        let exited = |c: &mut Child| c.try_wait().ok().flatten().is_some();
         let listening = wait_until(Duration::from_secs(20), || {
             exited(&mut child) || ports.iter().all(|p| up(*p))
         });
