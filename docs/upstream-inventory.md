@@ -196,6 +196,12 @@ upstream main on their own:
 - Part of 83 (#78): `deny.toml` and the CI job. On upstream's lockfile the
   audit found the same advisories #78 fixed, so the same in-range updates are
   applied, changing only those lock entries.
+- Later, from Muster main (`9c74679`), three commits on top: MUS-73 (#95), so
+  an empty `to` is refused rather than delivered to the sender (upstream
+  94ecc24 does the same); MUS-72 (#95), so a session's first writes wait up to
+  5 s for its row; and MUS-78 (#102), so that wait re-sends the session once
+  after 1 s. Each has a unit or daemon test of its own. Their links and gate
+  e2e changes, the `.gitignore` line and the roadmap aren't ported.
 
 The #16 mention-banner fix isn't on this branch.
 
