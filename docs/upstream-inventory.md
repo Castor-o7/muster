@@ -162,19 +162,6 @@ bucket's entries under Marshal names. Where an entry collides with U-RR or
 U-CG, the branch reuses the resolution from modest-roach's G1 catch-up
 merge rather than resolving the conflict a second time.
 
-**Hooks (port/hooks-v3, `3202b04`).** port/hooks-v2 (`dcbb316`) plus one
-commit: MUS-75 (#99, `71483ca`), so a prompt hook acks its mail only after
-printing it (`ack=client`, `X-Marshal-Ack`), as the waiter does. Its gate
-branch and Muster doc change are not ported. This is the G8 candidate, since
-it's what goes upstream. port/hooks-v2 is kept as it was.
-
-**Durability (port/durability-v2).** It's stacked on port/hooks-v3, not on
-upstream main. port/durability-v2 is port/durability (`51d0ec4`) rebased onto
-hooks-v3, with `idempotency_key: None` added to the new hook_client_ack test. #51 keeps a dropped session that still holds a `WakeWatcher`,
-and #57's test lives in `hook_wait_e2e.rs`, so both need Hooks. That matches
-the landing order. Entry 6 (`6d55631`) is folded in, because its reap reasons
-run through the same sweep code. Entry 39's doc is not ported.
-
 **Correction (port/hooks prep).** The Hooks entries can't be cherry-picked
 cleanly onto upstream: they are entangled with the Gate.
 
