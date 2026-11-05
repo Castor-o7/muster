@@ -43,6 +43,23 @@ docs (#139 and so on) refer to the Marshal repository.
 
 Install the binaries, run the daemon, then wire the harnesses you use.
 
+Or let `scripts/setup.sh` (MUS-98) do the first steps in one command. It installs the binaries
+into one place, `~/.local/bin` (`--prefix` to change it), from the latest release checked
+against its `SHA256SUMS`, or with `cargo install --locked` while there's no release. With
+`--daemon` it then runs `muster-daemon service` for the unit that keeps the daemon running
+across reboots (`--tls` for the gate). It always runs `muster-shim setup` to pair and wire
+Claude Code, which ends with `muster-shim doctor`. Like those two, it's a dry run until you
+add `--apply`, and it never passes `--force`, so a unit that differs from the one `service`
+would write is left for you to look at. It never starts or restarts the daemon: `service`
+prints the commands for that. Give a pairing code with `--pair-file PATH`, or `--pair-file -`
+on stdin, never as an argument.
+
+```bash
+scripts/setup.sh --daemon --tls            # see what it would do on the daemon host
+scripts/setup.sh --daemon --tls --apply    # then do it
+scripts/setup.sh --pair-file code.txt --apply   # a machine that only runs sessions
+```
+
 ### 1. Install the binaries
 
 Muster isn't published to crates.io; install from the repository (or from a
