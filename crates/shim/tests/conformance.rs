@@ -2038,8 +2038,13 @@ const PUSH_PLUGIN_NOT_APPLICABLE: &[(&str, &str)] = &[
 
 /// OpenCode's, which differ from Pi's only in why the roster can't say none: its plugin doesn't
 /// declare its channel yet, so the roster says none though it wakes by the push (MUS-89).
+/// Every push plugin's entry but `wake-none-not-expected` is taken by index, so
+/// `opencode_skips_what_every_push_plugin_skips` checks the two lists agree.
 const OPENCODE_NOT_APPLICABLE: &[(&str, &str)] = &[
     PUSH_PLUGIN_NOT_APPLICABLE[0],
+    PUSH_PLUGIN_NOT_APPLICABLE[1],
+    PUSH_PLUGIN_NOT_APPLICABLE[2],
+    PUSH_PLUGIN_NOT_APPLICABLE[4],
     (
         "wake-none-not-expected",
         "it wakes by the live push; its roster row says none only because the plugin doesn't \
@@ -2096,6 +2101,21 @@ fn run_cell(harness: &Harness, scenario: Scenario, name: &str) -> Outcome {
         (Err(_), Some(story)) => Outcome::KnownFailure(story),
         (Err(e), None) => Outcome::Fail(e),
     }
+}
+
+/// OpenCode's n/a list is the push plugins' with one reason changed (MUS-89); a
+/// scenario added to theirs must reach it too.
+#[test]
+fn opencode_skips_what_every_push_plugin_skips() {
+    let names = |list: &[(&'static str, &'static str)]| {
+        let mut names: Vec<&str> = list.iter().map(|(name, _)| *name).collect();
+        names.sort_unstable();
+        names
+    };
+    assert_eq!(
+        names(OPENCODE_NOT_APPLICABLE),
+        names(PUSH_PLUGIN_NOT_APPLICABLE)
+    );
 }
 
 #[test]
