@@ -3159,8 +3159,6 @@ dependencies = [
 [[package]]
 name = "myko-server"
 version = "6.11.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "17b4f3d456f61c8d05f6fe50bb10ace6dd8c2fc710ef8558471b8ea81c583637"
 dependencies = [
  "chrono",
  "ciborium",

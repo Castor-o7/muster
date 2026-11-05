@@ -46,7 +46,8 @@ allow = [
   "CC0-1.0",
 ]
 # myko and its crates are AGPL-3.0-or-later, and Marshal depends on them by
-# design. Listed per crate so no other AGPL dependency slips in unnoticed.
+# design; vendor/myko-server carries the same licence. Listed per crate so no
+# other AGPL dependency slips in unnoticed.
 exceptions = [
   { name = "myko", allow = ["AGPL-3.0-or-later"] },
   { name = "myko-macros", allow = ["AGPL-3.0-or-later"] },
