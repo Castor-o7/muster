@@ -14,7 +14,7 @@ evidence from a real run by the person or team named.
 
 ## Status
 
-2026-11-04: 28 of 58 stories ticked, about 48%, not counting the 3 moved to Rally. Live on
+2026-11-04: 30 of 65 stories ticked, about 46%, not counting the 3 moved to Rally. Live on
 Murph since 2026-11-04 16:02:18: `14e2d1a`, deployed by Lamplighter on the operator's word, with
 every port check passing. It carries MUS-7 (first live at `3746864`, 14:28) and MUS-59, besides
 everything before. Merged and waiting for the next daemon restart: MUS-8 (which also needs a
@@ -430,6 +430,41 @@ Merged and needing a live run: MUS-36 and MUS-37.
   and if they're removed, the repository's `package.json` workspace goes with them.
 - [ ] **MUS-24: Stretch goals.** Once the operator has listed them. Not ready to
   claim yet.
+
+## Phase 5: Merging into Marshal
+
+From the rally of 2026-11-04 evening. The operator's word, through the watchman: upstream
+Marshal's lead developer welcomes Muster merging into Marshal. No PR goes to
+ignition-is-go/marshal, or to the Castor-o7/marshal fork, until these goals are met, and the
+operator decides each upstream PR. The goal numbers are the watchman's board's; G6 belongs to
+Rally.
+
+- [ ] **MUS-62: Catch up with upstream Marshal (G1).** Merge upstream/main (v0.54.1, `94ecc24`)
+  into Muster and keep Muster's features. Done when: build, tests and clippy are green, and the
+  Zoo sandbox builds. In review as #84; `vendor/myko-server` moves to 6.11.5 with it.
+- [x] **MUS-63: Inventory Muster's changes against upstream (G2).** A table of Muster's commits:
+  already upstream, to port, to drop, and the names to restore for upstream (`marshal-shim`,
+  the 6155 ports, `MARSHAL_*`). Merged as #79.
+- [ ] **MUS-64: Make the TLS gate optional (G3).** Plain WebSocket by default, like upstream, and
+  a switch ("cert mode") that turns on the gate, pinning, tokens and pairing. Done when: tests
+  cover both modes. Offer both a `--tls` flag and a `MUSTER_TLS=1` variable, and check upstream's
+  daemon for which it uses; the operator asks upstream which it wants. Design draft in #82.
+- [x] **MUS-65: Document live delivery without the channels flag (G4).** How hooks give live
+  delivery and wake, checked against the code, and how that differs from Marshal's channel
+  push. Merged as #80.
+- [ ] **MUS-66: Message between daemons (G5).** Secure and bidirectional, on the TLS mode. The
+  watchman reads a design and threat model before any building. The design answers what
+  configuration links two daemons (peer address, token or certificate fingerprint, and whether
+  `muster-daemon pair` is reused), whether a test session needs its own shim pairing file, what
+  happens to messages in flight when either daemon restarts, and whether it needs the TLS mode.
+  Done when: it's implemented with tests and a real a1↔Murph run. Needs a run: Lamplighter, with a
+  second daemon on Murph (loopback ports 6265–6268, its own state dir, config dir and database).
+- [ ] **MUS-67: Write up Muster against Marshal (G7).** What Muster adds and changes, written
+  for the eventual upstream PR descriptions. Draft in #81.
+- [ ] **MUS-68: Simulate each behaviour change in Zoo (G8).** Upstream requires a real-agent
+  simulation, imported into Marshal Zoo, for every change to behaviour or agent-facing
+  instructions (`scripts/sandbox/README.md`, upstream `8563800`). Done when: each change bound
+  for upstream has its simulation. Plan for the hooks change in #83.
 
 ## Moved to Rally
 
