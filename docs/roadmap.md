@@ -72,10 +72,10 @@ Merged and needing a live run: MUS-36 and MUS-37.
   Merged in #131 (88ab365); open, checked against its done-when on 2026-11-05. Keeping a
   nickname through a restart is shown by `identity_succession.rs` and the conformance cell
   `restart-keeps-identity` for `claude` and `codex`, but `claude-tls` × `restart-keeps-identity`
-  is on `FLAKY` under MUS-93. Reaching the watchman by role is built (`resolve_succeeded` in
-  `send_message.rs`: a role claimed by one session reaches it, by two is refused), but no test
-  sends to a role: `identity_succession.rs` covers only who holds one. Still to do: that test,
-  and MUS-93.
+  is on `FLAKY` under MUS-93. Reaching the watchman by role is done: `resolve_succeeded` in
+  `send_message.rs` sends to the one session claiming a role, shown by `send_message_command.rs`'s
+  `a_role_claimed_by_one_session_reaches_it`, and refuses a role two sessions claim
+  (`a_role_claimed_by_two_sessions_is_refused`). Still to do: MUS-93, for `claude-tls`.
 - [x] **MUS-4: Show dead watchers.** Done when: the roster distinguishes a
   session that can be woken from one that can't.
   Verified live 2026-11-04 by gentle-pulsar against Murph's `e797fa3`: `muster-shim roster` showed
