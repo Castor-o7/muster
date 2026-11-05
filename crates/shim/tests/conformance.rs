@@ -172,8 +172,24 @@ impl Daemon {
             myko: free_port(),
             child: None,
         };
-        d.spawn();
-        d
+        // Its ports are picked by binding port 0 and closing it, so another
+        // process can take one before the daemon binds it. The daemon then
+        // exits saying so, and it's started again on new ports (MUS-88).
+        let mut lost = Vec::new();
+        for _ in 0..5 {
+            match d.try_spawn() {
+                Ok(()) => return d,
+                Err(log) if log.contains("in use") => {
+                    lost.push(format!("{} {} {}", d.bind, d.hook, d.myko));
+                    (d.bind, d.hook, d.myko) = (free_port(), free_port(), free_port());
+                }
+                Err(log) => panic!("muster-daemon didn't come up; log:\n{log}"),
+            }
+        }
+        panic!(
+            "muster-daemon lost its ports 5 times: {lost:?}; log:\n{}",
+            d.log()
+        );
     }
 
     fn config_dir(&self) -> PathBuf {
@@ -228,7 +244,17 @@ impl Daemon {
         cmd
     }
 
+    /// Start it again on the same ports, as a restart does.
     fn spawn(&mut self) {
+        if let Err(log) = self.try_spawn() {
+            panic!("muster-daemon didn't come up; log:\n{log}");
+        }
+    }
+
+    /// Start it, and wait for it to listen. `Err` with this start's log if it
+    /// exited or never listened.
+    fn try_spawn(&mut self) -> Result<(), String> {
+        let before = self.log().len();
         let log = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -242,13 +268,29 @@ impl Daemon {
             .stderr(log)
             .spawn()
             .expect("spawn muster-daemon");
-        self.child = Some(child);
+        let mut child = child;
         let up = |port| TcpStream::connect(("127.0.0.1", port)).is_ok();
-        assert!(
-            wait_until(Duration::from_secs(20), || up(self.hook) && up(self.bind)),
-            "muster-daemon didn't come up; log:\n{}",
-            self.log()
-        );
+        // With TLS, myko has its own port behind the gate.
+        let ports: Vec<u16> = match self.mode {
+            Mode::Tls => vec![self.hook, self.bind, self.myko],
+            Mode::Plain => vec![self.hook, self.bind],
+        };
+        let mut exited = |c: &mut Child| c.try_wait().ok().flatten().is_some();
+        let listening = wait_until(Duration::from_secs(20), || {
+            exited(&mut child) || ports.iter().all(|p| up(*p))
+        });
+        // A port another process holds answers too, but a daemon that lost
+        // one of its binds exits at once.
+        if listening && !exited(&mut child) {
+            thread::sleep(Duration::from_millis(300));
+        }
+        if exited(&mut child) || !listening {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(self.log().get(before..).unwrap_or_default().to_string());
+        }
+        self.child = Some(child);
+        Ok(())
     }
 
     /// Stop it the way systemd does (SIGTERM, which ends held waits first), and

@@ -13,14 +13,6 @@ use myko_server::{BlackholePersister, MykoServer};
 
 const TOKEN: &str = "local-test-token";
 
-fn pick_free_port() -> u16 {
-    StdListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
-}
-
 fn wait_listening(addr: SocketAddr) {
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
@@ -61,7 +53,11 @@ fn start_hook_listener() -> SocketAddr {
         .build();
     let ctx = server.ctx();
     let _server: &'static MykoServer = Box::leak(Box::new(server));
-    let addr: SocketAddr = format!("127.0.0.1:{}", pick_free_port()).parse().unwrap();
+    // Bound here and handed to the listener, so no other process can take
+    // the port between picking and binding it (MUS-88).
+    let std_listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind hook listener");
+    std_listener.set_nonblocking(true).unwrap();
+    let addr: SocketAddr = std_listener.local_addr().unwrap();
     let state_dir = std::env::temp_dir().join(format!("muster-local-access-{}", addr.port()));
     std::fs::create_dir_all(&state_dir).unwrap();
     let access = Arc::new(daemon::http_listener::Access {
@@ -74,7 +70,11 @@ fn start_hook_listener() -> SocketAddr {
             .build()
             .unwrap();
         rt.block_on(async move {
-            let _ = daemon::http_listener::run_bound(addr, Arc::new(ctx), Some(access)).await;
+            let listener = tokio::net::TcpListener::from_std(std_listener).expect("hook listener");
+            let (_running, stopping) = tokio::sync::watch::channel(false);
+            let _ =
+                daemon::http_listener::serve_until(listener, Arc::new(ctx), Some(access), stopping)
+                    .await;
         });
     });
     wait_listening(addr);
@@ -139,7 +139,10 @@ fn start_local_gate() -> SocketAddr {
             thread::sleep(Duration::from_millis(200));
         }
     });
-    let addr: SocketAddr = format!("127.0.0.1:{}", pick_free_port()).parse().unwrap();
+    // Bound here and handed to the gate (MUS-88).
+    let std_listener = StdListener::bind("127.0.0.1:0").unwrap();
+    std_listener.set_nonblocking(true).unwrap();
+    let addr: SocketAddr = std_listener.local_addr().unwrap();
     let state_dir: PathBuf =
         std::env::temp_dir().join(format!("muster-local-gate-{}", addr.port()));
     std::fs::create_dir_all(&state_dir).unwrap();
@@ -149,7 +152,7 @@ fn start_local_gate() -> SocketAddr {
             .build()
             .unwrap();
         rt.block_on(async move {
-            let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+            let listener = tokio::net::TcpListener::from_std(std_listener).unwrap();
             let _ = daemon::gate::serve_local(
                 listener,
                 daemon::gate::LocalGateConfig {

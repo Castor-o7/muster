@@ -56,8 +56,11 @@ impl ServerHandle {
     }
 }
 
-fn spawn_server(bind: SocketAddr) -> ServerHandle {
+/// Start a myko server on `bind`, or say why it couldn't: most likely another
+/// process took the port after it was picked (MUS-88).
+fn try_spawn_server(bind: SocketAddr) -> Result<ServerHandle, String> {
     let (ready_tx, ready_rx) = mpsc::sync_channel::<MykoServerContext>(1);
+    let (failed_tx, failed_rx) = mpsc::channel::<String>();
     let (shutdown_tx, shutdown_rx) = mpsc::channel::<()>();
 
     let join = thread::spawn(move || {
@@ -75,7 +78,11 @@ fn spawn_server(bind: SocketAddr) -> ServerHandle {
             );
             ready_tx.send(server.ctx()).expect("send ctx");
             tokio::select! {
-                _ = server.run() => {}
+                r = server.run() => {
+                    if let Err(e) = r {
+                        let _ = failed_tx.send(e.to_string());
+                    }
+                }
                 _ = tokio::task::spawn_blocking(move || {
                     let _ = shutdown_rx.recv();
                 }) => {}
@@ -87,12 +94,53 @@ fn spawn_server(bind: SocketAddr) -> ServerHandle {
     let ctx = ready_rx
         .recv_timeout(Duration::from_secs(5))
         .expect("server thread came up");
+    // A port another process holds accepts connections too, so a connect
+    // alone doesn't say the server bound it. Its bind failure comes at once,
+    // so it's waited for a moment after the port answers.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while std::net::TcpStream::connect(bind).is_err() {
+        if let Ok(why) = failed_rx.try_recv() {
+            // The thread\'s runtime waits on the shutdown channel as it ends.
+            drop(shutdown_tx);
+            let _ = join.join();
+            return Err(why);
+        }
+        if Instant::now() >= deadline {
+            return Err(format!("nothing listening on {bind}"));
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    if let Ok(why) = failed_rx.recv_timeout(Duration::from_millis(200)) {
+        // The thread\'s runtime waits on the shutdown channel as it ends.
+        drop(shutdown_tx);
+        let _ = join.join();
+        return Err(why);
+    }
 
-    ServerHandle {
+    Ok(ServerHandle {
         ctx,
         shutdown: Some(shutdown_tx),
         join: Some(join),
+    })
+}
+
+/// A myko server on a free port. The port is picked by binding port 0 and
+/// closing it, so another process can take it before the server binds it:
+/// then it's picked again (MUS-88).
+fn spawn_server_on_free_port() -> (ServerHandle, SocketAddr) {
+    let mut lost = Vec::new();
+    for _ in 0..5 {
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .and_then(|l| l.local_addr())
+            .expect("pick a free port")
+            .port();
+        let bind: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
+        match try_spawn_server(bind) {
+            Ok(server) => return (server, bind),
+            Err(why) => lost.push(format!("{bind}: {why}")),
+        }
     }
+    panic!("no free port held for the myko server: {lost:?}");
 }
 
 fn session_set_event(id: &str) -> MEvent {
@@ -121,13 +169,6 @@ fn session_set_event(id: &str) -> MEvent {
     MEvent::from_item(&session, MEventType::SET, &uuid::Uuid::new_v4().to_string())
 }
 
-fn pick_free_port() -> u16 {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("pick free port");
-    let port = listener.local_addr().unwrap().port();
-    drop(listener);
-    port
-}
-
 fn wait_for(label: &str, mut f: impl FnMut() -> bool) {
     let deadline = Instant::now() + POLL_TIMEOUT;
     while Instant::now() < deadline {
@@ -145,11 +186,8 @@ fn client_subscription_resumes_after_server_restart() {
     muster_entities::link();
     daemon::link();
 
-    let port = pick_free_port();
-    let bind: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
+    let (server_v1, bind) = spawn_server_on_free_port();
     let addr = format!("ws://{bind}");
-
-    let server_v1 = spawn_server(bind);
 
     let client = MykoClient::new();
     client.set_protocol(MykoProtocol::JSON);
@@ -182,7 +220,7 @@ fn client_subscription_resumes_after_server_restart() {
 
     let mut server_v2 = None;
     for _ in 0..30 {
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| spawn_server(bind))) {
+        match try_spawn_server(bind) {
             Ok(s) => {
                 server_v2 = Some(s);
                 break;
@@ -220,11 +258,8 @@ fn many_subscriptions_resume_together_after_restart() {
     muster_entities::link();
     daemon::link();
 
-    let port = pick_free_port();
-    let bind: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
+    let (server_v1, bind) = spawn_server_on_free_port();
     let addr = format!("ws://{bind}");
-
-    let server_v1 = spawn_server(bind);
 
     let client = MykoClient::new();
     client.set_protocol(MykoProtocol::JSON);
@@ -259,7 +294,7 @@ fn many_subscriptions_resume_together_after_restart() {
 
     let mut server_v2 = None;
     for _ in 0..30 {
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| spawn_server(bind))) {
+        match try_spawn_server(bind) {
             Ok(s) => {
                 server_v2 = Some(s);
                 break;
@@ -300,11 +335,8 @@ fn dropped_cell_handle_still_pumps_updates_after_reconnect() {
     muster_entities::link();
     daemon::link();
 
-    let port = pick_free_port();
-    let bind: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
+    let (server_v1, bind) = spawn_server_on_free_port();
     let addr = format!("ws://{bind}");
-
-    let server_v1 = spawn_server(bind);
 
     let client = MykoClient::new();
     client.set_protocol(MykoProtocol::JSON);
@@ -352,7 +384,7 @@ fn dropped_cell_handle_still_pumps_updates_after_reconnect() {
 
     let mut server_v2 = None;
     for _ in 0..30 {
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| spawn_server(bind))) {
+        match try_spawn_server(bind) {
             Ok(s) => {
                 server_v2 = Some(s);
                 break;
@@ -383,4 +415,21 @@ fn dropped_cell_handle_still_pumps_updates_after_reconnect() {
     });
 
     server_v2.shutdown();
+}
+
+/// MUS-88: a port another process holds is reported as lost, not taken for
+/// the server's own, so the caller picks another or retries the bind.
+#[test]
+fn a_port_another_process_holds_is_reported() {
+    muster_entities::link();
+    daemon::link();
+    let held = std::net::TcpListener::bind("127.0.0.1:0").expect("hold a port");
+    let bind = held.local_addr().unwrap();
+    let Err(why) = try_spawn_server(bind) else {
+        panic!("the server reported {bind} as its own while another socket held it");
+    };
+    assert!(why.to_lowercase().contains("in use"), "{why}");
+    drop(held);
+    let (server, _bind) = spawn_server_on_free_port();
+    server.shutdown();
 }

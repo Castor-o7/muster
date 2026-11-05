@@ -703,7 +703,7 @@ Rally.
   `resume-wakes-held-mail`) show it. A channels-on Claude session likely has the same gap,
   but no conformance fake models one yet. Done when: unread direct mail held by a pause is pushed
   when wakes resume, and those cells pass.
-- [ ] **MUS-88: Tests pick ports without races.** From MUS-69 and an e2e run on Murph. Two
+- [x] **MUS-88: Tests pick ports without races.** From MUS-69 and an e2e run on Murph. Two
   causes. First, the conformance suite and the daemon's e2e tests (9 files) pick a free port by
   binding port 0, reading the port and closing the socket, then hand the number to a daemon that
   binds it later; in between, another process can take it. The suite hit that once on 2026-11-05
@@ -714,6 +714,15 @@ Rally.
   a test's daemon binds its own ports (port 0) and reports them, or the tests retry a bind that
   loses the race; the e2e scripts take free ports per run, so two can run at once on one host;
   and no test fails on a port another process took.
+  Done three ways, by where the listener lives. The in-process hook listener and gate tests bind
+  port 0 themselves and hand the socket over (`http_listener::serve_until`, `gate::serve_local`),
+  so there's no window. The in-process myko servers, whose bind is inside the vendored myko-server,
+  report a lost bind (`try_spawn_server`; a port another socket holds is refused, not mistaken
+  for the server's own, shown by `a_port_another_process_holds_is_reported`) and pick again. That
+  also makes `ws_reconnect_subscription`'s "rebind the same port" loop retry, which it never did,
+  since `spawn_server` ignored the bind error. The conformance suite's daemons, which exit on a
+  lost bind, start again on new ports. The gate and links e2e scripts pick their ports per run,
+  and two copies of each ran at once on a1.
 - [ ] **MUS-90: Push plugins aren't woken after a restart with Postgres.** From MUS-76. In CI,
   `pi`, `opencode` and `prime-agent` × `daemon-restart-mid-wait-pg` fail ("not woken after the
   restart; got None", about 26 s each), while the in-memory restart cell passes for all three.

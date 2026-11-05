@@ -81,6 +81,18 @@ pub async fn run_until(
     stopping: watch::Receiver<bool>,
 ) -> std::io::Result<()> {
     let listener = TcpListener::bind(bind).await?;
+    serve_until(listener, ctx, access, stopping).await
+}
+
+/// [`run_until`] on an already-bound listener, so a test can bind port 0 and
+/// keep the port it got, with no window for another process to take it (MUS-88).
+pub async fn serve_until(
+    listener: TcpListener,
+    ctx: Arc<MykoServerContext>,
+    access: Option<Arc<Access>>,
+    stopping: watch::Receiver<bool>,
+) -> std::io::Result<()> {
+    let bind = listener.local_addr()?;
     log::info!("muster hook listener on http://{bind} (/hook/*)");
     let limiter =
         crate::limits::ConnLimiter::from_env(crate::limits::HOOKS.0, crate::limits::HOOKS.1);
