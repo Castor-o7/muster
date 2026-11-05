@@ -7,10 +7,10 @@ Where it fits in the series is in [upstream-pr-strategy.md](upstream-pr-strategy
 
 | | |
 |---|---|
-| Branch | `port/terminal-cmds` at `da4b719` (Castor-o7/muster, by peppy-skate), on `62552e6`, #164's head. Pushed to Castor-o7/marshal when it's sent |
-| Contents | 2 commits, 6 files, +570 −14. `100d7ea`: the terminal commands (Muster's `9fdf775`) without `idempotency_key`, which arrives with Durability. `da4b719`: the plugin README fix (Muster's `abb4c94`) |
+| Branch | `port/terminal-cmds` at `5044c3e` (Castor-o7/muster, by peppy-skate, review fixes by bright-roller), on `62552e6`, #164's head. Pushed to Castor-o7/marshal when it's sent |
+| Contents | 3 commits, 6 files, +660 −14. `100d7ea`: the terminal commands (Muster's `9fdf775`) without `idempotency_key`, which arrives with Durability. `da4b719`: the plugin README fix (Muster's `abb4c94`). `5044c3e`: the review fixes (the roster's `recorded` wording, the too-short refusal, and tests for the label and the per-recipient lines) |
 | Opens | after #164 merges, since the roster's `wake` field comes from #164 |
-| Checked | workspace tests (201) green, `clippy -D warnings` and `fmt` clean, the sandbox unittest passes, and the Muster-name grep finds 0 (peppy-skate). It rebases cleanly onto #164's evidence and comment commits, since it doesn't touch those files |
+| Checked | at `5044c3e` on Murph: workspace tests (205) green, `clippy --workspace --all-targets -D warnings` and `fmt` clean, and the Muster-name grep finds 0 (bright-roller). At `da4b719`, the sandbox unittest passed too (peppy-skate). It rebases cleanly onto #164's evidence and comment commits, since it doesn't touch those files |
 
 ---
 
@@ -38,25 +38,32 @@ a Marshal user who doesn't run them sees no change.
   - It sends each recipient a direct message, so an idle session wakes for
     it, the same as for any direct mail.
   - It prints one line per recipient, then removes its own roster row.
-  - It refuses an unknown, ambiguous or too-short name. A terminal can't be
-    addressed.
+  - It refuses an unknown or ambiguous name, and says when a name that matches
+    nothing is too short to be an id prefix (under 8 characters). A terminal
+    can't be addressed.
   - The body is labelled `[from a terminal on <machine>; it can't receive replies]`.
     The README says a terminal message names the machine, not the person:
     it carries no authority and is never the operator's approval.
 - **Roster for scripts.**
   - `marshal-shim roster` only subscribes. It registers no session and
     doesn't appear on the roster.
-  - Each row separates what the daemon observed (the connection binding, a
-    held wait and until when) from what the session declared, and includes
-    the `wake` state that #164 added.
+  - Each row separates the daemon's record (`recorded`: the connection
+    binding, a held wait and until when) from what the session declared, and
+    includes the `wake` state that #164 added. The daemon's hook listener
+    writes the wait and myko fills the binding from the connection, but any
+    connected client can also write either, so they're the daemon's record,
+    not proof.
 - **A plugin README fix.** The README told users to put `mcpServers` in
   `.claude/settings.json`, where Claude Code silently ignores it. It now goes
   in `<project>/.mcp.json`, with the status line and the hooks in
   `settings.json`. The README also said sessions have no nickname; they do,
   and peers can be addressed by nickname or `session_id`.
 - **Internal tidy-up:** the shim's address lookup moves into one
-  `daemon_address()` that all three paths share, and `tools::await_command`
-  becomes `pub(crate)`. Behaviour is unchanged.
+  `daemon_address()` that the three myko paths share (the MCP server, terminal
+  send and the roster), and `tools::await_command` becomes `pub(crate)`.
+  The statusline's reachability check keeps its own lookup in `channels.rs`,
+  which reads the environment first and has no default, so an unconfigured
+  machine isn't warned. Behaviour is unchanged.
 
 ## What changes by default
 
@@ -74,8 +81,13 @@ removed. Sessions see the labelled message like any other direct mail.
 
 ## Evidence
 
-- Unit tests: 6 for terminal send (naming, refusal of unknown or ambiguous
-  names, the label, one line per recipient) and 2 for the roster's JSON.
+- Unit tests: 10 for terminal send and 2 for the roster's JSON.
+  - 7 cover naming and refusal: everyone but terminals, a team, a full id or
+    unique prefix, unknown, ambiguous and short names, a name that's both a
+    team and a session, and a terminal.
+  - 1 checks the label.
+  - 2 check the line printed for each recipient: each send outcome, a failed
+    send, and a recipient with no team, host or stored nickname.
 - The same commands have run in Muster, a fork of Marshal, since 2026-11-03.
   Operators message every session from a terminal with them, and scripts read
   the roster.
