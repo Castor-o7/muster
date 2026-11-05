@@ -30,7 +30,10 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    message::{CONTEXT_BODY_MAX_CHARS, GetMessagesByIds, Message, MessageId, context_preview},
+    message::{
+        CONTEXT_BODY_MAX_CHARS, GetMessagesByIds, Message, MessageId, body_too_large,
+        context_preview,
+    },
     message_read::{MessageRead, MessageReadId},
     notify::NotifyChannel,
     session::{GetAllSessions, Session, SessionId, resolve_caller},
@@ -163,7 +166,13 @@ impl CommandHandler for SendMessage {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn execute(self, ctx: CommandContext) -> Result<Self::Result, CommandError> {
+    fn execute(mut self, ctx: CommandContext) -> Result<Self::Result, CommandError> {
+        // A pasted pairing code or token is masked before anything is stored
+        // or delivered.
+        self.body = crate::pairing::redact(&self.body).into_owned();
+        if let Some(refusal) = body_too_large(&self.body) {
+            return Err(err(&ctx, &refusal));
+        }
         let sessions: Vec<Arc<Session>> = ctx.exec_query(GetAllSessions {})?;
 
         let sender = resolve_caller(&ctx, &sessions, self.as_session.as_ref())?;
@@ -216,6 +225,15 @@ impl CommandHandler for SendMessage {
                 });
             }
         }
+        // A retry of a message already stored returned above, so only a new
+        // message spends the sender's allowance.
+        crate::controls::sender_allowed(sender.host.as_ref().map(|h| h.name.as_str()))
+            .map_err(|why| err(&ctx, &why))?;
+        crate::rate::take(
+            sender.id.0.as_ref(),
+            sender.host.as_ref().map(|h| h.name.as_str()),
+        )
+        .map_err(|why| err(&ctx, &why))?;
         let now = Utc::now().timestamp_millis();
         let msg = Message {
             response_required: self.response_required,
@@ -390,11 +408,9 @@ fn resolve_recipient(
     sessions: &[Arc<Session>],
     token: &str,
 ) -> Result<ResolvedRecipient, CommandError> {
-    // 1. Exact session id.
-    if let Some(s) = sessions.iter().find(|s| s.id.0.as_ref() == token) {
-        return Ok((s.clone(), None));
-    }
-    // 2. Unique nickname.
+    // 1. Unique nickname. The daemon assigns these, whereas a client chooses its
+    // session id, so a nickname must win: otherwise a client could register an id
+    // equal to a peer's nickname and receive that peer's mail.
     let mut by_nick: Vec<Arc<Session>> = Vec::new();
     for s in sessions {
         if crate::nickname_for(ctx, s.id.0.as_ref())? == token {
@@ -406,6 +422,10 @@ fn resolve_recipient(
     }
     if by_nick.len() > 1 {
         return Err(err(ctx, &ambiguous(ctx, "nickname", token, &by_nick)));
+    }
+    // 2. Exact session id.
+    if let Some(s) = sessions.iter().find(|s| s.id.0.as_ref() == token) {
+        return Ok((s.clone(), None));
     }
     // 3. Operator identity — human-via-agent routing. Record the operator we
     // addressed (the resolved session's canonical operator string, falling back
@@ -453,11 +473,8 @@ pub(crate) fn resolve_mention(
     sessions: &[Arc<Session>],
     token: &str,
 ) -> Result<Option<ResolvedRecipient>, CommandError> {
-    // 1. Exact session id.
-    if let Some(s) = sessions.iter().find(|s| s.id.0.as_ref() == token) {
-        return Ok(Some((s.clone(), None)));
-    }
-    // 2. Unique nickname (ambiguous → treat as prose, not a hard error).
+    // 1. Unique nickname (ambiguous → treat as prose, not a hard error). As in
+    // `resolve_recipient`, a daemon-assigned nickname wins over a chosen id.
     let mut by_nick: Vec<Arc<Session>> = Vec::new();
     for s in sessions {
         if crate::nickname_for(ctx, s.id.0.as_ref())? == token {
@@ -469,6 +486,10 @@ pub(crate) fn resolve_mention(
     }
     if by_nick.len() > 1 {
         return Ok(None);
+    }
+    // 2. Exact session id.
+    if let Some(s) = sessions.iter().find(|s| s.id.0.as_ref() == token) {
+        return Ok(Some((s.clone(), None)));
     }
     // 3. Operator identity — human-via-agent.
     let op = token
@@ -488,6 +509,7 @@ pub(crate) fn resolve_mention(
 /// policy is unit-testable without a live command context.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn pick_operator_session(sessions: &[Arc<Session>], op: &str) -> Option<Arc<Session>> {
+    let now = Utc::now().timestamp_millis();
     sessions
         .iter()
         .filter(|s| {
@@ -498,7 +520,10 @@ pub(crate) fn pick_operator_session(sessions: &[Arc<Session>], op: &str) -> Opti
         .cloned()
         .max_by_key(|s| {
             let live = s.client_id.is_some() && s.channels_enabled != Some(false);
-            (live as i64, s.last_activity_at.unwrap_or(s.connected_at))
+            // Clients report this time. One from the future isn't activity, and
+            // would otherwise win this session the operator's mail indefinitely.
+            let active = s.last_activity_at.unwrap_or(s.connected_at);
+            (live as i64, if active > now { 0 } else { active })
         })
 }
 
@@ -521,6 +546,11 @@ fn ambiguous(ctx: &CommandContext, kind: &str, token: &str, matches: &[Arc<Sessi
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn push_to_client(client_id: &str, content: String, meta: serde_json::Value) -> bool {
     use myko::{command::CommandRequest, server::try_client_registry};
+    // A live push wakes its session, so none goes out while the operator has
+    // paused wake-ups. The message is stored either way.
+    if crate::controls::wakes_paused() {
+        return false;
+    }
     let Some(registry) = try_client_registry() else {
         log::warn!("[send_message] client_registry not initialized; cannot deliver");
         return false;
@@ -541,6 +571,44 @@ pub(crate) fn direct_push_content(from_nickname: &str, to_operator: Option<&str>
             crate::message::operator_relay_notice(op)
         ),
         None => format!("new message from {from_nickname}"),
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod operator_routing_tests {
+    use super::*;
+
+    fn session(id: &str, last_activity_at: i64) -> Arc<Session> {
+        Arc::new(Session {
+            id: SessionId(Arc::from(id)),
+            client_id: None,
+            pid: 0,
+            cwd: String::new(),
+            git_branch: None,
+            current_task: None,
+            session_name: None,
+            activity: None,
+            kind: None,
+            connected_at: 0,
+            last_activity_at: Some(last_activity_at),
+            last_tool: None,
+            last_tool_at: None,
+            operator: Some("op@example.test".to_string()),
+            host: None,
+            project: None,
+            channels_enabled: None,
+        })
+    }
+
+    #[test]
+    fn a_future_activity_time_does_not_win_operator_mail() {
+        let now = Utc::now().timestamp_millis();
+        let sessions = [
+            session("honest", now - 1_000),
+            session("liar", now + 86_400_000),
+        ];
+        let picked = pick_operator_session(&sessions, "op@example.test").unwrap();
+        assert_eq!(picked.id.0.as_ref(), "honest");
     }
 }
 

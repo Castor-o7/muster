@@ -120,6 +120,16 @@ async fn main() -> Result<()> {
         .or_else(|| std::env::var(ADDRESS_ENV).ok())
         .or_else(|| std::env::var(ADDRESS_ENV_LEGACY).ok())
         .unwrap_or_else(|| DEFAULT_DAEMON_ADDRESS.to_string());
+    // With TLS on, the daemon's gate requires the host's local token from
+    // local tools.
+    let address = if address.contains("token=") {
+        address
+    } else if let Some(token) = marshal_entities::pairing::read_local_token() {
+        let sep = if address.contains('?') { '&' } else { '?' };
+        format!("{address}{sep}token={token}")
+    } else {
+        address
+    };
 
     marshal_entities::link();
 

@@ -10,7 +10,10 @@
 //!   held. They show a connection or a wait exists, not that the session behind
 //!   it is working.
 //! - `declared`: what the session's own software reports, including its machine,
-//!   operator and `last_activity_at`. Any client can set these to anything.
+//!   operator and `last_activity_at`. Any client can set these to anything. With
+//!   TLS on, the gate replaces a paired machine's machine and operator with the
+//!   ones it verified, but a session on the daemon's own host doesn't pass the
+//!   gate, and the row doesn't say which case it is.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -19,8 +22,8 @@ use anyhow::{Result, bail};
 use chrono::Utc;
 use hyphae::Gettable;
 use marshal_entities::{
-    GetAllSessionNicknames, GetAllSessions, GetAllWakeWatchers, Session, SessionNickname,
-    WakeWatcher, wake_state,
+    GetAllSessionNicknames, GetAllSessions, GetAllWakePauses, GetAllWakeWatchers, Session,
+    SessionNickname, WakePause, WakeWatcher, wake_state,
 };
 use myko::client::MykoClient;
 use serde_json::{Value, json};
@@ -35,6 +38,7 @@ fn view(
     sessions: &[Arc<Session>],
     nicknames: &[Arc<SessionNickname>],
     watchers: &[Arc<WakeWatcher>],
+    pauses: &[Arc<WakePause>],
     now_ms: i64,
 ) -> Value {
     let rows: Vec<Value> = sessions
@@ -81,7 +85,10 @@ fn view(
             })
         })
         .collect();
-    json!({ "read_at": now_ms, "sessions": rows })
+    // Observed: only the daemon writes it. While true, no message wakes a
+    // session, whatever its `wake` says.
+    let wakes_paused = pauses.iter().any(|p| p.paused);
+    json!({ "read_at": now_ms, "wakes_paused": wakes_paused, "sessions": rows })
 }
 
 pub async fn run() -> Result<()> {
@@ -90,7 +97,8 @@ pub async fn run() -> Result<()> {
     let sessions = client.watch_query::<GetAllSessions>(GetAllSessions {});
     let nicknames = client.watch_query::<GetAllSessionNicknames>(GetAllSessionNicknames {});
     let watchers = client.watch_query::<GetAllWakeWatchers>(GetAllWakeWatchers {});
-    client.set_address(Some(crate::daemon_address()));
+    let pauses = client.watch_query::<GetAllWakePauses>(GetAllWakePauses {});
+    client.set_address(Some(crate::daemon_address().await?));
 
     // An empty result can't be told from one that hasn't arrived, so never report
     // an empty roster as a fact.
@@ -112,6 +120,7 @@ pub async fn run() -> Result<()> {
         &sessions.get(),
         &nicknames.get(),
         &watchers.get(),
+        &pauses.get(),
         Utc::now().timestamp_millis(),
     );
     println!("{}", serde_json::to_string_pretty(&output)?);
@@ -151,7 +160,7 @@ mod tests {
 
     #[test]
     fn claims_are_kept_apart_from_what_the_daemon_established() {
-        let v = view(&[session()], &[], &[], 100);
+        let v = view(&[session()], &[], &[], &[], 100);
         let row = &v["sessions"][0];
         assert_eq!(v["read_at"], 100);
         assert_eq!(row["declared"]["machine"], "host-a");
@@ -171,10 +180,10 @@ mod tests {
                 until,
             })
         };
-        let v = view(&[session()], &[], &[watcher(101)], 100);
+        let v = view(&[session()], &[], &[watcher(101)], &[], 100);
         assert_eq!(v["sessions"][0]["wake"], "waiting");
         assert_eq!(v["sessions"][0]["observed"]["waiting_until"], 101);
-        let v = view(&[session()], &[], &[watcher(100)], 100);
+        let v = view(&[session()], &[], &[watcher(100)], &[], 100);
         assert_eq!(v["sessions"][0]["wake"], "none");
         assert_eq!(v["sessions"][0]["observed"]["waiting"], false);
     }

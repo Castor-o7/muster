@@ -34,7 +34,78 @@ marshal-daemon &
 # or under your favorite supervisor (systemd user unit, launchd, tmux pane, ...)
 ```
 
-The daemon binds `0.0.0.0:6155` by default (so peers on other hosts can reach it without remembering to flip a flag) and writes its event log to `~/.local/state/marshal/events.jsonl`. Restrict to localhost only with `MARSHAL_BIND=127.0.0.1:6155`.
+The daemon binds `127.0.0.1:6155` by default and writes its event log to `~/.local/state/marshal/events.jsonl`. Set `MARSHAL_BIND=0.0.0.0:6155` (or a LAN/mesh address) to let other hosts reach it, and consider TLS (below) before you do.
+
+### 2a. TLS and pairing (optional)
+
+The daemon runs in one of two modes.
+
+**Plain (the default).** myko serves WebSocket and MCP directly on `MARSHAL_BIND`, and the hook listener takes requests without a token. There's no TLS, pairing, token or limit; the daemon is protected only by where it's bound, so keep it on loopback or a network you trust. The startup line says `TLS gate: off`.
+
+| Port | Variable | Default | Serves |
+|---|---|---|---|
+| 6155 | `MARSHAL_BIND` | `127.0.0.1:6155` | myko's own WebSocket/MCP listener |
+| 6156 | `MARSHAL_HOOK_BIND` | `127.0.0.1:6156` | The plain-HTTP hook listener; refuses browser origins |
+
+**TLS (`marshal-daemon --tls`).** Everything below: the gate, pairing, tokens, the frame filter, the limits and the sender allowlist. The startup line says `TLS gate: on`. The daemon refuses to run plain while its state directory has paired machines, unless it's started with `--plain`, so a unit file that loses `--tls` can't quietly open a gated daemon. Given both `--tls` and `--plain`, it refuses to start. Turning TLS off leaves the certificate, tokens and pairings on disk, so turning it back on restores them.
+
+| Port | Variable | Default | Serves |
+|---|---|---|---|
+| 6155 | `MARSHAL_BIND` | `127.0.0.1:6155` | **The gate**. TLS connections must present a per-machine access token; plain HTTP from the daemon's own host (loopback) must present the local token; plain HTTP from another machine gets `426` and is told to pair |
+| 6156 | `MARSHAL_HOOK_BIND` | `127.0.0.1:6156` | The plain-HTTP hook listener; requires the local token, refuses browser origins |
+| 6158 | `MARSHAL_MYKO_BIND` | `127.0.0.1:6158` | myko's own WebSocket/MCP listener, behind the gate; admits only what the gate forwards, refuses browser origins |
+
+To accept sessions from other machines, start the daemon with `--tls`, set `MARSHAL_BIND=0.0.0.0:6155` (or a LAN/mesh address), and pair each machine (below). Tools running on the daemon's own host, like the shim and the TUI, connect to `ws://localhost:6155` in either mode. With TLS on they add the **local token**: the daemon writes it owner-only to `~/.config/marshal/local-token` (under `$XDG_CONFIG_HOME` if set) on first start, and the shim and TUI read it from there. A process that can't read that file gets `401`, and any request naming a browser `Origin` gets `403`, on the hook listener, the gate's local path, and myko's own listener. myko's listener admits only requests the gate forwarded, through a request filter in the patched myko-server under `vendor/myko-server`. Loopback isn't the trust boundary: a reverse proxy on the host forwards from loopback too. The local token is. The web UI needs TLS off for now.
+
+Set `MARSHAL_OPERATOR` on the daemon to the operator it serves. Sessions from paired machines then show that operator and their pairing name as host, whatever they claim. On the daemon's own host, a session's claim is taken as given.
+
+**Limits, with TLS on.** Each session may send a burst of 20 messages, then 30 a minute; a machine's sessions share one allowance, so new sessions don't buy more. Past that, a send gets "too many messages from this session" and says when to retry. A broadcast counts as one. A message body may be up to 64 KiB. Connections are capped per listener, and a refused connection gets `503`:
+
+| Variable | Default | Caps |
+|---|---|---|
+| `MARSHAL_MAX_CONN_PER_IP` | 128 | connections one IP holds on the gate, before and after the token check (past it, the connection is closed) |
+| `MARSHAL_MAX_CONN_PER_MACHINE` | 64 | connections one paired machine holds on the gate |
+| `MARSHAL_MAX_CONN_LOCAL` | 256 | connections on the gate's local path |
+| `MARSHAL_MAX_CONN_HOOKS` | 256 | connections on the hook listener |
+
+**The operator's controls.** Run these on the daemon's host. `pause` and `resume` work in both modes; the sender allowlist applies only with TLS on, since without pairing there are no machine names to check. The running daemon applies a change within 2 seconds.
+
+```bash
+marshal-daemon pause              # no message wakes any session; mail is kept, and seen when someone types
+marshal-daemon resume
+marshal-daemon allow host-a       # from now on only listed machines may send or broadcast
+marshal-daemon disallow host-a
+marshal-daemon senders            # show the list; `senders --clear` lets any machine send again
+```
+
+The daemon's own host is always allowed, so an allowlist never cuts off the sessions running beside it. Machine names are compared without regard to case. The daemon names its own host the way the shim does, from `MARSHAL_HOST` or the hostname up to its first dot, and `senders` prints that name, so you can check it matches what the roster shows for sessions there. A session with no machine on its row is refused while a list is set. While wake-ups are paused, `marshal://roster` and `marshal-shim roster` report `"wakes_paused": true`. These files live in the state directory, so any process on the operator's account can change them.
+
+Pairing codes and bearer tokens pasted into a message body are masked before the message is stored, and never reach a log line.
+
+The daemon keeps its TLS certificate and the paired machines' token hashes in `MARSHAL_STATE_DIR` (default `~/.local/state/marshal`). See [SECURITY.md](SECURITY.md) and [docs/threat-model.md](docs/threat-model.md) for what the gate does and doesn't protect against.
+
+#### Pair each machine
+
+Pairing needs TLS on. Every machine other than the daemon's own host needs a pairing. (On the daemon's host, an unpaired shim connects to `ws://localhost:6155` with the local token, so it works without one. Pair it too if other people can log in to that machine.) On the daemon's host:
+
+```bash
+marshal-daemon pair --name host-a --address 192.0.2.10:6155
+```
+
+It prints a `marshal-shim pair marshal-pair:v2:…` command. Run that on the machine you're pairing, within 15 minutes. The code holds the gate's address, the certificate fingerprint to pin, and a one-time invite. `marshal-shim pair` exchanges the invite at the gate for that machine's access token and stores the token owner-only in `~/.config/marshal/pairing`. The code then stops working, and it also stops working once it expires, so a code that ends up in a transcript or a log can't be used later. Then restart that machine's Claude Code sessions.
+
+- `--address` is how the paired machine should reach the gate. It can be left out when `MARSHAL_BIND` is a specific address rather than `0.0.0.0`.
+- `--expires 30s`, `15m` or `2h` sets how long the code works. The default is 15 minutes. A used or expired code gets "the daemon refused this code"; ask for a new one.
+- `marshal-shim pairing` shows a machine's pairing with its token masked.
+- `marshal-shim pair` also accepts a `marshal-pair:v1:` code, which holds the token itself; pair again to retire one that has been seen.
+- `marshal-daemon pairs` lists paired machines, and `marshal-daemon unpair host-a` revokes one. Its open connections close within seconds and new ones are refused; nothing needs restarting.
+- `marshal-shim unpair` removes a machine's own pairing.
+- Pairing again under the same name replaces that machine's token, so that machine's running sessions lose their connection until they restart. This is also how to rotate a machine's token.
+- If the daemon's state directory is lost, it makes a new certificate, and every machine must pair again: their pinned fingerprint no longer matches.
+
+A paired shim never sends anything unencrypted. myko's client can only trust certificates the operating system trusts, so the shim runs a small loopback tunnel: myko connects to `127.0.0.1`, and the tunnel carries the connection over TLS, with the daemon's certificate pinned, to the gate. The hooks make the same pinned TLS connection themselves. Codex, Pi, opencode and Prime Agent clients don't support pairing yet.
+
+`scripts/test-gate-e2e.sh` checks all of this end to end with the real binaries (it needs zsh, curl, nc and python3).
 
 ### 3. Add the plugin in Claude Code
 
@@ -393,7 +464,9 @@ Code, you can instead pin it in a per-project `.mcp.json`:
 }
 ```
 
-The daemon's bind address is set with `MARSHAL_BIND` (default `0.0.0.0:6155` — set `MARSHAL_BIND=127.0.0.1:6155` to restrict to localhost).
+A paired machine finds the daemon from its pairing (step 2a), which takes precedence over all of the above.
+
+The daemon's bind address is set with `MARSHAL_BIND` (default `127.0.0.1:6155`; set a LAN or mesh address, or `0.0.0.0:6155`, to accept other machines).
 
 ## Workspace layout
 

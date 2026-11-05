@@ -141,7 +141,8 @@ fn start_stoppable() -> (
             .build()
             .expect("rt");
         rt.block_on(async move {
-            let _ = daemon::http_listener::run_until(addr, Arc::new(listener_ctx), stop_rx).await;
+            let _ =
+                daemon::http_listener::run_until(addr, Arc::new(listener_ctx), None, stop_rx).await;
         });
     });
     let deadline = Instant::now() + Duration::from_secs(5);
