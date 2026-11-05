@@ -311,7 +311,15 @@ fn check_private(path: &Path, owner_probe: &File) -> io::Result<()> {
 
 struct Appender {
     file: File,
+    /// The file's length after the last whole line: every byte before it is
+    /// complete lines, and nothing after it is kept (see `append`).
     len: u64,
+    /// Set when a failed write couldn't be cut back off the file. Appends are
+    /// then refused with this reason, rather than landing after a broken line.
+    broken: Option<String>,
+    /// Tests: the next write puts only this many bytes in, then fails.
+    #[cfg(test)]
+    fail_after: Option<usize>,
 }
 
 struct Shared {
@@ -386,6 +394,9 @@ impl FilePersister {
             appender: Mutex::new(Appender {
                 file: open_append(&path)?,
                 len,
+                broken: None,
+                #[cfg(test)]
+                fail_after: None,
             }),
             dirty: AtomicBool::new(false),
             compacting: AtomicBool::new(false),
@@ -443,19 +454,38 @@ impl FilePersister {
                 .appender
                 .lock()
                 .unwrap_or_else(|p| p.into_inner());
-            appender.file.write_all(&line)?;
-            appender.len += line.len() as u64;
+            if let Some(why) = &appender.broken {
+                return Err(io::Error::other(format!(
+                    "the store file is broken and takes no more writes until the daemon restarts: {why}"
+                )));
+            }
             // A new message is the thing this file exists to keep: on disk before
             // the send answers. Everything else is synced within SYNC_EVERY.
-            if &*event.item_type == "Message" {
-                appender.file.sync_data()?;
-            } else {
+            let sync_now = &*event.item_type == "Message";
+            if let Err(e) = write_line(&mut appender, &line, sync_now) {
+                // Part of the line may be in the file (ENOSPC, EIO). Cut it off, so the
+                // next line starts on a boundary and the file still folds at boot.
+                let good = appender.len;
+                if let Err(cut) = appender.file.set_len(good) {
+                    let why = format!(
+                        "a write failed ({e}) and its partial line couldn't be cut off ({cut})"
+                    );
+                    log::error!("[store] {}: {why}", self.shared.path.display());
+                    appender.broken = Some(why);
+                }
+                return Err(e);
+            }
+            appender.len += line.len() as u64;
+            if !sync_now {
                 self.shared.dirty.store(true, Ordering::Release);
             }
             appender.len
         };
         let compacted = self.shared.compacted_len.load(Ordering::Relaxed);
-        if len > MIN_COMPACT_BYTES && len > compacted.saturating_mul(GROWTH_FACTOR) {
+        if len > MIN_COMPACT_BYTES
+            && len > compacted.saturating_mul(GROWTH_FACTOR)
+            && !self.shared.compacting.load(Ordering::Relaxed)
+        {
             let me = self.clone();
             std::thread::spawn(move || {
                 if let Err(e) = me.compact() {
@@ -467,8 +497,39 @@ impl FilePersister {
     }
 }
 
+/// Write one whole line, and sync it if asked. Fails rather than leave it half
+/// written, though the caller still has to cut off what a failure left behind.
+fn write_line(appender: &mut Appender, line: &[u8], sync_now: bool) -> io::Result<()> {
+    #[cfg(test)]
+    if let Some(n) = appender.fail_after.take() {
+        appender.file.write_all(&line[..n.min(line.len())])?;
+        return Err(io::Error::new(
+            io::ErrorKind::StorageFull,
+            "injected short write",
+        ));
+    }
+    appender.file.write_all(line)?;
+    if sync_now {
+        appender.file.sync_data()?;
+    }
+    Ok(())
+}
+
 fn create_private_dir(dir: &Path) -> io::Result<()> {
     if dir.is_dir() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = std::fs::metadata(dir)?.permissions().mode() & 0o777;
+            if mode & 0o077 != 0 {
+                log::warn!(
+                    "[store] {} can be listed by other users (mode {mode:o}); the store file \
+                     itself is private, but `chmod 700 {}` keeps its name and size private too",
+                    dir.display(),
+                    dir.display()
+                );
+            }
+        }
         return Ok(());
     }
     let mut builder = std::fs::DirBuilder::new();
@@ -783,6 +844,62 @@ mod tests {
         let opened = FilePersister::open(dir.path()).unwrap();
         assert!(opened.folded.events.is_empty());
         assert!(!dir.path().join(format!("{STORE_FILE}.tmp")).exists());
+    }
+
+    /// frank-crocodile's send-back: a write that fails partway (disk full) must not
+    /// leave a broken line for the next one to land after.
+    #[test]
+    fn a_failed_write_leaves_no_partial_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let opened = FilePersister::open(dir.path()).unwrap();
+        let p = opened.persister;
+        p.persist(set("Message", "m1", "before")).unwrap();
+        let good_len = p.len();
+
+        p.shared.appender.lock().unwrap().fail_after = Some(17);
+        assert!(p.persist(set("Message", "m2", "half written")).is_err());
+        assert_eq!(
+            std::fs::metadata(&opened.path).unwrap().len(),
+            good_len,
+            "the partial line was cut off"
+        );
+        assert_eq!(p.len(), good_len);
+        assert_eq!(p.shared.health.total_errors.load(Ordering::Relaxed), 1);
+
+        p.persist(set("Message", "m3", "after")).unwrap();
+        // A compaction's cut still lands on a line boundary...
+        p.compact().unwrap();
+        drop(p);
+        // ...and the file folds cleanly at the next boot.
+        let reopened = FilePersister::open(dir.path()).unwrap();
+        assert!(!reopened.folded.torn_tail);
+        assert_eq!(
+            state(&reopened.folded),
+            [
+                ("Message".into(), "m1".into(), "before".into()),
+                ("Message".into(), "m3".into(), "after".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_store_that_cant_be_repaired_refuses_writes_and_says_why() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = FilePersister::open(dir.path()).unwrap().persister;
+        p.shared.appender.lock().unwrap().broken =
+            Some("a write failed (disk full) and ...".into());
+        let err = p.persist(set("Message", "m1", "refused")).unwrap_err();
+        assert!(err.message.contains("broken"), "{}", err.message);
+        assert!(
+            p.shared
+                .health
+                .last_error
+                .read()
+                .unwrap()
+                .as_deref()
+                .unwrap()
+                .contains("broken")
+        );
     }
 
     /// fiery-snapper's test: writes while a compaction is between its fold and its
