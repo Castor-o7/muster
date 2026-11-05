@@ -44,6 +44,7 @@ import {
   type SessionNicknameItem,
 } from "./entities.js";
 import type { Identity } from "./identity.js";
+import { InboxPuller, holdLeaseFromEnv, type InboxPull, type PushHold } from "./inbox-pull.js";
 
 const LIVENESS_INTERVAL_MS = 5_000;
 const INBOX_PULL_LIMIT = 20;
@@ -98,11 +99,18 @@ export class MusterDaemon {
    *  recomputing, so a wordlist change never desyncs us from the roster. */
   private nicknames: SessionNicknameItem[] = [];
 
-  /** Per-session serialization for `drainInbox`. Two `onNotify` pushes for the
-   *  same session would each read the unread set before either acks, then
-   *  render + inject the same messages twice. Chain drains so read→ack is
-   *  atomic per session. */
-  private readonly draining = new Map<string, Promise<string | null>>();
+  /** Inbox pulls and push holds, acked only once shown (MUS-81). Pulls run
+   *  one at a time per session, so two can't hand out the same message. */
+  private readonly inbox = new InboxPuller<MessageView>(
+    {
+      read: (sessionId) => this.readUnread(sessionId),
+      ack: async (sessionId, messageIds) => {
+        await this.sendForInbox(ackMessages(sessionId, messageIds));
+      },
+      render: (messages) => this.renderInbox(messages),
+    },
+    { leaseMs: holdLeaseFromEnv() },
+  );
   private notifyHandler: NotifyHandler | null = null;
   private livenessTimer: ReturnType<typeof setInterval> | null = null;
   private started = false;
@@ -214,6 +222,13 @@ export class MusterDaemon {
       host: this.cfg.identity.host,
       gitBranch: this.cfg.identity.gitBranch,
       project: this.cfg.identity.project,
+      // opencode starts a turn for a push (session.prompt), so the session
+      // takes pushes and wakes by them; without this the roster says
+      // `wake: none` (MUS-89).
+      channelsEnabled: true,
+      // Leave each push unread until this plugin acks it, once opencode has
+      // taken it (MUS-81), so a push opencode fails to take isn't lost.
+      acksPushes: true,
     };
     item.lastActivityAt = now;
     this.sessions.set(sessionId, item);
@@ -345,22 +360,31 @@ export class MusterDaemon {
     return `- [${m.messageId}] ${this.senderLabel(m.fromSessionId)} [response_required=${m.responseRequired ?? false}]: ${m.body}`;
   }
 
-  drainInbox(sessionId: string): Promise<string | null> {
+  /**
+   * Read the unread inbox without acking it. Commit the pull once its text is
+   * in the conversation, or release it if it never gets there, so a message is
+   * never marked read without having been shown.
+   */
+  pullInbox(sessionId: string): Promise<InboxPull | null> {
     if (!this.connected) return Promise.resolve(null);
-
-    // Serialize concurrent drains of the SAME session (see `draining`): each
-    // waits for the prior read→ack to finish, so two pushes can't both read the
-    // same unread set and double-inject the same messages.
-    const prev = this.draining.get(sessionId) ?? Promise.resolve<string | null>(null);
-    const next = prev.catch(() => null).then(() => this.drainInboxInner(sessionId));
-    this.draining.set(sessionId, next);
-    void next.finally(() => {
-      if (this.draining.get(sessionId) === next) this.draining.delete(sessionId);
-    });
-    return next;
+    return this.inbox.pull(sessionId).catch(() => null);
   }
 
-  private async drainInboxInner(sessionId: string): Promise<string | null> {
+  /** Hold a pushed message while opencode takes it; see `InboxPuller.holdPush`. */
+  holdPush(sessionId: string, messageId: string): PushHold | null {
+    return this.inbox.holdPush(sessionId, messageId);
+  }
+
+  /** Pull and commit in one step: the messages are acked before the caller
+   *  shows them. Only the tests use it now. */
+  async drainInbox(sessionId: string): Promise<string | null> {
+    const pull = await this.pullInbox(sessionId);
+    if (!pull) return null;
+    await pull.commit().catch((e: unknown) => this.log(`inbox ack failed (will re-surface next turn): ${String(e)}`));
+    return pull.text;
+  }
+
+  private async readUnread(sessionId: string): Promise<MessageView[] | null> {
     let result: ReadMessagesResult | undefined;
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
@@ -383,17 +407,7 @@ export class MusterDaemon {
       if (result.messages && result.messages.length > 0) break;
       if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 100 * (attempt + 1)));
     }
-    if (!result) return null;
-    if (!result.messages || result.messages.length === 0) return null;
-
-    const block = this.renderInbox(result.messages);
-
-    try {
-      await this.sendForInbox(ackMessages(sessionId, result.messages.map((m) => m.messageId)));
-    } catch (e) {
-      this.log(`inbox ack failed (will re-surface next turn): ${String(e)}`);
-    }
-    return block;
+    return result?.messages?.length ? result.messages : null;
   }
 
   // ── internals ──────────────────────────────────────────────────────────

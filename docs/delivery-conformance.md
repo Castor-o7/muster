@@ -52,9 +52,8 @@ passing, the suite fails until it's taken off the list.
 
 | Cells | Story | What fails |
 |---|---|---|
-| `opencode`, `prime-agent` × 3 | MUS-81 | A pushed message is marked read when the push reaches the plugin's connection. If the harness then loses it, the next turn's inbox drain finds nothing unread, and the message is gone: the push-side twin of MUS-75. Pi acks its own pushes and passes. |
-| `opencode` × 9 | MUS-81 | The plugin drains the inbox after a live push, which acks the mail that waited out the drop without showing it. |
-| `opencode`, `prime-agent` × 10 | MUS-81 | The push is marked read before the harness takes it, so a handover that never resolves loses it. |
+| `prime-agent` × 3 | MUS-81 | A pushed message is marked read when the push reaches the plugin's connection. If the harness then loses it, the next turn's inbox drain finds nothing unread, and the message is gone: the push-side twin of MUS-75. Pi and opencode ack their own pushes and pass. |
+| `prime-agent` × 10 | MUS-81 | The push is marked read before the harness takes it, so a handover that never resolves loses it. |
 | `pi`, `opencode`, `prime-agent` × 6b | MUS-82 | While wakes are paused, the push is skipped and the mail stays unread, but resuming pushes nothing again, so a push session isn't woken until its next turn. |
 | `codex` × 5 | MUS-76 | After a restart without Postgres, an idle Codex session is off the roster until its next hook: the bridge registers a thread only on `thread/started`. |
 
@@ -203,8 +202,8 @@ These are listed so nobody reads the grid as more than it is.
   set `MUSTER_BUN`, and run `npm ci --workspaces=false` in the plugin's
   directory. Without bun the plugin cells read `no bun`, and CI fails them
   (`CONFORMANCE_REQUIRE_BUN`).
-- **Only the pi plugin's own `bun test` suite runs in CI.** opencode's and
-  Prime Agent's don't yet; their conformance drivers do.
+- **Only the pi and opencode plugins' own `bun test` suites run in CI.**
+  Prime Agent's doesn't yet; its conformance driver does.
 - **The fixtures are constructed, not recorded.** The Claude fixtures follow
   Claude Code's documented hook input. The Codex fixtures follow the frames the
   bridge's own tests use, because Codex isn't installed where they were

@@ -60,6 +60,12 @@ export interface SessionItem {
   operator?: string;
   host?: HostInfo;
   project?: string;
+  /** Whether this session takes live pushes. Unset reads as no wake path
+   *  (`wake: none`) on the roster (MUS-89). */
+  channelsEnabled?: boolean;
+  /** Whether this plugin acks each push itself, once opencode has taken it
+   *  (MUS-81). The daemon then leaves a pushed message unread until that ack. */
+  acksPushes?: boolean;
 }
 
 // ── Write commands ───────────────────────────────────────────────────────
@@ -229,11 +235,16 @@ export const NOTIFY_CHANNEL_COMMAND_ID = "NotifyChannel";
 export interface NotifyChannelMeta {
   source?: string;
   kind?: string;
+  /** The pushed message's id, for acking it once it's shown (MUS-81). */
+  message_id?: string;
   from_session?: string;
   from_nickname?: string;
   to_session?: string;
   response_required?: boolean;
+  /** A preview capped by the daemon; see `body_truncated`. */
   body?: string;
+  /** Set when `body` was clipped. The durable message keeps the full body. */
+  body_truncated?: boolean;
   sent_at?: number;
 }
 

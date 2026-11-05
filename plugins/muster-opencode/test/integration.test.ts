@@ -184,20 +184,30 @@ suite("muster-opencode ↔ real muster-daemon", () => {
     expect(aHandle).toContain("-");
     expect(seen.find((meta) => meta.body === "hello from alice")?.from_nickname).toBe(aHandle);
 
-    // A delivered live push marks the durable copy read, preventing a second
-    // delivery when the next user turn drains the inbox.
+    // The session registers with acksPushes (MUS-81), so a delivered push
+    // stays unread until the plugin acks it, once opencode has taken it.
+    const push = seen.find((meta) => meta.body === "hello from alice")!;
+    expect(push.message_id).toBeString();
+    const pull = await daemonB.pullInbox(B);
+    expect(pull?.text).toContain("hello from alice");
+    pull!.release();
+    // Acked, as the push handler does after session.prompt resolves, the next
+    // turn's pull finds nothing.
+    await daemonB.ackMessages(B, [push.message_id!]);
     expect(await daemonB.drainInbox(B)).toBeNull();
   }, 20_000);
 
   test("inbound message pushes a real-time NotifyChannel to the recipient", async () => {
-    const seen: string[] = [];
-    daemonB.onNotify((meta) => {
-      if (meta.body) seen.push(meta.body);
-    });
+    const seen: NotifyChannelMeta[] = [];
+    daemonB.onNotify((meta) => seen.push(meta));
 
     await daemonA.sendMessage(A, B, "ping over the wire");
-    const got = await waitFor(() => seen.some((b) => b.includes("ping over the wire")), 5_000);
+    const got = await waitFor(() => seen.some((m) => m.body?.includes("ping over the wire")), 5_000);
     expect(got).toBe(true);
+    // Ack it, as the push handler would, so it doesn't stay unread for the
+    // tests after this one (MUS-81).
+    const push = seen.find((m) => m.body?.includes("ping over the wire"))!;
+    await daemonB.ackMessages(B, [push.message_id!]);
   }, 20_000);
 
   test("join_room and broadcast round-trip over the wire", async () => {

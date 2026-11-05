@@ -51,10 +51,7 @@ const QUIET_FOR: Duration = Duration::from_secs(4);
 const KNOWN_FAILURES: &[(&str, &str, &str)] = &[
     ("codex", "daemon-restart-mid-wait", "MUS-76"),
     ("pi", "resume-wakes-held-mail", "MUS-82"),
-    ("opencode", "dropped-ack-redelivers", "MUS-81"),
     ("opencode", "resume-wakes-held-mail", "MUS-82"),
-    ("opencode", "mail-waiting-at-reconnect", "MUS-81"),
-    ("opencode", "hung-handover-released", "MUS-81"),
     ("prime-agent", "dropped-ack-redelivers", "MUS-81"),
     ("prime-agent", "resume-wakes-held-mail", "MUS-82"),
     ("prime-agent", "hung-handover-released", "MUS-81"),

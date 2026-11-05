@@ -24,6 +24,8 @@ import type { Event } from "@opencode-ai/sdk";
 
 import { MusterDaemon } from "./daemon.js";
 import { resolveIdentity } from "./identity.js";
+import { pullForTurn } from "./inbox-pull.js";
+import { deliverLivePush } from "./live-push.js";
 
 const DEFAULT_ADDRESS = "ws://localhost:6255";
 
@@ -78,8 +80,10 @@ export const MusterPlugin: Plugin = async (input) => {
   // way Claude Code's channel push does: surface the message and run a turn
   // immediately, rather than waiting for the next user prompt. A toast gives an
   // out-of-band cue; `session.prompt` injects the clean `new message from …`
-  // notification as a turn so the agent processes it now. drainInbox acks the
-  // message, so the chat.message fallback below won't re-deliver it.
+  // notification as a turn so the agent processes it now. The session
+  // registers with acksPushes, so the message stays unread until opencode has
+  // taken the prompt, and only then is it acked (MUS-81). No inbox drain after
+  // the push: it acked other unread mail without showing it (upstream #137).
   daemon.onNotify(async (meta) => {
     const who = meta.from_nickname ?? meta.from_session ?? "a sibling session";
     daemon.recordCommunication(meta.to_session ?? "", meta.from_session);
@@ -89,22 +93,15 @@ export const MusterPlugin: Plugin = async (input) => {
     const sid = meta.to_session;
     if (!sid) return;
     log(`muster: inbound push for session ${sid}`);
-    // NotifyChannel already carries the body. Inject it immediately instead of
-    // racing the daemon's eventually-consistent inbox projection. Drain after
-    // the prompt only to acknowledge the persisted message.
-    const text = meta.body ? `new message from ${who} [response_required=${meta.response_required ?? false}]: ${meta.body}` : await daemon.drainInbox(sid);
-    if (!text) {
-      log(`muster: inbound push for ${sid} had no body and inbox was empty`);
-      return;
-    }
-    log(`muster: auto-advancing ${sid} (${text.length} chars)`);
-    await client.session
-      .prompt({ path: { id: sid }, body: { parts: [{ type: "text", text }] } })
-      .then(async () => {
-        await daemon.drainInbox(sid);
+    await deliverLivePush(meta, who, {
+      inject: async (text) => {
+        log(`muster: auto-advancing ${sid} (${text.length} chars)`);
+        await client.session.prompt({ path: { id: sid }, body: { parts: [{ type: "text", text }] } });
         log(`muster: auto-advanced session ${sid}`);
-      })
-      .catch((e: unknown) => log(`muster: auto-advance prompt failed: ${String(e)}`));
+      },
+      hold: (messageId) => daemon.holdPush(sid, messageId),
+      pull: () => daemon.pullInbox(sid),
+    }).catch((e: unknown) => log(`muster: auto-advance prompt failed: ${String(e)}`));
   });
   daemon.onRosterChanged(() => ui?.invalidate({ surface: "sidebar" }));
   daemon.onConnectionChanged(() => {
@@ -154,24 +151,27 @@ export const MusterPlugin: Plugin = async (input) => {
     },
 
     // Offline fallback: messages that arrived while this session had no live
-    // connection (delivered_live=false) aren't auto-advanced by the push above,
-    // so we drain them on the next user turn and append the clean notification
-    // as a VISIBLE text part. Live messages are already acked by the push
-    // handler, so this only fires for genuinely-missed ones.
+    // connection (delivered_live=false), or whose push opencode failed to
+    // take, aren't auto-advanced by the push above, so we pull them on the
+    // next user turn and append the clean notification as a VISIBLE text
+    // part. A push opencode took is acked or held, so it isn't pulled again.
     "chat.message": async (input, output) => {
       const sid = input.sessionID ?? output.message.sessionID ?? lastActiveSession;
       if (!sid) return;
       daemon.registerSession(sid); // ensure we're on the roster before reading
-      const inbox = await daemon.drainInbox(sid);
-      if (!inbox) return;
+      // Acked only once its text is in this turn; a pull that misses the
+      // deadline is released, so its messages stay unread for the next turn.
+      const pull = await pullForTurn(() => daemon.pullInbox(sid), 2000);
+      if (!pull) return;
       output.parts.push({
         id: `prt_muster_${crypto.randomUUID().replace(/-/g, "").slice(0, 20)}`,
         sessionID: output.message.sessionID,
         messageID: output.message.id,
         type: "text",
-        text: inbox,
+        text: pull.text,
       });
-      log(`muster: delivered ${inbox.length}-char inbox to session ${sid}`);
+      void pull.commit().catch((e: unknown) => log(`muster: inbox ack failed: ${String(e)}`));
+      log(`muster: delivered ${pull.text.length}-char inbox to session ${sid}`);
     },
 
     // Native muster tools. `ctx.sessionID` is the acting session → asSession.
