@@ -342,6 +342,13 @@ Merged and needing a live run: MUS-36 and MUS-37.
 - [ ] **MUS-14: Publish prebuilt binaries.** There are no releases yet, so
   `scripts/install-codex.sh` can't work and the plugins aren't on npm. Done when: macOS and Linux can
   install without a Rust toolchain.
+- [ ] **MUS-91: Keep `windows-cross-check` from timing out.** It hit its 20-minute limit on #110,
+  #113 and #124, and a re-run passed each time. Every time it was the apt step: `mingw-w64` pulls
+  278 MB (the i686 and x86_64 toolchains, C and C++), which normally takes 7 s, but the Azure
+  mirror sent it at about 70 KB/s (a 35 MB package took 5 to 9 minutes). The cache and the build
+  were fine: passing runs take 35 to 109 s, 247 s cold. Done when: the job installs only the x86_64
+  C cross-compiler, the apt step has its own limit so a stalled mirror fails fast and names the
+  step, and `windows-cross-check` passes without a re-run on three PRs in a row.
 - [ ] **MUS-15: One-command setup.** Done when: one command sets up a new machine,
   `muster doctor` reports what's wrong, and launchd and systemd units keep the
   daemon running across reboots. Needs a run: the operator, on a clean machine and
@@ -619,6 +626,13 @@ Rally.
   conformance suite's `pi`, `opencode` and `prime-agent` × `dropped-ack-redelivers` cells show it. Done when: a pushed message
   that the harness didn't take stays unread (the plugin acks after handing it over, or another
   design), and those cells pass.
+  Progress: the daemon half is in (#118, `acks_pushes`). Pi opts in (#123) and passes
+  `dropped-ack-redelivers` and the two new scenarios, `mail-waiting-at-reconnect` and
+  `hung-handover-released`. opencode is done but shelved by the operator's change of priority on
+  2026-11-05 (Claude and Codex first): branch `fix/mus-81-opencode` at `2f746e8`, green then, no PR.
+  It passes all three cells, and also carries MUS-89's fix (opencode sets `channelsEnabled`, so
+  its row reads `wake: channel`, not `none`). It needs main merged in before a PR. Prime Agent is
+  after that.
 - [ ] **MUS-82: Resuming wakes doesn't wake a push session with held mail.** From MUS-69. While
   wakes are paused, the live push is skipped and the mail stays unread. On resume, Claude's waiter
   and the Codex bridge (MUS-74) wake for it, but nothing pushes it again, so a push session (a
@@ -627,6 +641,17 @@ Rally.
   `resume-wakes-held-mail`) show it. A channels-on Claude session likely has the same gap,
   but no conformance fake models one yet. Done when: unread direct mail held by a pause is pushed
   when wakes resume, and those cells pass.
+- [ ] **MUS-88: Tests pick ports without races.** From MUS-69 and an e2e run on Murph. Two
+  causes. First, the conformance suite and the daemon's e2e tests (9 files) pick a free port by
+  binding port 0, reading the port and closing the socket, then hand the number to a daemon that
+  binds it later; in between, another process can take it. The suite hit that once on 2026-11-05
+  (`claude-tls` × `duplicate-shown-at-most-once`: the daemon's hook listener got "Address already
+  in use" and the daemon didn't come up), and it passed on rerun. Second, the gate and links e2e
+  scripts (`scripts/test-gate-e2e.sh`, `scripts/test-links-e2e.sh`) use fixed ports, 16255 to
+  16758, so two runs on one host collide, as peppy-skate's did on Murph the same night. Done when:
+  a test's daemon binds its own ports (port 0) and reports them, or the tests retry a bind that
+  loses the race; the e2e scripts take free ports per run, so two can run at once on one host;
+  and no test fails on a port another process took.
 - [ ] **MUS-90: Push plugins aren't woken after a restart with Postgres.** From MUS-76. In CI,
   `pi`, `opencode` and `prime-agent` × `daemon-restart-mid-wait-pg` fail ("not woken after the
   restart; got None", about 26 s each), while the in-memory restart cell passes for all three.
