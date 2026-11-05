@@ -69,6 +69,13 @@ Merged and needing a live run: MUS-36 and MUS-37.
   declared with `MUSTER_IDENTITY`; `MUSTER_IDENTITY=none` opts out. A Codex row still on the
   roster never counts as dead until MUS-77 (`CODEX_PRESENT_ROWS_CAN_BE_DEAD`). The plugins
   don't report a harness yet.
+  Merged in #131 (88ab365); open, checked against its done-when on 2026-11-05. Keeping a
+  nickname through a restart is shown by `identity_succession.rs` and the conformance cell
+  `restart-keeps-identity` for `claude` and `codex`, but `claude-tls` × `restart-keeps-identity`
+  is on `FLAKY` under MUS-93. Reaching the watchman by role is done: `resolve_succeeded` in
+  `send_message.rs` sends to the one session claiming a role, shown by `send_message_command.rs`'s
+  `a_role_claimed_by_one_session_reaches_it`, and refuses a role two sessions claim
+  (`a_role_claimed_by_two_sessions_is_refused`). Still to do: MUS-93, for `claude-tls`.
 - [x] **MUS-4: Show dead watchers.** Done when: the roster distinguishes a
   session that can be woken from one that can't.
   Verified live 2026-11-04 by gentle-pulsar against Murph's `e797fa3`: `muster-shim roster` showed
@@ -157,12 +164,15 @@ Merged and needing a live run: MUS-36 and MUS-37.
   the daemon's `[identity]` and `[hook]` lines and its warnings, with succession at debug, and
   `CONFORMANCE_DAEMON_LOG=1` prints them for a passing cell. Still to do: the cause, from the
   first CI run that fails with that log.
-- [ ] **MUS-47: Hand unread mail to a successor.** From MUS-31. Retained mail reaches
+- [x] **MUS-47: Hand unread mail to a successor.** From MUS-31. Retained mail reaches
   nobody without this. Depends on MUS-3. Done when: a session taking over an identity
   receives its predecessor's unread mail, shown by a test.
   Built on MUS-3; not yet run live. At a takeover the predecessor's unread direct mail is
   readdressed to the successor and listed on the `Succession` record. The conformance cell
   `unread-mail-follows-a-restart` (claude, claude-tls, codex) shows it once and not again.
+  Done in #134 (081e389): shown by `identity_succession.rs`'s
+  `unread_mail_is_handed_to_the_successor` and that cell for `claude` and `codex`. Its
+  `claude-tls` cell is on `FLAKY` under MUS-93, a missed takeover rather than lost mail.
 - [x] **MUS-48: Tell a sender about mail unread at reap.** From MUS-31. Done when: a
   sender can see that a message went unread when its recipient was reaped.
 - [x] **MUS-49: Report what a restart will remove.** From MUS-31: one restart is now
@@ -205,6 +215,8 @@ Merged and needing a live run: MUS-36 and MUS-37.
   approval with a valid signed token is accepted for exactly its action; a forged, expired,
   reused or mismatched one is refused; and a session on the operator's account can't produce a
   valid one. Each is shown by a test.
+  Design, with options for the operator: [operator-approvals.md](operator-approvals.md)
+  (sienna-mullet, 2026-11-05). MUS-51 builds on it.
 - [x] **MUS-7: Protect the local ports.** The first step of MUS-39. 6256 and 6257 have no
   authentication, and the hook listener doesn't check `Origin`, so any process on the daemon's
   host, or a web page in its browser, can reach them. Done when: a test shows a cross-origin web
@@ -399,6 +411,10 @@ Merged and needing a live run: MUS-36 and MUS-37.
   `muster doctor` reports what's wrong, and launchd and systemd units keep the
   daemon running across reboots. Needs a run: the operator, on a clean machine and
   through a reboot.
+  Progress 2026-11-05 (sienna-mullet): `muster-shim doctor` checks the binary on `PATH`, the
+  credential, a handshake with the daemon, and Claude Code's MCP server and five hooks
+  against `plugins/muster-shim/hooks/hooks.json`. It also flags leftover Marshal wiring.
+  Still to do: the one setup command, and the launchd and systemd units.
 - [ ] **MUS-16: Support addresses beyond one LAN IP.** Done when: a paired laptop
   stays connected when it moves between home and a Tailscale or WireGuard network. Needs a run: the operator, who
   has the laptop.
@@ -475,7 +491,7 @@ Merged and needing a live run: MUS-36 and MUS-37.
   watchman saw its process gone before 10:31) stayed on the roster unbound for over ten minutes
   and was then reaped under `KEPT_STALE_AFTER`, where `c3dbd45` deleted such rows after 60 s.
   Delivery into that window is shown by the e2e test in `74d35ed`.
-- [ ] **MUS-55: Make a daemon restart one command.** Requested by the operator on 2026-11-03.
+- [x] **MUS-55: Make a daemon restart one command.** Requested by the operator on 2026-11-03.
   A restart already disrupts little: in the last three, sessions were back on the roster within
   about 2 s and no wake misfired. The cost is the operator's and the daemon-holder's time: about
   20 to 30 minutes of manual steps each rollout (build and e2e, count mail at risk, back up
@@ -523,12 +539,17 @@ Rally.
   restart. Done when: no machine's config names 6257 (a1's and Murph's `.mcp.json`, the TUI,
   the TS plugins), and the alias, its variable and its rollout check are removed. The upstream
   Gate PR ships without it.
-- [ ] **MUS-80: Give the unregistered refusal a stable code.** From the watchman's review of
+- [x] **MUS-80: Give the unregistered refusal a stable code.** From the watchman's review of
   MUS-79: the shim retries a write refused as unregistered by matching the daemon's text ("has
   no session on the roster"), so a change of wording would quietly stop the retry. Done when:
   `resolve_caller`'s refusal carries a stable code or data field, the shim matches that rather
   than the text, and a test pins both ends to the same value.
-- [ ] **MUS-83: Say when the local token is refused.** Found in the MUS-66 run: a shim without
+  Done in #115 (d17448f). The daemon's refusal starts with `UNREGISTERED_CODE` (`[unregistered]`,
+  in `muster-entities`), and the shim matches it with the same crate's `is_unregistered_refusal`.
+  `send_message_command.rs`'s `an_unbound_caller_is_refused_with_the_stable_code` pins the
+  daemon's end, and `tools.rs`'s tests pin the shim's. The shim also accepts the old text from a
+  daemon built before MUS-80 (`LEGACY_UNREGISTERED_TEXT`), to be removed once none runs.
+- [x] **MUS-83: Say when the local token is refused.** Found in the MUS-66 run: a shim without
   the daemon's local token was rejected at the gate ("missing or wrong local token"), but the
   tool call only reported "command timed out after 10000 ms (daemon unresponsive?)". Done
   when: a shim whose connection is refused for its token says so, and names the token file,
@@ -537,6 +558,8 @@ Rally.
   recorded with the file it came from (the local token, or the pairing), and writes fail at once
   with that reason instead of waiting out the timeout. Covered by `crates/shim/tests/token_refused.rs`.
   Still needs a live run once a session runs the rebuilt shim.
+  Done in #117 (ff2252a): `token_refused.rs` covers a wrong and a missing local token, each
+  reported with its file within 5 s, not as a timeout. The live run isn't part of the done-when.
 - [x] **MUS-84: Keep `unpair` from revoking a machine and a link together.** Found by
   tangerine-wombat cleaning up after the MUS-66 run: on Murph, `unpair a1` removes both a1's
   machine pairing (which every a1 session uses) and the link token `link:a1`, and `unlink a1`
