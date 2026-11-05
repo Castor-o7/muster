@@ -178,6 +178,10 @@ Merged and needing a live run: MUS-36 and MUS-37.
   broadcast reached 4 of 14 members, each miss failing as "session vanished from roster
   mid-broadcast". Done when: a session that leaves the roster leaves its rooms too, a
   broadcast counts only live members, and a test covers a session reaped during a broadcast.
+  Merged in #126 (`4f2e9fa`). The sweeper drops a member whose session has left the roster,
+  and starts only once myko has replayed Postgres. `BroadcastMessage` counts only members still
+  on the roster, shown by `a_session_off_the_roster_leaves_its_rooms` in `cleanup.rs` and by
+  `broadcast_message_command.rs`. Not yet seen live. #133 pins the restart order in CI.
 
 ## Phase 2: Security
 
@@ -627,6 +631,9 @@ Rally.
   paused Codex session is still woken. Done when: the bridge doesn't wake while wakes are paused,
   mail still arrives at the next hook, and the conformance suite's `codex` ×
   `operator-pause-stops-wakes` cell passes.
+  Merged in #100 (`7e75534`). The bridge watches the daemon's `WakePause` and starts no turn while
+  wakes are paused. The `codex` × `operator-pause-stops-wakes` cell passes in CI. Not yet seen
+  live: it needs a paused daemon with a Codex session idle on it.
 - [x] **MUS-75: Mail is lost when a prompt hook's reply doesn't arrive.** From MUS-69. The hook
   listener marks prompt-hook mail read once it has flushed the reply (`deferred_ack`). If the reply
   is then lost, the mail is gone. That can happen when the harness kills the hook at its timeout
