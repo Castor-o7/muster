@@ -90,13 +90,44 @@ describe("deliverLivePush", () => {
     expect(session.acked).toEqual(["m1"]);
   });
 
-  test("a push a pull already holds is shown but left for the pull to ack", async () => {
+  // The race: with acksPushes the message stays unread after its push, so a
+  // turn-start pull can read it before the push lands. That turn shows it;
+  // the push mustn't show it a second time.
+  test("a push a pull already holds isn't shown again, and the pull acks it", async () => {
     const session = fakeSession(["m1"]);
     const pull = await session.puller.pull("s");
+    expect(pull?.text).toBe("m1");
     await deliverLivePush(push("m1"), "alice", session.target);
-    expect(session.injected.length).toBe(1);
+    expect(session.injected).toEqual([]);
     expect(session.acked).toEqual([]);
     await pull!.commit();
+    expect(session.acked).toEqual(["m1"]);
+  });
+
+  test("a push skipped for a pull that's then released is shown by the next pull", async () => {
+    const session = fakeSession(["m1"]);
+    const late = await session.puller.pull("s");
+    await deliverLivePush(push("m1"), "alice", session.target);
+    late!.release();
+    expect(session.injected).toEqual([]);
+    expect((await session.puller.pull("s"))?.text).toBe("m1");
+  });
+
+  test("a pull that starts while the push is held, then a push for it, shows it once", async () => {
+    // Turn-start pull and push racing in the other order: the push holds
+    // first, so the pull skips it and the push shows it.
+    const session = fakeSession(["m1"]);
+    let take!: () => void;
+    const taking = new Promise<void>((resolve) => { take = resolve; });
+    session.target.inject = async (content) => {
+      await taking;
+      session.injected.push(content);
+    };
+    const delivering = deliverLivePush(push("m1"), "alice", session.target);
+    expect(await session.puller.pull("s")).toBeNull();
+    take();
+    await delivering;
+    expect(session.injected.length).toBe(1);
     expect(session.acked).toEqual(["m1"]);
   });
 

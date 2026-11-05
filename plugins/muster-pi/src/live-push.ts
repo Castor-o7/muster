@@ -9,7 +9,7 @@ export interface LivePushTarget {
   /** Hand `content` to pi as a steer message. Resolves once pi has taken it. */
   inject(content: string): Promise<void> | void;
   /** Hold the pushed message while pi takes it, so a pull doesn't also show
-   *  it. Null when a pull already holds it. */
+   *  it. Null when a pull already holds it, and then the push isn't shown. */
   hold(messageId: string): PushHold | null;
   /** Read this session's unread direct messages, unacked. */
   pull(): Promise<InboxPull | null>;
@@ -35,6 +35,10 @@ export async function deliverLivePush(meta: NotifyChannelMeta, who: string, targ
     // so the daemon leaves this message unread until we ack it, once pi has
     // taken it. If pi throws, it stays unread for the next turn's pull.
     const hold = meta.message_id ? target.hold(meta.message_id) : null;
+    // No hold means a pull already holds it, for the turn that's starting:
+    // that turn shows it, so don't show it twice. If that pull is released
+    // unshown, the next pull shows it.
+    if (meta.message_id && !hold) return;
     try {
       await target.inject(text);
     } catch (e) {
