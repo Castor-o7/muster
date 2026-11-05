@@ -64,10 +64,12 @@ every 30 seconds for each thread it registered. The daemon keeps a `WakeWatcher`
 for each, as it does for a held wait, and the roster says `waiting` and a send
 says `wake: expected`. The bridge posts `"watching": false` when a thread closes,
 when it stops leading, when wakes are paused, when it loses the app-server, and
-when it exits. It keeps its registered threads through an app-server outage, so
-it can register them again (MUS-76), but watches none of them until the
-app-server is back; then a thread the reconnect's `thread/list` doesn't name,
-because it closed during the outage, is dropped. If a request is lost, the
+when it exits. A thread leaves its registered threads only on `thread/closed`, so
+they're kept through an app-server outage and can be registered again
+(MUS-76), but it watches none of them until the app-server is back. Then a
+thread the reconnect's `thread/list` doesn't show as loaded, because it closed
+during the outage or the app-server unloaded it, stays registered but isn't
+watched, until it registers again or `thread/started` brings it back. If a request is lost, the
 daemon's record runs out within two minutes. The daemon keeps no record for a session that isn't on the roster, or
 while wakes are paused.
 

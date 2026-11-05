@@ -1261,8 +1261,8 @@ pub async fn run(args: &[String]) -> Result<()> {
         // Tell the daemon which threads this bridge can wake, so the roster and a sender see
         // the wake path (MUS-77): only while the app-server is up, the bridge leads, and wakes
         // aren't paused.
-        let can_wake: HashSet<String> = if leading && !paused && registered.app_server_up() {
-            registered.lock().unwrap().keys().cloned().collect()
+        let can_wake: HashSet<String> = if leading && !paused {
+            registered.wakeable_sessions()
         } else {
             HashSet::new()
         };
@@ -1623,14 +1623,18 @@ struct ThreadRegistration {
 /// app-server is up, tells the daemon it can wake them (MUS-77).
 type RegisteredThreads = Arc<Registered>;
 
-/// [`RegisteredThreads`]' contents. The threads are kept across an app-server
-/// outage, so they can be registered again when it's back; `app_server_up` says
-/// whether they can be woken now. A thread that closed during the outage is
-/// dropped when the reconnect's `thread/list` doesn't list it.
+/// [`RegisteredThreads`]' contents. A thread leaves only on `thread/closed`, so
+/// it's kept across an app-server outage and can be registered again when it's
+/// back (MUS-76). `app_server_up` says whether any can be woken now. A thread
+/// the reconnect's `thread/list` doesn't show as loaded (it closed during the
+/// outage, or the app-server unloaded it) stays registered but isn't watched
+/// (MUS-77) until it's registered again or `thread/started` brings it back.
 #[derive(Default)]
 struct Registered {
     threads: std::sync::Mutex<HashMap<String, ThreadRegistration>>,
     app_server_up: std::sync::atomic::AtomicBool,
+    /// Thread ids not shown as loaded by the last reconnect's `thread/list`.
+    not_loaded: std::sync::Mutex<HashSet<String>>,
 }
 
 impl Registered {
@@ -1648,12 +1652,44 @@ impl Registered {
     fn app_server_up(&self) -> bool {
         self.app_server_up.load(std::sync::atomic::Ordering::SeqCst)
     }
-}
 
-/// After a reconnect's `thread/list`: keep only the threads it listed. One that
-/// closed while the app-server was out of reach never sent `thread/closed`.
-fn keep_listed(registered: &mut HashMap<String, ThreadRegistration>, listed: &HashSet<String>) {
-    registered.retain(|_, registration| listed.contains(&registration.thread_id));
+    /// Record a registration; its thread is loaded, since it just registered.
+    fn insert(&self, registration: ThreadRegistration) {
+        self.not_loaded
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&registration.thread_id);
+        self.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(registration.session_id.clone(), registration);
+    }
+
+    /// After a reconnect's `thread/list`: note which registered threads it didn't show as
+    /// loaded. They stay registered; only watching skips them.
+    fn mark_listed(&self, listed: &HashSet<String>) {
+        let unlisted: HashSet<String> = self
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .map(|registration| registration.thread_id.clone())
+            .filter(|thread| !listed.contains(thread))
+            .collect();
+        *self.not_loaded.lock().unwrap_or_else(|e| e.into_inner()) = unlisted;
+    }
+
+    /// The sessions this bridge can wake now (MUS-77): registered, loaded, and the app-server up.
+    fn wakeable_sessions(&self) -> HashSet<String> {
+        if !self.app_server_up() {
+            return HashSet::new();
+        }
+        let not_loaded = self.not_loaded.lock().unwrap_or_else(|e| e.into_inner());
+        self.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .filter(|registration| !not_loaded.contains(&registration.thread_id))
+            .map(|registration| registration.session_id.clone())
+            .collect()
+    }
 }
 
 /// Registered threads whose session isn't on the roster, and that weren't
@@ -1844,7 +1880,7 @@ where
         ready_file.take();
     } else {
         match snapshot_loaded_threads(websocket, pending, &mut request_id).await {
-            Ok(listed) => keep_listed(&mut registered.lock().unwrap(), &listed),
+            Ok(listed) => registered.mark_listed(&listed),
             // Thread discovery is an optimization over the authoritative lifecycle
             // notifications. Keep the subscription alive against older app-server
             // versions that do not implement thread/list or thread/read.
@@ -1865,10 +1901,7 @@ where
             )
             .await
             {
-                registered
-                    .lock()
-                    .unwrap()
-                    .insert(registration.session_id.clone(), registration);
+                registered.insert(registration);
             }
         }
     }
@@ -1915,10 +1948,7 @@ where
                     )
                     .await
                     {
-                        registered
-                            .lock()
-                            .unwrap()
-                            .insert(registration.session_id.clone(), registration);
+                        registered.insert(registration);
                     }
                 } else if let Some(thread_id) = closed_thread_id(&message) {
                     pending.retain(|_, registration| registration.thread_id != thread_id);
@@ -1984,10 +2014,7 @@ where
                     )
                     .await
                     {
-                        registered
-                            .lock()
-                            .unwrap()
-                            .insert(registration.session_id.clone(), registration);
+                        registered.insert(registration);
                     }
                 }
                 if let Some(thread_id) = selected
@@ -3588,7 +3615,7 @@ mod tests {
     }
 
     #[test]
-    fn a_thread_that_closed_during_an_outage_is_dropped_at_the_reconnect() {
+    fn a_thread_the_reconnect_doesnt_list_stays_registered_but_isnt_watched() {
         let registration = |thread: &str, session: &str| ThreadRegistration {
             thread_id: thread.to_string(),
             session_id: session.to_string(),
@@ -3596,23 +3623,27 @@ mod tests {
             name: None,
         };
         let registered = Registered::default();
-        registered
-            .lock()
-            .unwrap()
-            .insert("s-kept".into(), registration("t-kept", "s-kept"));
-        registered
-            .lock()
-            .unwrap()
-            .insert("s-closed".into(), registration("t-closed", "s-closed"));
-        // Kept through the outage, but not wakeable then.
-        registered.set_app_server_up(false);
-        assert!(!registered.app_server_up());
+        registered.insert(registration("t-loaded", "s-loaded"));
+        registered.insert(registration("t-unlisted", "s-unlisted"));
+        // During the outage both stay registered, and none is wakeable.
+        assert!(registered.wakeable_sessions().is_empty());
         assert_eq!(registered.lock().unwrap().len(), 2);
-        // The reconnect's thread/list names only the thread still loaded.
-        keep_listed(&mut registered.lock().unwrap(), &set(&["t-kept"]));
+        // The reconnect's thread/list shows only one as loaded: the other stays
+        // registered (MUS-76 can still register it again) but isn't watched.
         registered.set_app_server_up(true);
-        let left: Vec<String> = registered.lock().unwrap().keys().cloned().collect();
-        assert_eq!(left, vec!["s-kept".to_string()]);
+        registered.mark_listed(&set(&["t-loaded"]));
+        assert_eq!(registered.lock().unwrap().len(), 2);
+        assert_eq!(registered.wakeable_sessions(), set(&["s-loaded"]));
+        // Registered again, or started again, it's loaded and watched.
+        registered.insert(registration("t-unlisted", "s-unlisted"));
+        assert_eq!(
+            registered.wakeable_sessions(),
+            set(&["s-loaded", "s-unlisted"])
+        );
+        // The app-server goes: nothing is wakeable, and nothing is dropped.
+        registered.set_app_server_up(false);
+        assert!(registered.wakeable_sessions().is_empty());
+        assert_eq!(registered.lock().unwrap().len(), 2);
     }
 
     #[tokio::test]
