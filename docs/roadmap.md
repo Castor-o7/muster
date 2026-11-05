@@ -131,6 +131,18 @@ Merged and needing a live run: MUS-36 and MUS-37.
   cascading delete, which loses mail sooner. Done when: tests show a restart after a
   reap removes no message under 14 days old, and a session returning under its old
   id doesn't get read mail again (`MessageRead` also belongs to `Session`).
+- [x] **MUS-92: A quick restart can miss its takeover.** From MUS-3, found by #134's CI on
+  2026-11-05 (`claude` × `restart-keeps-identity` failed on GitHub's runner, passed 8 of 8 on
+  Murph). The late re-check was recorded only when the predecessor already read as pending at the
+  new session's registration. On a slower machine its MCP client was still connected then, so it
+  read as live, no re-check was recorded, and the new session kept a fresh nickname for good. The
+  same can happen when a new Claude starts before the old one's socket closes. Debug logs from the
+  passing runs showed the pending path; `crates/daemon/tests/identity_settle.rs` reproduces the
+  failing one deterministically. Done when: a predecessor that's live only because its client or
+  waiter hasn't closed yet is re-checked for a settle window from the new session's registration
+  (`MUSTER_SUCCESSION_SETTLE_SECS`, 60 s), and taken over if it turns dead by the usual rules
+  within it, while a sibling that stays live past it keeps its name. Shown by `identity_settle.rs`
+  (both sides) in #134.
 - [ ] **MUS-47: Hand unread mail to a successor.** From MUS-31. Retained mail reaches
   nobody without this. Depends on MUS-3. Done when: a session taking over an identity
   receives its predecessor's unread mail, shown by a test.

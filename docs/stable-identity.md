@@ -48,6 +48,13 @@ on every sweep. Once the predecessor counts as dead:
 - its next prompt or tool hook says `Your Muster nickname is now …`, because
   the session block it printed at start named the fresh one.
 
+A predecessor that still looks live only because its client hasn't closed
+yet, or its waiter's record hasn't ended, is checked again too, but only for
+60 seconds from the new session's registration (`MUSTER_SUCCESSION_SETTLE_SECS`,
+MUS-92). That catches a new session that starts before the old one's socket
+has closed. It still has to turn dead by the rules above. A sibling that's
+still live after 60 seconds keeps its name.
+
 ## What a takeover does
 
 In one step, the daemon:

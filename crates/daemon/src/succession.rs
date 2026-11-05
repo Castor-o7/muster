@@ -71,6 +71,10 @@ pub struct Config {
     pub window_ms: i64,
     /// How long a nickname given up in a late swap still reaches its session.
     pub alias_ms: i64,
+    /// How long after registering a session is checked again when its
+    /// predecessor still looked live then, only because its client was still
+    /// connected or its waiter still registered (MUS-92).
+    pub settle_ms: i64,
 }
 
 impl Config {
@@ -88,6 +92,7 @@ impl Config {
             quiet_ms: secs("MUSTER_SUCCESSION_QUIET_SECS", 600),
             window_ms: secs("MUSTER_SUCCESSION_WINDOW_SECS", 600),
             alias_ms: secs("MUSTER_SUCCESSION_ALIAS_SECS", 600),
+            settle_ms: secs("MUSTER_SUCCESSION_SETTLE_SECS", 60),
         }
     }
 }
@@ -229,8 +234,8 @@ struct Observed {
     client_gone_at: HashMap<Arc<str>, i64>,
     known_rows: HashSet<Arc<str>>,
     removed_at: HashMap<Arc<str>, i64>,
-    /// Sessions named while a predecessor was pending, and that predecessor.
-    pending: HashMap<Arc<str>, Arc<str>>,
+    /// Sessions to check again for a late takeover, and until when (ms).
+    pending: HashMap<Arc<str>, i64>,
 }
 
 static OBSERVED: LazyLock<Mutex<Observed>> = LazyLock::new(Default::default);
@@ -327,7 +332,12 @@ fn find_predecessor(
     let o = OBSERVED.lock().unwrap_or_else(|e| e.into_inner());
 
     let mut dead: Vec<(i64, Found)> = Vec::new();
-    let mut pending: Option<Arc<str>> = None;
+    // Until when to check this session again, if a predecessor may yet die.
+    let mut check_until: Option<i64> = None;
+    // A live holder of the role: no takeover now, whatever else is dead.
+    let mut role_held = false;
+    let mut check_again =
+        |until: i64| check_until = Some(check_until.map_or(until, |u| u.max(until)));
     for ident in identities
         .iter()
         .filter(|i| i.key == key && i.id.0.as_ref() != me && i.assigned_at <= before)
@@ -340,7 +350,8 @@ fn find_predecessor(
             .iter()
             .find(|s| s.id.0.as_ref() == id)
             .map(|s| &**s);
-        let v = verdict(&facts_for(&o, id, row, &watching), now, cfg);
+        let facts = facts_for(&o, id, row, &watching);
+        let v = verdict(&facts, now, cfg);
         log::debug!("[identity] {me}: predecessor {id} is {v:?}");
         match v {
             Verdict::Dead(reason) => dead.push((
@@ -353,22 +364,48 @@ fn find_predecessor(
             )),
             Verdict::Pending(why) => {
                 log::info!("[identity] {me} may take over from {id} later: {why}");
-                pending = Some(ident.id.0.clone());
+                check_again(before + cfg.window_ms);
             }
             Verdict::Live(why) => {
+                // MUS-92: live only because its client hasn't closed yet, or
+                // its waiter's record hasn't ended, as when a new session
+                // starts before the old one's socket closes. Check again for a
+                // short while, so a restart that races its own exit still
+                // takes over. A sibling that stays live past it keeps its name.
+                if facts.client_live || facts.waiting {
+                    log::info!(
+                        "[identity] {me} may take over from {id} if it ends within {}s: {why}",
+                        cfg.settle_ms / 1000
+                    );
+                    check_again(before + cfg.settle_ms);
+                }
                 if role {
                     log::info!("[identity] {me} won't take role {key} over: {id} holds it ({why})");
-                    return Ok(None);
+                    role_held = true;
+                    break;
                 }
             }
         }
     }
+    // Release the observations before recording a check, which takes them too.
     drop(o);
-    if let Some(p) = pending {
-        let mut o = OBSERVED.lock().unwrap_or_else(|e| e.into_inner());
-        o.pending.insert(session.id.0.clone(), p);
+    if role_held {
+        record_check(session, check_until);
+        return Ok(None);
     }
-    Ok(dead.into_iter().max_by_key(|(at, _)| *at).map(|(_, f)| f))
+    let found = dead.into_iter().max_by_key(|(at, _)| *at).map(|(_, f)| f);
+    if found.is_none() {
+        record_check(session, check_until);
+    }
+    Ok(found)
+}
+
+/// Note that `session` is to be checked again until `until`, if at all.
+fn record_check(session: &Session, until: Option<i64>) {
+    if let Some(until) = until {
+        let mut o = OBSERVED.lock().unwrap_or_else(|e| e.into_inner());
+        o.pending.insert(session.id.0.clone(), until);
+    }
 }
 
 /// Give `successor` the predecessor's nickname: re-key it, retire the
@@ -568,11 +605,11 @@ pub fn record_identity(
 /// within the swap window.
 pub fn recheck_pending(ctx: &CommandContext, now: i64) {
     let cfg = Config::from_env();
-    let pending: Vec<(Arc<str>, Arc<str>)> = {
+    let pending: Vec<(Arc<str>, i64)> = {
         let o = OBSERVED.lock().unwrap_or_else(|e| e.into_inner());
         o.pending
             .iter()
-            .map(|(a, b)| (a.clone(), b.clone()))
+            .map(|(a, until)| (a.clone(), *until))
             .collect()
     };
     if pending.is_empty() {
@@ -586,7 +623,7 @@ pub fn recheck_pending(ctx: &CommandContext, now: i64) {
     ) else {
         return;
     };
-    for (successor, _pred) in pending {
+    for (successor, until) in pending {
         let done = |o: &mut Observed| {
             o.pending.remove(&successor);
         };
@@ -596,14 +633,15 @@ pub fn recheck_pending(ctx: &CommandContext, now: i64) {
             done(&mut OBSERVED.lock().unwrap_or_else(|e| e.into_inner()));
             continue;
         };
-        if now - ident.assigned_at > cfg.window_ms {
+        if now > until || now - ident.assigned_at > cfg.window_ms {
             done(&mut OBSERVED.lock().unwrap_or_else(|e| e.into_inner()));
             continue;
         }
         let Some(fresh) = nicknames.iter().find(|n| n.id.0 == successor) else {
             continue;
         };
-        // Recorded again if the predecessor is still pending.
+        // Recorded again, with the same deadline (it's measured from when the
+        // session registered), if a predecessor may still die.
         done(&mut OBSERVED.lock().unwrap_or_else(|e| e.into_inner()));
         let found = match find_predecessor(
             ctx,
@@ -671,6 +709,7 @@ mod tests {
             quiet_ms: 600_000,
             window_ms: 600_000,
             alias_ms: 600_000,
+            settle_ms: 60_000,
         }
     }
 
