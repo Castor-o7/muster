@@ -2098,7 +2098,8 @@ const OPENCODE_NOT_APPLICABLE: &[(&str, &str)] = &[
     PUSH_PLUGIN_NOT_APPLICABLE[0],
     PUSH_PLUGIN_NOT_APPLICABLE[1],
     PUSH_PLUGIN_NOT_APPLICABLE[2],
-    PUSH_PLUGIN_NOT_APPLICABLE[4],
+    PUSH_PLUGIN_NOT_APPLICABLE[3],
+    PUSH_PLUGIN_NOT_APPLICABLE[5],
     (
         "wake-none-not-expected",
         "it wakes by the live push; its roster row says none only because the plugin doesn't \
