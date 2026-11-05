@@ -70,6 +70,13 @@ muster-daemon &
 # or under your favorite supervisor (systemd user unit, launchd, tmux pane, ...)
 ```
 
+To keep it running across reboots, `muster-daemon service` prints the systemd user unit
+(Linux) or launchd agent (macOS) for the installed binary. Add `--tls` for a gated daemon.
+`--apply` writes the unit and prints the command to start it, and never starts anything
+itself. It refuses to replace a different unit that's already there, since that one may
+hold settings of its own such as `MYKO_POSTGRES_URL`. With `--force` it replaces it, after
+saving the old file next to it.
+
 To stop it, send SIGTERM (what `systemctl stop` and `restart` do) or press Ctrl-C. Held waits end with an empty reply marked as a restart, so each session's waiter backs off quietly and reconnects when the daemon is back.
 
 To roll a commit on main out to a systemd-managed daemon, use `scripts/rollout.sh`.

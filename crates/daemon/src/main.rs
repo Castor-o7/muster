@@ -13,6 +13,7 @@ use myko_server::postgres::PostgresConfig;
 use myko_server::{BlackholePersister, MykoServer};
 use std::{
     net::{SocketAddr, ToSocketAddrs},
+    path::PathBuf,
     sync::Arc,
 };
 
@@ -48,7 +49,84 @@ usage:
   muster-daemon pause | resume        stop or restart message wake-ups
   muster-daemon allow MACHINE         let only listed machines send (and this host)
   muster-daemon disallow MACHINE      take a machine off that list
-  muster-daemon senders [--clear]     show the list, or remove it so any machine may send";
+  muster-daemon senders [--clear]     show the list, or remove it so any machine may send
+  muster-daemon service [--tls] [--apply [--force]]
+                                      show the systemd or launchd unit that keeps this
+                                      daemon running across reboots; --apply writes it
+                                      (--force replaces a different one, backed up first).
+                                      It never starts or restarts anything";
+
+/// `muster-daemon service` (MUS-15). See `daemon::service`.
+fn service(args: &[String]) -> Result<()> {
+    use daemon::service::{self, Applied, Kind};
+    let (mut tls, mut apply, mut force) = (false, false, false);
+    for a in args {
+        match a.as_str() {
+            "--tls" => tls = true,
+            "--apply" => apply = true,
+            "--force" => force = true,
+            _ => anyhow::bail!("{USAGE}"),
+        }
+    }
+    if force && !apply {
+        anyhow::bail!("--force only makes sense with --apply");
+    }
+    let kind = Kind::for_this_os()
+        .context("units are written for Linux (systemd) and macOS (launchd) only")?;
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .context("HOME isn't set")?;
+    let exe = std::env::current_exe()
+        .and_then(std::fs::canonicalize)
+        .context("finding this binary")?;
+    if exe.components().any(|c| c.as_os_str() == "target") {
+        eprintln!(
+            "note: {} looks like a build directory; a unit should run an installed binary \
+             (`cargo install --path crates/daemon`, then run that one's `service`)",
+            exe.display()
+        );
+    }
+    let path = kind.path(&home);
+    let text = service::render(kind, &exe, tls, &home.join("Library/Logs"));
+    if !apply {
+        println!(
+            "# {} (dry run: nothing written; add --apply to write it)\n",
+            path.display()
+        );
+        print!("{text}");
+        println!("\n# then start it:");
+        for c in kind.start_commands(&path) {
+            println!("#   {c}");
+        }
+        return Ok(());
+    }
+    let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
+    match service::apply(&path, &text, force, &stamp)? {
+        Applied::Unchanged => println!("{} is already this unit; nothing written", path.display()),
+        Applied::Written => {
+            println!(
+                "wrote {}. Nothing was started. To start it:",
+                path.display()
+            );
+            for c in kind.start_commands(&path) {
+                println!("  {c}");
+            }
+        }
+        Applied::Replaced { backup } => {
+            println!(
+                "replaced {} (the old one is at {}). Nothing was restarted. A running daemon \
+                 keeps its old settings until it's restarted, which needs the operator's own \
+                 word:",
+                path.display(),
+                backup.display()
+            );
+            for c in kind.restart_commands(&path) {
+                println!("  {c}");
+            }
+        }
+    }
+    Ok(())
+}
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -77,6 +155,7 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
+        Some("service") => service(&args[1..]),
         Some("pairs") if args.len() == 1 => {
             let dir = daemon::credentials::state_dir()?;
             let names = daemon::credentials::token_names(&dir)?;
