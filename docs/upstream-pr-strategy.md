@@ -79,14 +79,20 @@ with vendored code counted separately:
 | 4 | `port/other-v3` | `5717e22` | 9 | +1126 −26 in 11 files | 20 |
 | 5 | `port/gate-v2` | `a5de77c` | 2 | +5815 −102 in 45 files, plus about 12,200 lines of vendored myko-server 6.11.5 (`91e57fc`, only the `RequestFilter` diff) | 1297 |
 
+**Changed on 2026-11-05:** live communication goes first, so layer 2 is now
+`port/hooks-2a`, straight on upstream main, ahead of inbox quoting, with the
+hooks on by default. It's being finished by peppy-skate, and its size is given
+in [upstream-pr-2a.md](upstream-pr-2a.md) once its head is settled. The layers
+above it are rebased onto it.
+
 The other `port/*` branches (`hooks`, `hooks-v2`, `hooks-ack`, `durability`,
 `other`, `other-v2`, `gate`) are superseded cuts, kept because we don't
 delete.
 
 ## The PRs, in order
 
-**Landing order: inbox-quoting → hooks-v3 → durability-v2 → other-v3 →
-gate-v2.** One PR per layer, each opened only after the one before has merged,
+**Landing order: hooks-2a → inbox-quoting → durability-v2 → other-v3 →
+gate-v2**, with hooks-2a going first by the operator's decision of 2026-11-05. One PR per layer, each opened only after the one before has merged,
 so upstream always reviews one diff against its own main. After each merge,
 the rest of the stack is rebased onto the new upstream main.
 
@@ -105,36 +111,25 @@ small, it stands alone, and it shows how the series is built.
 
 ### 2. Hooks: delivery and wake without the channels flag (`port/hooks-v3`)
 
-**This is the operator's first priority: the live-communication features, sent
-so they don't change upstream's workflow.** "Additive features vs conflicts"
-in [muster-vs-marshal.md](muster-vs-marshal.md) goes through it part by part.
-Everything in the layer is additive except two things:
-- `hooks.json` turned on inside the plugin, so every plugin user gets the
-  hooks;
-- the macOS flag detection, a bug fix that only touches sessions already
-  losing mail.
+**This is the operator's first priority, and it goes first: the
+live-communication features, on by default.** The operator decided on
+2026-11-05: "the hooks should be on by default ... otherwise the live delivery
+is not reliable and reliability is our biggest priority."
 
-So it goes as two PRs:
+It's built as `port/hooks-2a`, straight on upstream `94ecc24`, ahead of inbox
+quoting. Its description, for the operator to send, is
+[upstream-pr-2a.md](upstream-pr-2a.md).
 
-- **2a, opt-in (no workflow change).**
-  - **Contents:** the daemon endpoints, the `claude-hook` subcommands, the
-    wake watcher, the SIGTERM reply, the tests, and the docs.
-  - **Opt-in:** the hooks ship as a file a user chooses to install. The
-    plugin README says how: add the hook block to `.claude/settings.json`, or
-    install an optional companion plugin. Nothing runs for a user who doesn't.
-  - **For peppy-skate:** the one change to `port/hooks-v3` is to stop
-    enabling `plugins/marshal-shim/hooks/hooks.json` by default.
-  - **The macOS detection:** it rides here only if upstream accepts the
-    default change. Otherwise it waits for 2b.
-- **2b, on by default (upstream's choice).** One small PR that enables the
-  hooks for every plugin user, and the macOS detection if it waited. It fixes
-  issue #139 for everyone. It opens only if upstream wants it after living
-  with 2a.
+"Additive features vs conflicts" in [muster-vs-marshal.md](muster-vs-marshal.md)
+goes through it part by part. Almost all of it is additive. It makes two
+default changes, and the description states both plainly, with how to turn
+the hooks off:
+- `hooks.json` is on in the plugin, so every plugin user gets the hooks;
+- the macOS flag detection, which only changes sessions started without the
+  flag, whose pushed mail was being lost.
 
-**If live communication should go first:** `port/hooks-v3` is stacked on
-`port/inbox-quoting`, which changes what agents read. For 2a to be the very
-first PR, peppy-skate would rebase it straight onto upstream main and move
-inbox quoting after it. That's one rebase, and the operator's call.
+On everything else it keeps upstream's behaviour. A hook listener that can't
+bind is logged, and the daemon keeps running, as upstream's does.
 
 | | |
 |---|---|
@@ -312,13 +307,10 @@ ledger of the newer entries. This table summarizes the fixes that matter:
    - approval of fork-PR Actions;
    - a reviewer;
    - the overlaps: #154 to be superseded, #141 against Hooks, and #131 and #148 against Durability.
-2. **The first PR: live communication (2a, opt-in) or inbox quoting.**
-   - **2a first** puts the priority feature in front, with no workflow change
-     for upstream. It costs one rebase of `port/hooks-v3` onto upstream main.
-   - **Inbox quoting first** is smaller (54 lines), but it changes the text
-     agents read.
-
-   Either way, its Zoo run must exist, or the operator waives it.
+2. **Decided (2026-11-05): live communication goes first**, as
+   `port/hooks-2a` with the hooks on by default and the macOS detection
+   included. Before it's sent, its Zoo run must exist, or the operator waives
+   it.
 3. **Zoo (G8).** Install Codex on a1 so the runs can happen, and approve the
    spend for layers 1–3 and 5.
 4. **myko first, or vendored?** Offer the request-filter hook to

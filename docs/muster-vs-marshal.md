@@ -40,14 +40,19 @@ today** unless upstream chooses it.
 | `plugins/marshal-shim/hooks/hooks.json`, **enabled in the plugin** | **default change** | every Claude Code user of the plugin gets the hooks: one local HTTP request per tool call (2 s timeout, silent on failure), and one waiter process per idle session that starts a turn when mail arrives |
 | macOS: read the parent's command line, so a session without the flag reports `channels_enabled = false` | **default change** (a bug fix) | only for macOS sessions started *without* the flag. Their pushes were dropped by Claude Code and marked read (issue #139); now the mail stays unread. Flagged sessions are unchanged |
 
-**So the live-communication PR can land with no workflow change.** It carries
-everything above except turning `hooks.json` on: the hooks ship as an opt-in
-that a user adds, so nothing runs for anyone who doesn't add it. Turning them
-on for every plugin user is then a separate one-file PR, for upstream to take
-when it wants to. The macOS fix only changes what was already losing mail;
-it can ride with the opt-in, or wait for that second PR if upstream wants
-zero default change. The strategy is in
-[upstream-pr-strategy.md](upstream-pr-strategy.md) ("2. Hooks").
+**The live-communication PR ships both default changes**, at the operator's
+choice: reliable live delivery is the priority. Without the hooks on and the
+macOS fix, a Claude Code session started without the flag doesn't reliably get
+its mail.
+
+Everything else in the layer is additive, so a user who wants none of it can
+turn the hooks off and be back where upstream is today. Turning them off means
+disabling the plugin's hooks, or Claude Code's `disableAllHooks`. The PR also
+keeps upstream's behaviour where it can: a hook listener that can't bind is
+logged, and the daemon keeps running.
+
+The description is in [upstream-pr-2a.md](upstream-pr-2a.md), and the strategy
+in [upstream-pr-strategy.md](upstream-pr-strategy.md) ("2. Hooks").
 
 **Conflicts.**
 - **Upstream main:** U-RR (the `[response_required=…]` inbox line) and U-CG
