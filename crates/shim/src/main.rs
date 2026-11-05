@@ -20,6 +20,7 @@ mod mcp;
 mod refusal;
 mod roster_read;
 mod session_discovery;
+mod setup;
 mod statusline;
 mod terminal_send;
 mod tools;
@@ -167,30 +168,23 @@ fn main() -> Result<()> {
                 .context("building tokio runtime")?
                 .block_on(doctor::run());
         }
-        // Store the code `muster-daemon pair` printed, so this machine reaches
-        // the daemon through its TLS gate. See `link`.
+        // Set this machine up as a client in one command (MUS-15).
+        Some("setup") => {
+            let args: Vec<String> = argv.collect();
+            return tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .context("building tokio runtime")?
+                .block_on(setup::run(&args));
+        }
+        // Store the code `muster-daemon pair` printed. With no argument the code
+        // is read from stdin, so it stays out of shell history and `ps`.
         Some("pair") => {
-            let code = argv
-                .next()
-                .context("usage: muster-shim pair <pairing code>")?;
-            let pairing = match muster_entities::pairing::Code::parse(&code)? {
-                muster_entities::pairing::Code::Pairing(pairing) => pairing,
-                // A one-time invite (MUS-8): exchange it at the gate for a token.
-                muster_entities::pairing::Code::Invite(invite) if invite.link.is_some() => {
-                    anyhow::bail!(
-                        "this code links two daemons; run `muster-daemon link <code>` on the \
-                         other daemon's host instead"
-                    )
-                }
-                muster_entities::pairing::Code::Invite(invite) => link::redeem_invite(invite)?,
+            let code = match argv.next() {
+                Some(code) => code,
+                None => read_code(std::io::stdin())?,
             };
-            let path = link::save_pairing(&pairing)?;
-            println!(
-                "paired with {} as {} (saved to {}); restart Claude Code sessions to use it",
-                pairing.address,
-                pairing.name,
-                path.display()
-            );
+            println!("{}", pair_with_code(&code)?);
             return Ok(());
         }
         // Show this machine's pairing with the token masked (MUS-57), so a
@@ -1181,7 +1175,7 @@ pub(crate) fn read_assigned_nickname(session_id: &str) -> Option<String> {
 /// Mirror `nickname` for `session_id` to the first writable config-dir
 /// candidate. Best-effort: a failure just leaves the statusline on its
 /// deterministic fallback.
-fn write_assigned_nickname(session_id: &str, nickname: &str) {
+pub(crate) fn write_assigned_nickname(session_id: &str, nickname: &str) {
     let Some(path) = config_file_candidates(&nickname_file_name(session_id))
         .into_iter()
         .next()
@@ -1395,6 +1389,42 @@ fn detect_project_basename(cwd: &str) -> Option<String> {
         .and_then(|s| s.to_str())
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
+}
+
+/// The first non-empty line of `r`, trimmed: a pairing code read from stdin or
+/// a file, so it never has to be on a command line.
+pub(crate) fn read_code(mut r: impl std::io::Read) -> Result<String> {
+    let mut text = String::new();
+    r.read_to_string(&mut text)
+        .context("reading the pairing code")?;
+    text.lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .map(str::to_string)
+        .context("no pairing code given: pass it on stdin, e.g. `muster-shim pair < code.txt`")
+}
+
+/// Pair this machine with the code `muster-daemon pair` printed, and say what
+/// was saved.
+pub(crate) fn pair_with_code(code: &str) -> Result<String> {
+    let pairing = match muster_entities::pairing::Code::parse(code)? {
+        muster_entities::pairing::Code::Pairing(pairing) => pairing,
+        // A one-time invite (MUS-8): exchange it at the gate for a token.
+        muster_entities::pairing::Code::Invite(invite) if invite.link.is_some() => {
+            anyhow::bail!(
+                "this code links two daemons; run `muster-daemon link <code>` on the \
+                 other daemon's host instead"
+            )
+        }
+        muster_entities::pairing::Code::Invite(invite) => link::redeem_invite(invite)?,
+    };
+    let path = link::save_pairing(&pairing)?;
+    Ok(format!(
+        "paired with {} as {} (saved to {}); restart Claude Code sessions to use it",
+        pairing.address,
+        pairing.name,
+        path.display()
+    ))
 }
 
 /// Default the roster's free-form `current_task` from evidence the shim already
