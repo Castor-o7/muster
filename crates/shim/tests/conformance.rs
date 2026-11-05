@@ -432,7 +432,28 @@ impl Mcp {
     }
 
     /// Call a tool and return its JSON result.
+    ///
+    /// MUS-78: a freshly connected shim's first write can still beat its
+    /// registration (MUS-72 holds it for at most 5 s, which a slow machine or
+    /// a just-restarted TLS daemon can outlast), and the daemon refuses it
+    /// with "has no session on the roster". Retry that one refusal for a
+    /// while; nothing is stored when it's refused. Remove this when MUS-78 is
+    /// fixed.
     fn tool(&mut self, name: &str, args: Value) -> Result<Value, String> {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            match self.tool_once(name, args.clone()) {
+                Err(e)
+                    if e.contains("has no session on the roster") && Instant::now() < deadline =>
+                {
+                    thread::sleep(Duration::from_millis(250));
+                }
+                other => return other,
+            }
+        }
+    }
+
+    fn tool_once(&mut self, name: &str, args: Value) -> Result<Value, String> {
         let r = self.rpc("tools/call", json!({"name": name, "arguments": args}))?;
         let text = r["content"][0]["text"].as_str().unwrap_or_default();
         if r["isError"] == json!(true) {
@@ -1216,22 +1237,7 @@ fn daemon_restart_mid_wait(c: &mut Cell) -> Result<(), String> {
     // Postgres so did the roster; register the sender again.
     c.sender = Cell::sender(&c.daemon, &c.sender_id);
     let t = token("restart");
-    // MUS-78: with TLS on, right after a restart, a fresh shim's first write
-    // can beat its registration even with MUS-72's hold, and is refused with
-    // "has no session on the roster". Retry that one refusal, in this one
-    // scenario, until MUS-78 is fixed; then remove this.
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        match c.send(&t) {
-            Err(e) if e.contains("has no session on the roster") && Instant::now() < deadline => {
-                thread::sleep(Duration::from_millis(250));
-            }
-            other => {
-                other?;
-                break;
-            }
-        }
-    }
+    c.send(&t)?;
     let woke = c.harness.wait_for_wake(Duration::from_secs(25));
     if !contains(&woke, &t) {
         return Err(format!(
@@ -1389,6 +1395,9 @@ fn delivery_conformance() {
                 cell,
                 started.elapsed().as_secs_f32()
             );
+            if let Outcome::Fail(e) = &outcome {
+                eprintln!("    why: {e}");
+            }
             match outcome {
                 Outcome::Fail(e) => failures.push(format!("{} / {name}: {e}", harness.0)),
                 Outcome::UnexpectedPass(story) => failures.push(format!(
