@@ -77,7 +77,7 @@ cell says which part).
 | 19 | #13 `8765e47` | Filter what paired machines send over the WebSocket (`gate_filter.rs`) | port | Gate | `Cargo.lock` U-MY |
 | 20 | #14 `55f61c6` | README refresh and Muster banner | drop | — | none |
 | 21 | #15 `09172f1` | Docs accuracy pass (install, plugin READMEs, `codex-live-delivery.md`) | split: recheck each fix against upstream docs; most are about Muster | Other | `codex-live-delivery.md` (upstream rewrote 75 lines) |
-| 22 | #16 `c606485` | Attest paired machines' host and operator; close gate bypasses; keep free-text room names out of mention banners | port | Gate (the mention-banner fix can stand alone in Other) | `hooks.rs`, `send_message.rs`, `broadcast_message.rs` U-RR |
+| 22 | #16 `c606485` | Attest paired machines' host and operator; close gate bypasses; keep free-text room names out of mention banners | port | Gate (two parts stand alone in Other: the mention-banner fix, and `quote_body` from `b325d93`, which escapes inbox framing in peer bodies) | `hooks.rs`, `send_message.rs`, `broadcast_message.rs` U-RR |
 | 23 | #17 `7bcc1d9` | Roadmap: operator terminal messaging | drop | — | none |
 | 24 | #18 `e24fbb2` | Roadmap: team name story | drop | — | none |
 | 25 | #19 `12a603f` | `muster-shim send`: message the muster from a terminal | port | Other | `shim/src/main.rs` U-CG; `tools.rs` U-RR, U-CG |
@@ -153,7 +153,7 @@ cell says which part).
 | Hooks | 1, 3, 7, 10–12, 27, 28, 29, 42, 44, 46, 48, 50, 58, 61 (and the os/arch part of 30) |
 | Gate | 4, 17–19, 22, 30–32, 51, 73, 74, 77–81, part of 83 |
 | Durability | 37–39, 49, 55, 59, 62, 65 |
-| Other | 6, 21, 25, 26, 35, 47, part of 56, part of 83 |
+| Other | 6, 21, 25, 26, 35, 47, part of 22 (`quote_body`), part of 56, part of 83 |
 
 Suggested order: Hooks, then Durability, then Gate (the largest; #72 waits
 on myko), then Other. Each port is its own branch on upstream main
@@ -161,6 +161,14 @@ on myko), then Other. Each port is its own branch on upstream main
 bucket's entries under Marshal names. Where an entry collides with U-RR or
 U-CG, the branch reuses the resolution from modest-roach's G1 catch-up
 merge rather than resolving the conflict a second time.
+
+**Inbox quoting (port/inbox-quoting).** `quote_body` came in with the gate
+review (#16, `b325d93`), but it doesn't depend on the gate. It escapes `<` and
+indents continuation lines, so a peer's body can't close `<marshal_inbox>` or
+forge a `- from …` line. On v0.54.1 a body can do both. It is ported as its
+own fix on upstream main, with unit tests and an end-to-end test that fails
+without it, and is meant to land before the Hooks PR, which carries peer text
+into idle sessions. The Hooks branch is stacked on it.
 
 **Correction (port/hooks prep).** The Hooks entries can't be cherry-picked
 cleanly onto upstream: they are entangled with the Gate.
