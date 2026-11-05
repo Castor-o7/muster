@@ -476,6 +476,14 @@ Rally.
   on the dialed side does nothing, because it edits only the dialer's `links` file. Done when:
   `unpair` takes `--machine` or `--link`, a bare name that matches both is refused with both
   forms named, `unlink` on the dialed side removes `link:<name>`, and an e2e covers each case.
+- [ ] **MUS-85: Fail closed when the paired machines can't be read.** From the watchman's
+  review of the upstream Gate port: `run_daemon` decides whether machines are paired with
+  `token_names(&state_dir).unwrap_or_default()`, so a tokens file that exists but can't be read
+  (permissions, an I/O error, invalid UTF-8) reads as no pairings, and a daemon whose unit lost
+  `MUSTER_TLS=1` starts plain without the refusal MUS-64 added. A line that doesn't parse is
+  skipped the same way. Done when: an unreadable tokens file stops the daemon with the error
+  named, any non-blank line counts as a pairing for this check, and a test covers both. The
+  upstream port (port/gate-v2) does this as `mode::has_pairings`.
 - [x] **MUS-72: Hold a session's first writes until it's registered.** Found by tangerine-wombat
   in the G5 run on Murph: a tool call right after `initialize` reached the daemon before the
   shim's Session SET and failed "caller has no session on the roster". A real agent's first
