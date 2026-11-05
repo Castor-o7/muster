@@ -502,13 +502,13 @@ Rally.
   bridge wakes it, because the bridge leaves no trace on the row. Done when: the send result
   agrees with the roster, a Codex bridge's session still counts as a wake path, and the
   conformance suite's `wake-none-not-expected` cells pass and leave `KNOWN_FAILURES`.
-- [ ] **MUS-72: The Codex bridge ignores the operator's pause.** From MUS-69. `muster-daemon
+- [ ] **MUS-74: The Codex bridge ignores the operator's pause.** From MUS-69. `muster-daemon
   pause` stops Claude's waiter (`/hook/wait` hands out nothing) and the live push, but
   `codex_bridge.rs` sends `turn/start` for any unread direct message without checking it, so a
   paused Codex session is still woken. Done when: the bridge doesn't wake while wakes are paused,
   mail still arrives at the next hook, and the conformance suite's `codex` ×
   `operator-pause-stops-wakes` cell passes.
-- [ ] **MUS-73: Mail is lost when a prompt hook's reply doesn't arrive.** From MUS-69. The hook
+- [ ] **MUS-75: Mail is lost when a prompt hook's reply doesn't arrive.** From MUS-69. The hook
   listener marks prompt-hook mail read once it has flushed the reply (`deferred_ack`). If the reply
   is then lost, the mail is gone. That can happen when the harness kills the hook at its timeout
   after the daemon wrote, or when a paired machine's tunnel breaks after the gate wrote.
@@ -517,7 +517,7 @@ Rally.
   reply that doesn't reach the harness leaves the mail unread (a client ack like the waiter's, or
   another design), and the suite's `lost-hook-reply-redelivers` cells and `codex` ×
   `dropped-ack-redelivers` pass.
-- [ ] **MUS-74: Restarts under test, with Postgres, and Codex sessions after a restart.** From
+- [ ] **MUS-76: Restarts under test, with Postgres, and Codex sessions after a restart.** From
   MUS-69. The suite restarts the daemon without Postgres, so mail sent before a restart isn't
   covered, and the roster empties. A Claude session's waiter re-registers it, but an idle Codex
   session stays off the roster until its next hook, because the bridge registers a thread only on

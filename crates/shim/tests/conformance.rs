@@ -51,12 +51,12 @@ const QUIET_FOR: Duration = Duration::from_secs(4);
 const KNOWN_FAILURES: &[(&str, &str, &str)] = &[
     ("claude", "wake-none-not-expected", "MUS-71"),
     ("claude-tls", "wake-none-not-expected", "MUS-71"),
-    ("codex", "operator-pause-stops-wakes", "MUS-72"),
-    ("claude", "lost-hook-reply-redelivers", "MUS-73"),
-    ("claude-tls", "lost-hook-reply-redelivers", "MUS-73"),
-    ("codex", "lost-hook-reply-redelivers", "MUS-73"),
-    ("codex", "dropped-ack-redelivers", "MUS-73"),
-    ("codex", "daemon-restart-mid-wait", "MUS-74"),
+    ("codex", "operator-pause-stops-wakes", "MUS-74"),
+    ("claude", "lost-hook-reply-redelivers", "MUS-75"),
+    ("claude-tls", "lost-hook-reply-redelivers", "MUS-75"),
+    ("codex", "lost-hook-reply-redelivers", "MUS-75"),
+    ("codex", "dropped-ack-redelivers", "MUS-75"),
+    ("codex", "daemon-restart-mid-wait", "MUS-76"),
 ];
 
 /// Harnesses in the grid that have no fake yet, with the stage that adds one.
