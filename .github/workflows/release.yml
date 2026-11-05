@@ -12,8 +12,6 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
-  # TEMPORARY, to test the stripped build on this PR; reverted before review.
-  pull_request:
 
 permissions:
   contents: read
