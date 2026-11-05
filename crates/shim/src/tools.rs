@@ -408,8 +408,11 @@ const UNBOUND_RETRY_AFTER: std::time::Duration = std::time::Duration::from_milli
 
 /// Whether the daemon refused a write because this connection has no session
 /// bound to it (`resolve_caller`'s refusal), which re-sending the session fixes.
+/// Matched by the daemon's stable code. A daemon from before the
+/// code sends only the text, so that is accepted until every daemon carries
+/// the code; the code is what keeps a later rewording from stopping the retry.
 fn is_unbound_refusal(message: &str) -> bool {
-    message.contains("has no session on the roster")
+    marshal_entities::is_unregistered_refusal(message) || message.contains(LEGACY_UNREGISTERED_TEXT)
 }
 
 /// Run `call`; if the daemon refused it as unbound, `resend` the session, wait
@@ -431,6 +434,10 @@ where
         other => other,
     }
 }
+
+/// What an older daemon says instead of the code. Remove once no daemon runs
+/// a build from before the code.
+const LEGACY_UNREGISTERED_TEXT: &str = "has no session on the roster";
 
 /// How long a write waits for this session to reach the roster.
 const REGISTER_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
@@ -1031,7 +1038,17 @@ mod tests {
 
     #[test]
     fn only_the_unbound_refusal_is_retried() {
-        assert!(is_unbound_refusal(
+        // The daemon's own refusal, built by the function it uses.
+        assert!(super::is_unbound_refusal(
+            &marshal_entities::unregistered_refusal("abc")
+        ));
+        // The code alone is enough, whatever the wording after it.
+        assert!(super::is_unbound_refusal(&format!(
+            "{} reworded in some later release",
+            marshal_entities::UNREGISTERED_CODE
+        )));
+        // A daemon from before the code.
+        assert!(super::is_unbound_refusal(
             "caller (client abc) has no session on the roster — re-SET your Session and retry"
         ));
         for other in [
