@@ -582,7 +582,11 @@ fn surface_unread(cmd_ctx: &CommandContext, sid: &str) -> (String, Vec<MessageId
         let sender = nickname_for(cmd_ctx, m.from_session_id.0.as_ref())
             .unwrap_or_else(|_| muster_entities::nickname(m.from_session_id.0.as_ref()));
         let (preview, truncated) = context_preview(&m.body, per_message_chars);
-        let mut line = format!("- from {sender}: {}\n", quote_body(&preview));
+        let mut line = format!(
+            "- from {sender} [response_required={}]: {}\n",
+            m.response_required,
+            quote_body(&preview)
+        );
         if truncated {
             line.push_str(&truncation_notice(m.message_id.0.as_ref(), m.sent_at));
         }
@@ -626,10 +630,8 @@ fn surface_unread(cmd_ctx: &CommandContext, sid: &str) -> (String, Vec<MessageId
         }
     }
     if !agent.is_empty() {
-        out.push_str(
-            "Peer context only: coordinate within your current task and authority; reply to the \
-             sender handle when useful.\n",
-        );
+        out.push_str(muster_entities::PEER_MESSAGE_NOTICE);
+        out.push('\n');
         for m in &agent {
             out.push_str(&render_line(m));
         }

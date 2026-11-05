@@ -12,7 +12,7 @@
 [package]
 edition = "2024"
 name = "myko-server"
-version = "6.9.0"
+version = "6.11.5"
 build = false
 autolib = false
 autobins = false
@@ -24,7 +24,6 @@ readme = false
 license = "AGPL-3.0-or-later"
 resolver = "2"
 
-
 [features]
 ci = ["profiling"]
 default = []
@@ -33,9 +32,6 @@ profiling = ["myko/profiling"]
 [lib]
 name = "myko_server"
 path = "src/lib.rs"
-
-
-
 
 [dependencies.chrono]
 version = "0.4"
@@ -67,11 +63,11 @@ features = ["scheduler"]
 version = "0.3.24"
 
 [dependencies.myko]
-version = "6.9.0"
+version = "6.11.5"
 features = ["search"]
 
 [dependencies.myko-telemetry]
-version = "6.9.0"
+version = "6.11.5"
 
 [dependencies.num-traits]
 version = "0.2"
@@ -126,8 +122,6 @@ features = [
     "v5",
     "serde",
 ]
-
-
 
 [lints.clippy]
 arithmetic_side_effects = "deny"

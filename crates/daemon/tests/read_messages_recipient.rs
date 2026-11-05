@@ -73,6 +73,7 @@ fn as_client(ctx: &MykoServerContext, client: &str, command: &str) -> CommandCon
 
 fn send(ctx: &MykoServerContext, body: &str) -> String {
     SendMessage {
+        response_required: false,
         to_session_id: SessionId(Arc::from("recipient")),
         body: body.into(),
         as_session: None,

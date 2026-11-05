@@ -43,6 +43,9 @@ use crate::{
 #[myko_command(SendMessageResult)]
 pub struct SendMessage {
     pub to_session_id: SessionId,
+    #[serde(default)]
+    pub response_required: bool,
+
     pub body: String,
 
     /// Self-identified sender, for callers with no connection identity —
@@ -221,6 +224,7 @@ impl CommandHandler for SendMessage {
         .map_err(|why| err(&ctx, &why))?;
         let now = Utc::now().timestamp_millis();
         let msg = Message {
+            response_required: self.response_required,
             id,
             from_session_id: sender.id.clone(),
             to_session_id: Some(recipient.id.clone()),
@@ -272,6 +276,7 @@ impl CommandHandler for SendMessage {
                         // identity: the receiving agent should surface it to that
                         // operator, not treat it as ordinary peer chatter.
                         "to_operator": to_operator,
+                        "response_required": self.response_required,
                         "body": context_body,
                         "body_truncated": body_truncated,
                         "sent_at": now,
