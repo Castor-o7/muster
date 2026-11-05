@@ -1057,7 +1057,7 @@ pub(crate) fn registered_on_roster(sessions: &[Arc<Session>], me: &SessionId) ->
         .any(|s| &s.id == me && s.client_id.is_some())
 }
 
-fn emit_session_set(client: &MykoClient, session: &Session) -> Result<()> {
+pub(crate) fn emit_session_set(client: &MykoClient, session: &Session) -> Result<()> {
     let event = MEvent::from_item(session, MEventType::SET, &Uuid::new_v4().to_string());
     client
         .send_event(event)

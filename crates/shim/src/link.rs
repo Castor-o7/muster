@@ -10,7 +10,7 @@
 //!   trusts certificates the OS trusts, so it dials the tunnel with plain
 //!   `ws://127.0.0.1:<port>/myko?token=…` and the tunnel adds the TLS. The
 //!   token never leaves the machine unencrypted.
-//! - The hook subcommands use [`https_post`]: the same pinned TLS, blocking,
+//! - The hook subcommands use [`https_post_why`]: the same pinned TLS, blocking,
 //!   with the token in an `Authorization: Bearer` header.
 
 use std::io::{self, Read, Write};
@@ -217,14 +217,6 @@ pub fn connect_any(target: impl ToSocketAddrs, timeout: Duration) -> Option<TcpS
 
 const CONNECT_ATTEMPT: Duration = Duration::from_secs(5);
 
-/// POST `body` to `path` on the paired gate over pinned TLS and return the
-/// response body. `None` on any failure, a non-2xx status included.
-pub fn https_post(pairing: &Pairing, path: &str, body: &str, timeout: Duration) -> Option<String> {
-    https_post_why(pairing, path, body, timeout)
-        .ok()
-        .map(|reply| reply.body)
-}
-
 /// Why a POST to the daemon got no usable answer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PostFailure {
@@ -379,7 +371,8 @@ pub fn redeem_invite(invite: muster_entities::pairing::Invite) -> anyhow::Result
     Ok(pairing)
 }
 
-/// [`https_post`], saying why it failed.
+/// POST `body` to `path` on the paired gate over pinned TLS, saying why it
+/// failed if it got no usable answer.
 pub fn https_post_why(
     pairing: &Pairing,
     path: &str,

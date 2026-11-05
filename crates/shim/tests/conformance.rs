@@ -48,13 +48,7 @@ const QUIET_FOR: Duration = Duration::from_secs(4);
 
 /// Cells expected to fail today, each with the story that fixes it. The
 /// suite reports them as known failures, and fails if one passes.
-const KNOWN_FAILURES: &[(&str, &str, &str)] = &[
-    ("claude", "lost-hook-reply-redelivers", "MUS-75"),
-    ("claude-tls", "lost-hook-reply-redelivers", "MUS-75"),
-    ("codex", "lost-hook-reply-redelivers", "MUS-75"),
-    ("codex", "dropped-ack-redelivers", "MUS-75"),
-    ("codex", "daemon-restart-mid-wait", "MUS-76"),
-];
+const KNOWN_FAILURES: &[(&str, &str, &str)] = &[("codex", "daemon-restart-mid-wait", "MUS-76")];
 
 /// Harnesses in the grid that have no fake yet, with the stage that adds one.
 const NOT_YET: &[(&str, &str)] = &[
@@ -1226,22 +1220,7 @@ fn daemon_restart_mid_wait(c: &mut Cell) -> Result<(), String> {
     // Postgres so did the roster; register the sender again.
     c.sender = Cell::sender(&c.daemon, &c.sender_id);
     let t = token("restart");
-    // MUS-78: with TLS on, right after a restart, a fresh shim's first write
-    // can beat its registration even with MUS-72's hold, and is refused with
-    // "has no session on the roster". Retry that one refusal, in this one
-    // scenario, until MUS-78 is fixed; then remove this.
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        match c.send(&t) {
-            Err(e) if e.contains("has no session on the roster") && Instant::now() < deadline => {
-                thread::sleep(Duration::from_millis(250));
-            }
-            other => {
-                other?;
-                break;
-            }
-        }
-    }
+    c.send(&t)?;
     let woke = c.harness.wait_for_wake(Duration::from_secs(25));
     if !contains(&woke, &t) {
         return Err(format!(
@@ -1424,6 +1403,9 @@ fn delivery_conformance() {
                 cell,
                 started.elapsed().as_secs_f32()
             );
+            if let Outcome::Fail(e) = &outcome {
+                eprintln!("    why: {e}");
+            }
             match outcome {
                 Outcome::Fail(e) => failures.push(format!("{} / {name}: {e}", harness.0)),
                 Outcome::UnexpectedPass(story) => failures.push(format!(
