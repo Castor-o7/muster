@@ -672,6 +672,9 @@ Rally.
   client. In memory the roster empties and the plugin registers fresh; the Claude shim re-SETs
   its session on connect. Done when: a push plugin is woken by mail sent after a restart with
   Postgres, and those cells pass.
+  Measured on a1 on 2026-11-05: 3 runs each failed 3 of 3 for all three plugins, both on main
+  (`1fe3c02`) and with MUS-58's sweeper gate (#126 at `e47c7e0`), so the startup sweep isn't the
+  cause; pi's one 2.2 s pass in CI is flaky, and the cell is in the suite's `FLAKY` list.
 
 ## Moved to Rally
 
