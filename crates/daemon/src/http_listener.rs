@@ -55,7 +55,7 @@ pub struct Access {
 
 /// Run the hook listener forever. Spawn on a tokio task.
 pub async fn run(bind: SocketAddr, ctx: Arc<MykoServerContext>) -> std::io::Result<()> {
-    run_until(bind, ctx, None, watch::channel(false).1).await
+    run_bound(bind, ctx, None).await
 }
 
 /// [`run`], refusing requests the gate marked as coming from a machine that
@@ -66,7 +66,10 @@ pub async fn run_bound(
     ctx: Arc<MykoServerContext>,
     access: Option<Arc<Access>>,
 ) -> std::io::Result<()> {
-    run_until(bind, ctx, access, watch::channel(false).1).await
+    // Held for as long as the listener runs. Dropped, it would make every held
+    // wait's `stopping.changed()` return at once, and the wait loop would spin.
+    let (_never_stopping, stopping) = watch::channel(false);
+    run_until(bind, ctx, access, stopping).await
 }
 
 /// [`run_bound`], ending every held wait once `stopping` turns true, with an
@@ -317,7 +320,7 @@ async fn handle_wait(
     loop {
         if *stopping.borrow() {
             // No end_wait here: the daemon is about to exit, and WakeWatcher
-            // records aren't persisted (#43), so the record goes with it.
+            // records aren't persisted, so the record goes with it.
             return write_response_with(&mut stream, 200, &restarting, "").await;
         }
         hooks::mark_waiting_now(&cmd_ctx, &sid);

@@ -144,11 +144,39 @@ jobs:
       # mirror that download alone ran past the job's limit (MUS-91).
       # build-essential and pkg-config come with the image. The step's own
       # limit makes a stalled mirror fail in minutes, naming this step.
+      # The mirror is still sometimes too slow even for the C compiler alone
+      # (#134's run hit the step limit), so the .debs are cached (MUS-91). On a
+      # cache hit the install never touches the mirror. The key carries the
+      # runner image's version, so a new image fetches its own packages once.
+      # ImageOS and ImageVersion are set in the runner's shell environment, not
+      # in the workflow's `env` context, so `${{ env.ImageOS }}` is empty there
+      # (#137's first run keyed on `mingw-debs-Linux---...`). This step reads
+      # them from the shell and hands them to the key.
+      - name: Read the runner image
+        id: runner-image
+        run: |
+          test -n "$ImageOS" && test -n "$ImageVersion"
+          echo "image=$ImageOS-$ImageVersion" >> "$GITHUB_OUTPUT"
+          echo "runner image: $ImageOS-$ImageVersion"
+      - name: Cache the mingw packages
+        id: mingw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/mingw-debs
+          key: mingw-debs-${{ runner.os }}-${{ steps.runner-image.outputs.image }}-gcc-mingw-w64-x86-64-v1
       - name: Install the mingw C cross-compiler
         timeout-minutes: 8
         run: |
-          sudo apt-get -o Acquire::Retries=3 update
-          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends gcc-mingw-w64-x86-64
+          if ls ~/mingw-debs/*.deb >/dev/null 2>&1 && sudo dpkg -i ~/mingw-debs/*.deb; then
+            echo "installed from the cache: $(ls ~/mingw-debs/*.deb | wc -l) packages"
+          else
+            sudo apt-get -o Acquire::Retries=3 update
+            sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends --download-only gcc-mingw-w64-x86-64
+            mkdir -p ~/mingw-debs
+            cp /var/cache/apt/archives/*.deb ~/mingw-debs/
+            sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends gcc-mingw-w64-x86-64
+            echo "fetched from the mirror: $(ls ~/mingw-debs/*.deb | wc -l) packages, cached for next time"
+          fi
           x86_64-w64-mingw32-gcc --version | head -1
       - name: Cross-compile the Windows shim
         run: cargo check -p muster-shim --target x86_64-pc-windows-gnu
