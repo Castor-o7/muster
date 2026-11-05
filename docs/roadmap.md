@@ -64,6 +64,11 @@ Merged and needing a live run: MUS-36 and MUS-37.
   Needs a run: the Muster team, on both machines.
 - [ ] **MUS-3: Stable identity across restarts.** Done when: a session keeps its
   nickname through a restart, and the watchman can be reached by role.
+  Built for Claude and Codex ([stable-identity.md](stable-identity.md)); not yet run live. A new
+  session takes over a dead predecessor's nickname by harness and working directory, or by a role
+  declared with `MUSTER_IDENTITY`; `MUSTER_IDENTITY=none` opts out. A Codex row still on the
+  roster never counts as dead until MUS-77 (`CODEX_PRESENT_ROWS_CAN_BE_DEAD`). The plugins
+  don't report a harness yet.
 - [x] **MUS-4: Show dead watchers.** Done when: the roster distinguishes a
   session that can be woken from one that can't.
   Verified live 2026-11-04 by gentle-pulsar against Murph's `e797fa3`: `muster-shim roster` showed

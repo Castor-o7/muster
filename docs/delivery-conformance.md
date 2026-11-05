@@ -43,8 +43,13 @@ checked as well as what the recipient sees.
 | 9 | `mail-waiting-at-reconnect` | Mail sent while a push plugin's connection is down is shown once at the next turn after it reconnects, and not again after that, even when another message is pushed live first. A plugin that drains the inbox after a push acks the waiting mail there without showing it (upstream #133). |
 | 10 | `hung-handover-released` | When the harness's API hangs taking a push, a turn's pull doesn't show the message while the plugin holds it, the next turn shows it once the hold's lease lapses, and no pull shows it again after the hung handover goes through. That late handover can show it a second time, which the design accepts ([push-ack-design.md](push-ack-design.md)). |
 
+| 11 | `restart-keeps-identity` | A session that ends as its TUI ends it, followed by a new session in the same working directory, hands the new one its nickname (MUS-3). Mail to the old nickname and the old id reaches the new one. If the new one first got a fresh nickname, mail to that still reaches it, and its next hook says its name changed. |
+| 12 | `live-sibling-keeps-its-name` | A second session in the same working directory, started while the first is live and idle past the quiet time, gets a nickname of its own, and the first keeps its own. For Codex the first is a hook-owned row with no client, which mustn't be taken over until MUS-77. |
+
 Scenarios 9 and 10 are about a live push, so they're `n/a` for the hook
-harnesses (Claude and Codex).
+harnesses (Claude and Codex). Scenarios 11 and 12 are `n/a` for the plugins,
+which don't report a harness yet. The suite's daemon runs with a 1 s
+succession grace and a 2 s quiet time.
 
 Some cells fail today. Each is listed in `KNOWN_FAILURES` against the story
 that fixes it, and shows as `known (MUS-nn)` in the grid. If one starts

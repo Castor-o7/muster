@@ -1,0 +1,209 @@
+//! MUS-3: what the delivery conformance suite doesn't cover of succession.
+//! The suite restarts real Claude and Codex fakes; these drive the daemon's
+//! naming directly, for roles, the opt-out and room memberships.
+
+use std::sync::Arc;
+
+use daemon::{nickname_assign::ensure_assigned, succession};
+use hyphae::{Gettable, Materialize};
+use muster_entities::{
+    GetAllRoomMembers, GetAllSessionIdentitys, GetAllSuccessions, HostInfo, Room, RoomId, RoomKind,
+    RoomMember, RoomMemberId, Session, SessionId,
+};
+use myko::command::CommandContext;
+use myko::{
+    core::item::Eventable,
+    entities::client::ClientId,
+    server::{MykoServerContext, Persister},
+    utils::downcast_item,
+};
+use myko_server::{BlackholePersister, MykoServer};
+use uuid::Uuid;
+
+fn setup() -> MykoServerContext {
+    muster_entities::link();
+    daemon::link();
+    let blackhole: Arc<dyn Persister> = Arc::new(BlackholePersister);
+    let server = MykoServer::builder()
+        .with_default_persister(blackhole)
+        .build();
+    let ctx = server.ctx();
+    Box::leak(Box::new(server));
+    ctx
+}
+
+fn session(cwd: &str, identity: Option<&str>, client: Option<&str>) -> Session {
+    Session {
+        id: SessionId(Arc::from(Uuid::new_v4().to_string().as_str())),
+        client_id: client.map(|c| ClientId(Arc::from(c))),
+        pid: 1,
+        cwd: cwd.into(),
+        git_branch: None,
+        current_task: None,
+        session_name: None,
+        activity: None,
+        kind: None,
+        connected_at: chrono::Utc::now().timestamp_millis(),
+        last_activity_at: Some(chrono::Utc::now().timestamp_millis()),
+        last_tool: None,
+        last_tool_at: None,
+        operator: Some("op@example.com".into()),
+        host: Some(HostInfo {
+            name: "a1".into(),
+            os: String::new(),
+            arch: String::new(),
+        }),
+        project: None,
+        channels_enabled: None,
+        acks_pushes: None,
+        harness: Some("claude".into()),
+        identity: identity.map(str::to_string),
+    }
+}
+
+fn cmd(ctx: &MykoServerContext) -> CommandContext {
+    succession::internal_ctx(ctx)
+}
+
+/// Register a session and name it, as the session-start hook does.
+fn start(ctx: &MykoServerContext, s: &Session) -> String {
+    ctx.set(s).expect("session SET");
+    ensure_assigned(&cmd(ctx), s.id.0.as_ref()).expect("named")
+}
+
+/// The session ends: its row goes, and the daemon sees it go.
+fn end(ctx: &MykoServerContext, s: &Session) {
+    ctx.del_by_id(Session::ENTITY_NAME_STATIC, s.id.0.as_ref())
+        .expect("session DEL");
+    succession::record_removed(s.id.0.as_ref(), chrono::Utc::now().timestamp_millis());
+}
+
+fn unique_cwd() -> String {
+    format!("/work/{}", Uuid::new_v4())
+}
+
+#[test]
+fn a_restarted_session_takes_over_and_the_record_says_why() {
+    let ctx = setup();
+    let cwd = unique_cwd();
+    let old = session(&cwd, None, None);
+    let nick = start(&ctx, &old);
+    end(&ctx, &old);
+    let new = session(&cwd, None, None);
+    assert_eq!(
+        start(&ctx, &new),
+        nick,
+        "the restarted session keeps its nickname"
+    );
+
+    let successions = cmd(&ctx).exec_query(GetAllSuccessions {}).unwrap();
+    let rec = successions
+        .iter()
+        .find(|s| s.id.0.as_ref() == old.id.0.as_ref())
+        .expect("a succession record for the old id");
+    assert_eq!(rec.to_session_id, new.id.0.as_ref());
+    assert_eq!(rec.nickname, nick);
+    assert!(rec.reason.contains("removed"), "reason: {}", rec.reason);
+    assert!(
+        rec.alias.is_none(),
+        "taken over at registration, so no alias"
+    );
+}
+
+#[test]
+fn a_role_is_not_taken_over_while_its_holder_is_live() {
+    let ctx = setup();
+    let client = Uuid::new_v4().to_string();
+    let holder = session(&unique_cwd(), Some("watchman"), Some(&client));
+    let holder_nick = start(&ctx, &holder);
+    // The holder's client is connected.
+    let live = [Arc::<str>::from(client.as_str())].into_iter().collect();
+    succession::observe(
+        &[(holder.id.0.clone(), Some(Arc::from(client.as_str())))],
+        &live,
+        chrono::Utc::now().timestamp_millis(),
+    );
+    let claimant = session(&unique_cwd(), Some("watchman"), None);
+    let claimant_nick = start(&ctx, &claimant);
+    assert_ne!(
+        claimant_nick, holder_nick,
+        "a live holder keeps its role's nickname"
+    );
+}
+
+#[test]
+fn a_role_passes_to_a_successor_once_its_holder_has_ended() {
+    let ctx = setup();
+    // A role is matched across working directories.
+    let holder = session(&unique_cwd(), Some("lamplighter"), None);
+    let nick = start(&ctx, &holder);
+    end(&ctx, &holder);
+    let next = session(&unique_cwd(), Some("lamplighter"), None);
+    assert_eq!(start(&ctx, &next), nick);
+}
+
+#[test]
+fn identity_none_opts_out() {
+    let ctx = setup();
+    let cwd = unique_cwd();
+    let old = session(&cwd, None, None);
+    let nick = start(&ctx, &old);
+    end(&ctx, &old);
+    let new = session(&cwd, Some("none"), None);
+    assert_ne!(
+        start(&ctx, &new),
+        nick,
+        "MUSTER_IDENTITY=none never takes over"
+    );
+    let identities = cmd(&ctx).exec_query(GetAllSessionIdentitys {}).unwrap();
+    assert!(
+        !identities
+            .iter()
+            .any(|i| i.id.0.as_ref() == new.id.0.as_ref()),
+        "and it has no identity to be taken over by"
+    );
+}
+
+#[test]
+fn a_successor_gets_its_predecessors_adhoc_rooms() {
+    let ctx = setup();
+    let cwd = unique_cwd();
+    let old = session(&cwd, None, None);
+    start(&ctx, &old);
+    let room = format!("design-{}", Uuid::new_v4());
+    ctx.set(&Room {
+        id: RoomId(Arc::from(room.as_str())),
+        name: room.clone(),
+        description: None,
+        kind: RoomKind::Adhoc,
+        created_at: 1,
+    })
+    .expect("room SET");
+    ctx.set(&RoomMember {
+        id: RoomMemberId(Arc::from(
+            RoomMember::make_id(&room, old.id.0.as_ref()).as_str(),
+        )),
+        room_id: RoomId(Arc::from(room.as_str())),
+        session_id: old.id.clone(),
+        joined_at: 100,
+    })
+    .expect("membership SET");
+    end(&ctx, &old);
+    let new = session(&cwd, None, None);
+    start(&ctx, &new);
+
+    let members = cmd(&ctx).exec_query(GetAllRoomMembers {}).unwrap();
+    let moved = members
+        .iter()
+        .find(|m| m.room_id.0.as_ref() == room && m.session_id == new.id)
+        .expect("the successor is a member of its predecessor's ad hoc room");
+    assert_eq!(
+        moved.joined_at, 100,
+        "it sees the room's history from when its predecessor joined"
+    );
+    // Pin the store too, in case the query view is behind it.
+    let store = ctx.registry.get(RoomMember::ENTITY_NAME_STATIC).unwrap();
+    assert!(store.entries().materialize().get().iter().any(|(_, item)| {
+        downcast_item::<RoomMember>(item).is_some_and(|m| m.session_id == new.id)
+    }));
+}

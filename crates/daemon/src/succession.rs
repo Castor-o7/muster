@@ -268,6 +268,14 @@ pub fn observe(rows: &[(Arc<str>, Option<Arc<str>>)], live_clients: &HashSet<Arc
     o.known_rows = current;
 }
 
+/// A session's row was removed by its own session end (Codex's SessionEnd
+/// hook). Recorded at once, since the row may not have lasted a sweeper tick.
+pub fn record_removed(session_id: &str, now: i64) {
+    let mut o = OBSERVED.lock().unwrap_or_else(|e| e.into_inner());
+    o.removed_at.insert(Arc::from(session_id), now);
+    o.client_gone_at.remove(session_id);
+}
+
 fn facts_for<'a>(
     o: &Observed,
     id: &str,
@@ -332,7 +340,9 @@ fn find_predecessor(
             .iter()
             .find(|s| s.id.0.as_ref() == id)
             .map(|s| &**s);
-        match verdict(&facts_for(&o, id, row, &watching), now, cfg) {
+        let v = verdict(&facts_for(&o, id, row, &watching), now, cfg);
+        log::debug!("[identity] {me}: predecessor {id} is {v:?}");
+        match v {
             Verdict::Dead(reason) => dead.push((
                 ident.assigned_at,
                 Found {
@@ -489,8 +499,10 @@ pub fn name_from_predecessor(
     Ok(found.map(|f| f.nickname))
 }
 
-/// For a session that already has a nickname: keep its identity record in
-/// step with its key, which a session named before MUS-3 doesn't have yet.
+/// For a session that already has a nickname: record the identity key it
+/// has now if it has none, as a session named before MUS-3 hasn't. A key once
+/// recorded is frozen, like the nickname: the hooks and the MCP shim both
+/// write the row, and a key that followed every write could flap between them.
 pub fn record_identity(
     ctx: &CommandContext,
     session: &Session,
@@ -498,18 +510,18 @@ pub fn record_identity(
 ) -> Result<(), CommandError> {
     let me = session.id.0.as_ref();
     let identities: Vec<Arc<SessionIdentity>> = ctx.exec_query(GetAllSessionIdentitys {})?;
-    let current = identities.iter().find(|i| i.id.0.as_ref() == me);
-    match (identity_key(session), current) {
-        (Some((key, _)), Some(c)) if c.key == key => Ok(()),
-        (Some((key, role)), c) => ctx.emit_set(&SessionIdentity {
-            id: SessionIdentityId(Arc::from(me)),
-            key,
-            role,
-            assigned_at: c.map_or(now, |c| c.assigned_at),
-        }),
-        (None, Some(c)) => ctx.emit_del(&**c),
-        (None, None) => Ok(()),
+    if identities.iter().any(|i| i.id.0.as_ref() == me) {
+        return Ok(());
     }
+    let Some((key, role)) = identity_key(session) else {
+        return Ok(());
+    };
+    ctx.emit_set(&SessionIdentity {
+        id: SessionIdentityId(Arc::from(me)),
+        key,
+        role,
+        assigned_at: now,
+    })
 }
 
 /// The sweeper's late check: a session named while its predecessor was

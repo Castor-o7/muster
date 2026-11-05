@@ -554,6 +554,9 @@ fn handle_session_end(body: &[u8], ctx: &Arc<MykoServerContext>) -> HookOutcome 
     };
     if let Err(e) = cmd_ctx.emit_del(&stub) {
         log::warn!("[hook] session-end DEL failed for {sid}: {e:?}");
+    } else {
+        // MUS-3: an ended session can be taken over by its successor.
+        crate::succession::record_removed(sid, chrono::Utc::now().timestamp_millis());
     }
     end_wait(&cmd_ctx, sid);
     HookOutcome::text(String::new())
