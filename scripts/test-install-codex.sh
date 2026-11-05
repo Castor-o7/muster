@@ -1,6 +1,6 @@
 #!/bin/sh
 # Check that scripts/install-codex.sh runs the shim only when it matches the release's SHA256SUMS
-# (MUS-95). A fake `curl` serves a local fixture instead of GitHub, and the "shim" is a script that
+# (MUS-96). A fake `curl` serves a local fixture instead of GitHub, and the "shim" is a script that
 # records how it was run, so nothing is downloaded and Codex is never touched. Runs in CI.
 set -u
 REPO=$(cd "$(dirname "$0")/.." && pwd)

@@ -69,7 +69,7 @@ sha256_of() {
 echo "Downloading muster-shim ($target)..."
 curl -fSL --proto '=https' --tlsv1.2 -o "$bin" "$base/$asset"
 
-# Check it against the release's SHA256SUMS before running it (MUS-95). Both come from the same
+# Check it against the release's SHA256SUMS before running it (MUS-96). Both come from the same
 # release over HTTPS, so this catches a corrupt or swapped download, not a tampered release.
 # Anything short of a match stops here, before the binary runs.
 if ! curl -fsSL --proto '=https' --tlsv1.2 -o "$tmp/SHA256SUMS" "$base/SHA256SUMS"; then

@@ -403,7 +403,7 @@ Merged and needing a live run: MUS-36 and MUS-37.
   Linux x86_64 under the names install-codex.sh asks for, with one SHA256SUMS. workflow_dispatch
   is a dry run that only uploads artifacts; a `v*` tag also makes a draft release, which stays
   unpublished until Josh publishes it. Left: a tag and a published release, on Josh's word.
-- [x] **MUS-95: The installer checks its download, and release binaries are stripped.** From
+- [x] **MUS-96: The installer checks its download, and release binaries are stripped.** From
   MUS-14's review. Done when: `scripts/install-codex.sh` fetches SHA256SUMS from the same release,
   checks the shim against it with sha256sum (or `shasum -a 256` on macOS), and refuses to run it on
   a mismatch, a missing entry, a missing SHA256SUMS or no tool to check with; a fixture test

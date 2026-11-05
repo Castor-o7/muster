@@ -556,7 +556,7 @@ it to a LAN or mesh address, or `0.0.0.0:6255`, to accept other machines.
 | [`muster-prime-agent`](plugins/muster-prime-agent/) | Prime Agent live-conversation extension. |
 | [`muster-opencode`](plugins/muster-opencode/) | opencode native plugin. |
 
-Muster has no release pipeline or published packages yet; install from the repository (see Install). CI (`.github/workflows/ci.yml`) runs fmt, clippy, the tests and `scripts/test-gate-e2e.sh` on every push and pull request to `main`.
+Muster has no published release or packages yet; install from the repository (see Install). `.github/workflows/release.yml` builds muster-shim and muster-daemon for macOS arm64 and Linux x86_64 with a `SHA256SUMS` (MUS-14), and `scripts/install-codex.sh` checks the shim against that file before running it (MUS-96). Both come from the same release, so the check guards against a corrupt or swapped download, not against a compromised release. CI (`.github/workflows/ci.yml`) runs fmt, clippy, the tests and `scripts/test-gate-e2e.sh` on every push and pull request to `main`.
 
 ## Status
 
