@@ -164,6 +164,10 @@ Merged and needing a live run: MUS-36 and MUS-37.
   the daemon's `[identity]` and `[hook]` lines and its warnings, with succession at debug, and
   `CONFORMANCE_DAEMON_LOG=1` prints them for a passing cell. Still to do: the cause, from the
   first CI run that fails with that log.
+  The plain `claude` form fails too, even after #156's re-check: `claude` ×
+  `restart-keeps-identity` failed at the full 20 s on main's push of 65d922b (run 42107003441)
+  and on #125 at 0adfa2c (run 42111510686), so it's on `FLAKY` for this story as well (#175). The
+  #125 run printed the daemon's `[identity]` lines for the failed cell, so it can supply that log.
 - [x] **MUS-47: Hand unread mail to a successor.** From MUS-31. Retained mail reaches
   nobody without this. Depends on MUS-3. Done when: a session taking over an identity
   receives its predecessor's unread mail, shown by a test.
@@ -378,9 +382,13 @@ Merged and needing a live run: MUS-36 and MUS-37.
 
 ## Phase 3: Portability
 
-- [ ] **MUS-13: Run CI on macOS.** Done when: CI runs on macOS and passes,
+- [x] **MUS-13: Run CI on macOS.** Done when: CI runs on macOS and passes,
   including `recovery_tracks_codex_effective_working_directory`, which fails on
-  macOS today.
+  macOS today. *Done 2026-11-05 (#163): a `macos-15` (arm64) job runs the
+  workspace tests beside the Linux job, cached, in about 6 minutes. The test
+  failed only because its `#[cfg(test)]` helper compared a resolved path with
+  one as given, and macOS's `/var` is a symlink; it now resolves both. GitHub no
+  longer runs `macos-14`.*
 - [x] **MUS-87: Keep CI from running out of disk or failing on a download.** Found on #113's
   run (42043766050): the `check` job builds the workspace, runs the gate and links e2e, installs
   bun and the plugins' `node_modules`, and builds again for conformance, and the ubuntu runner
@@ -395,6 +403,10 @@ Merged and needing a live run: MUS-36 and MUS-37.
 - [ ] **MUS-14: Publish prebuilt binaries.** There are no releases yet, so
   `scripts/install-codex.sh` can't work and the plugins aren't on npm. Done when: macOS and Linux can
   install without a Rust toolchain.
+  `.github/workflows/release.yml` now builds muster-shim and muster-daemon for macOS arm64 and
+  Linux x86_64 under the names install-codex.sh asks for, with one SHA256SUMS. workflow_dispatch
+  is a dry run that only uploads artifacts; a `v*` tag also makes a draft release, which stays
+  unpublished until Josh publishes it. Left: a tag and a published release, on Josh's word.
 - [ ] **MUS-91: Keep `windows-cross-check` from timing out.** It hit its 20-minute limit on #110,
   #113 and #124, and a re-run passed each time. Every time it was the apt step: `mingw-w64` pulls
   278 MB (the i686 and x86_64 toolchains, C and C++), which normally takes 7 s, but the Azure
@@ -418,13 +430,26 @@ Merged and needing a live run: MUS-36 and MUS-37.
 - [ ] **MUS-16: Support addresses beyond one LAN IP.** Done when: a paired laptop
   stays connected when it moves between home and a Tailscale or WireGuard network. Needs a run: the operator, who
   has the laptop.
+  Design, with options for the operator: [remote-access.md](remote-access.md) (sienna-mullet,
+  2026-11-05). It bears on MUS-56.
 - [ ] **MUS-17: Keep messages across daemon restarts without Postgres.** Check
   first whether myko allows it. Done when: an unread message survives a daemon
   restart with no Postgres configured.
+  *Design approved 2026-11-05 (fiery-snapper, option A: an append-only JSONL
+  file in the state directory, compacted; myko allows it through its `Persister`
+  trait and `apply_event_batch`). Decided by Josh on 2026-11-05: opt-in with
+  `MUSTER_PERSIST=file` for this release, and the store excluded from Time
+  Machine by default. See [local-persistence-design.md](local-persistence-design.md).*
 - [ ] **MUS-18: Extend pairing to Codex.** Codex goes through the Rust shim. Done
   when: Codex can connect through the gate. The Pi, opencode and Prime Agent plugins
   are left out under the language decision.
 - [ ] **MUS-19: Fix stale docs.** Most were corrected on 2026-10-30. Done when: following the README on a clean machine works. Needs a run: the Muster team, on a clean machine.
+  Progress 2026-11-05 (sienna-mullet): followed the README literally in two isolated HOMEs on
+  a1 (a TLS daemon on spare ports, and a client): `cargo install --git`, then `muster-daemon
+  pair`, `muster-shim setup --pair-file`, and `muster-shim doctor` (all ok). A real Claude
+  session registered through the plugin's hooks. Fixed `--locked`, the patch warning, the
+  pairing hint and the statusLine. Not ticked: the run was on a1 with isolated HOMEs, not a
+  clean machine.
 
 ## Phase 4: Coordination
 
@@ -743,7 +768,7 @@ Rally.
   a test's daemon binds its own ports (port 0) and reports them, or the tests retry a bind that
   loses the race; the e2e scripts take free ports per run, so two can run at once on one host;
   and no test fails on a port another process took.
-- [ ] **MUS-90: Push plugins aren't woken after a restart with Postgres.** From MUS-76. In CI,
+- [x] **MUS-90: Push plugins aren't woken after a restart with Postgres.** From MUS-76. In CI,
   `pi`, `opencode` and `prime-agent` × `daemon-restart-mid-wait-pg` fail ("not woken after the
   restart; got None", about 26 s each), while the in-memory restart cell passes for all three.
   Hypothesis, unproven: with Postgres the plugin's Session row survives the restart, still bound
@@ -754,6 +779,16 @@ Rally.
   Measured on a1 on 2026-11-05: 3 runs each failed 3 of 3 for all three plugins, both on main
   (`1fe3c02`) and with MUS-58's sweeper gate (#126 at `e47c7e0`), so the startup sweep isn't the
   cause; pi's one 2.2 s pass in CI is flaky, and the cell is in the suite's `FLAKY` list.
+  Fixed 2026-11-05. The hypothesis was half right: the Session row does survive, still bound to the
+  dead client, but the plugin's reconnect does rebind it (the sweeper logs "back on live client"
+  about 3 s later). The mail was lost in between. The suite sends once the recipient's row is on the
+  roster, which with Postgres is at once, so the push went to the dead client, and nothing offered
+  the unread mail again on reconnect. In memory the row only reappears after the reconnect, so the
+  push found a live client. Now each push plugin treats a reconnect as a push with no body, after
+  re-SETting its sessions on the same socket: its existing fallback pulls the unread mail and shows
+  it, which wakes an idle session. The three cells pass (about 2 s), and so does
+  `opencode` × `mail-waiting-at-reconnect`: the waiting mail is now shown at the reconnect, before a
+  later push can drain it. MUS-81's other opencode and Prime Agent cells are unchanged.
 
 ## Moved to Rally
 
