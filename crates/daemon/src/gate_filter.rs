@@ -353,7 +353,17 @@ mod tests {
     #[test]
     fn raw_writes_to_other_entities_are_refused() {
         let dir = dir();
-        for item_type in ["Message", "MessageRead", "Room", "RoomMember", "Client"] {
+        for item_type in [
+            "Message",
+            "MessageRead",
+            "Room",
+            "RoomMember",
+            "Client",
+            // MUS-3: who took over from whom, and the key a nickname is held
+            // under, are the daemon's to write.
+            "Succession",
+            "SessionIdentity",
+        ] {
             assert!(
                 check(dir.path(), "a1", event(item_type, MINE)).is_err(),
                 "{item_type}"

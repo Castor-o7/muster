@@ -599,6 +599,10 @@ fn resolve_recipient(
     if let Some(s) = sessions.iter().find(|s| s.id.0.as_ref() == token) {
         return Ok((s.clone(), None));
     }
+    // MUS-3: a session that restarted keeps reaching whoever took it over.
+    if let Some(s) = resolve_succeeded(ctx, sessions, token)? {
+        return Ok((s, None));
+    }
     // 3. Operator identity — human-via-agent routing. Record the operator we
     // addressed (the resolved session's canonical operator string, falling back
     // to the bare token) so the message is marked human-addressed downstream.
@@ -625,6 +629,55 @@ fn resolve_recipient(
             ),
         )),
         _ => Err(err(ctx, &ambiguous(ctx, "id-prefix", token, &by_prefix))),
+    }
+}
+
+/// MUS-3: a token that names a session through a succession or a role, after
+/// the nickname and id tiers found nothing.
+///
+/// - A nickname a session gave up in a late takeover reaches it until the
+///   alias lapses, since peers may have written to it meanwhile.
+/// - An old session id reaches the session that took it over.
+/// - A declared role (`MUSTER_IDENTITY=watchman`) reaches the one session
+///   that claims it. It's a claim, not attested; see `Session::identity`.
+#[cfg(not(target_arch = "wasm32"))]
+fn resolve_succeeded(
+    ctx: &CommandContext,
+    sessions: &[Arc<Session>],
+    token: &str,
+) -> Result<Option<Arc<Session>>, CommandError> {
+    let successions: Vec<Arc<crate::Succession>> = ctx.exec_query(crate::GetAllSuccessions {})?;
+    let now = chrono::Utc::now().timestamp_millis();
+    let find = |id: &str| sessions.iter().find(|s| s.id.0.as_ref() == id).cloned();
+    if let Some(s) = successions.iter().find(|s| {
+        s.alias.as_deref() == Some(token) && s.alias_until.is_some_and(|until| until > now)
+    }) && let Some(found) = find(&s.to_session_id)
+    {
+        return Ok(Some(found));
+    }
+    if let Some(to) = crate::successor_of(&successions, token)
+        && let Some(found) = find(&to)
+    {
+        return Ok(Some(found));
+    }
+    let by_role: Vec<&Arc<Session>> = sessions
+        .iter()
+        .filter(|s| s.identity.as_deref() == Some(token) && token != "none")
+        .collect();
+    match by_role.as_slice() {
+        [one] => Ok(Some((*one).clone())),
+        [] => Ok(None),
+        many => Err(err(
+            ctx,
+            &format!(
+                "role '{token}' is claimed by {} sessions; name one by nickname: {}",
+                many.len(),
+                many.iter()
+                    .map(|s| crate::nickname_for(ctx, s.id.0.as_ref()).unwrap_or_default())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        )),
     }
 }
 
@@ -770,6 +823,8 @@ mod operator_routing_tests {
             project: None,
             channels_enabled: None,
             acks_pushes: None,
+            harness: None,
+            identity: None,
         })
     }
 
