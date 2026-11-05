@@ -59,8 +59,12 @@ healthy() {
   # Unset, each takes the daemon's default port.
   local gate=$(unit_env MUSTER_BIND) hook=$(unit_env MUSTER_HOOK_BIND) internal=$(unit_env MUSTER_INTERNAL_BIND)
   local -a binds=("${gate:-127.0.0.1:6255}" "${hook:-127.0.0.1:6256}")
-  # A plain daemon (MUS-64) has no local gate and no separate myko port.
+  # A plain daemon (MUS-64) has no local gate and no separate myko port, and
+  # a build from MUS-70 on has no 6257 local gate at all. An older build, as a
+  # rollback target, still binds it.
   if grep -qa MUSTER_TLS "$expected" && ! unit_tls; then
+    :
+  elif grep -qa "MUSTER_INTERNAL_BIND is ignored" "$expected"; then
     :
   else
     binds+=("${internal:-127.0.0.1:6257}")

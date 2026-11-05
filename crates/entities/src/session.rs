@@ -71,6 +71,7 @@ mod tests {
             host: None,
             project: None,
             channels_enabled: None,
+            acks_pushes: None,
         };
         let json = serde_json::to_value(&s).unwrap();
         // camelCase on the wire (matches the rest of the codebase).
@@ -106,6 +107,7 @@ mod tests {
                 arch: "x86_64".into(),
             }),
             channels_enabled: None,
+            acks_pushes: None,
         };
         let json = serde_json::to_value(&s).unwrap();
         assert_eq!(json["operator"], "trevor");
@@ -255,6 +257,17 @@ pub struct Session {
     /// the inbox (delivered_live = false) rather than claimed as live.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channels_enabled: Option<bool>,
+
+    /// Whether this session's client acks each live push itself, once it has
+    /// passed it on (a plugin: once its harness has taken it). When set,
+    /// `SendMessage` leaves a pushed message unread until that ack instead of
+    /// marking it read as soon as the push is handed to the connection, so a
+    /// push lost before the harness takes it comes back in the next inbox
+    /// pull. What happens after the client's ack is past the daemon's view.
+    /// `None` = a client that doesn't ack pushes; the daemon marks them read
+    /// for it. The same field as upstream Marshal's #140 (MUS-81).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acks_pushes: Option<bool>,
 }
 
 /// Resolve the session a write command is acting *as*.

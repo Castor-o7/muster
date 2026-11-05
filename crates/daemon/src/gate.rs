@@ -98,12 +98,6 @@ pub fn myko_request_filter(local_token: String) -> myko_server::router::RequestF
     })
 }
 
-/// Bind the local gate and serve forever. Spawn on a tokio task.
-pub async fn run_local(config: LocalGateConfig) -> std::io::Result<()> {
-    let listener = TcpListener::bind(config.bind).await?;
-    serve_local(listener, config).await
-}
-
 /// Serve the local gate on an already-bound listener.
 pub async fn serve_local(listener: TcpListener, config: LocalGateConfig) -> std::io::Result<()> {
     log::info!(
