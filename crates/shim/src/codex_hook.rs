@@ -474,7 +474,7 @@ fn wrap_long_lines(text: &str, max: usize) -> String {
 /// context. The long-lived bridge calls this from `thread/started`, before the
 /// first prompt; normal lifecycle hooks remain responsible for context
 /// injection and inbox acknowledgement.
-pub(crate) fn register_session(base: &str, session_id: &str, cwd: &str) -> Option<String> {
+pub(crate) fn register_session(route: &HookRoute, session_id: &str, cwd: &str) -> Option<String> {
     let body = format!(
         "{{\"session_id\":{},\"cwd\":{}}}",
         json_str(session_id),
@@ -486,14 +486,12 @@ pub(crate) fn register_session(base: &str, session_id: &str, cwd: &str) -> Optio
         url_q(&operator()),
         identity_q()
     );
-    // A paired machine registers through the daemon's TLS gate (MUS-18), as its
-    // hooks do, unless `MUSTER_BASE_URL` names the hook listener.
-    let explicit = std::env::var("MUSTER_BASE_URL").is_ok_and(|b| !b.is_empty());
-    let response = match crate::link::load_pairing().filter(|_| !explicit) {
+    let pairing = route.via_pairing.then(crate::link::load_pairing).flatten();
+    let response = match pairing {
         Some(pairing) => crate::link::https_post_why(&pairing, &path, &body, TIMEOUT)
             .ok()
             .map(|reply| reply.body)?,
-        None => http_post(base, &path, &body, TIMEOUT)?,
+        None => http_post(&route.base, &path, &body, TIMEOUT)?,
     };
     if let Ok(identity) = serde_json::from_str::<serde_json::Value>(&response)
         && identity.get("session_id").and_then(|v| v.as_str()) == Some(session_id)
@@ -506,6 +504,35 @@ pub(crate) fn register_session(base: &str, session_id: &str, cwd: &str) -> Optio
         return Some(nickname.to_string());
     }
     None
+}
+
+/// Where a bridge registers its threads: the hook listener at `base`, or this
+/// machine's pairing when `via_pairing` is set and there is one.
+#[derive(Clone, Debug)]
+pub(crate) struct HookRoute {
+    pub(crate) base: String,
+    pub(crate) via_pairing: bool,
+}
+
+impl HookRoute {
+    /// A paired machine registers through the daemon's TLS gate (MUS-18), as its
+    /// hooks do, unless `--daemon` or `MUSTER_BASE_URL` names where to go.
+    pub(crate) fn for_bridge(daemon: &str, daemon_explicit: bool) -> Self {
+        let base_explicit = std::env::var("MUSTER_BASE_URL").is_ok_and(|b| !b.is_empty());
+        Self {
+            base: registration_base(daemon),
+            via_pairing: !daemon_explicit && !base_explicit,
+        }
+    }
+
+    /// Straight to the hook listener at `base`, whatever this machine is paired to.
+    #[cfg(test)]
+    pub(crate) fn direct(base: impl Into<String>) -> Self {
+        Self {
+            base: base.into(),
+            via_pairing: false,
+        }
+    }
 }
 
 /// Resolve the hook listener used by a bridge that already resolved its daemon
@@ -744,6 +771,15 @@ mod tests {
             Some("ok"),
             "strict HTTP authority validation rejected the hook request"
         );
+    }
+
+    #[test]
+    fn an_explicit_daemon_registers_without_the_pairing() {
+        let route = HookRoute::for_bridge("ws://127.0.0.1:6255", true);
+        assert!(!route.via_pairing);
+        let base_set = std::env::var("MUSTER_BASE_URL").is_ok_and(|b| !b.is_empty());
+        let route = HookRoute::for_bridge("ws://127.0.0.1:6255", false);
+        assert_eq!(route.via_pairing, !base_set);
     }
 
     #[test]

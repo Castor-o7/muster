@@ -1158,7 +1158,7 @@ pub async fn run(args: &[String]) -> Result<()> {
             ),
         ),
     };
-    let hook_base = crate::codex_hook::registration_base(&args.daemon);
+    let hook_route = crate::codex_hook::HookRoute::for_bridge(&args.daemon, args.daemon_explicit);
     let launcher = args
         .launcher_state_file
         .clone()
@@ -1179,7 +1179,7 @@ pub async fn run(args: &[String]) -> Result<()> {
     let registered: RegisteredThreads = Arc::default();
     let mut registration_task = tokio::spawn(watch_app_server_registrations(
         args.app_server.clone(),
-        hook_base.clone(),
+        hook_route.clone(),
         args.ready_file.clone(),
         launcher,
         registered.clone(),
@@ -1256,11 +1256,11 @@ pub async fn run(args: &[String]) -> Result<()> {
         };
         for registration in missing {
             reregistered_at.insert(registration.session_id.clone(), now);
-            let base = hook_base.clone();
+            let route = hook_route.clone();
             let session_id = registration.session_id.clone();
             let registered_again = tokio::task::spawn_blocking(move || {
                 crate::codex_hook::register_session(
-                    &base,
+                    &route,
                     &registration.session_id,
                     &registration.cwd,
                 )
@@ -1608,7 +1608,7 @@ struct ThreadNameUpdate {
 /// and teardown.
 async fn watch_app_server_registrations(
     app_server: AppServerEndpoint,
-    hook_base: String,
+    hook_route: crate::codex_hook::HookRoute,
     mut ready_file: Option<PathBuf>,
     launcher: Option<SharedLauncherState>,
     registered: RegisteredThreads,
@@ -1631,7 +1631,7 @@ async fn watch_app_server_registrations(
                     Ok(Ok((mut websocket, _))) => {
                         monitor_registration_connection(
                             &mut websocket,
-                            &hook_base,
+                            &hook_route,
                             &mut ready_file,
                             &mut pending,
                             &mut decorations,
@@ -1649,7 +1649,7 @@ async fn watch_app_server_registrations(
             AppServerEndpoint::Unix(socket) => {
                 monitor_registrations_over_unix(
                     socket,
-                    &hook_base,
+                    &hook_route,
                     &mut ready_file,
                     &mut pending,
                     &mut decorations,
@@ -1674,7 +1674,7 @@ async fn watch_app_server_registrations(
 #[cfg(unix)]
 async fn monitor_registrations_over_unix(
     socket: &Path,
-    hook_base: &str,
+    hook_route: &crate::codex_hook::HookRoute,
     ready_file: &mut Option<PathBuf>,
     pending: &mut HashMap<String, ThreadRegistration>,
     decorations: &mut HashMap<String, ThreadNameDecoration>,
@@ -1699,7 +1699,7 @@ async fn monitor_registrations_over_unix(
     .context("upgrading Codex app-server Unix socket to WebSocket")?;
     monitor_registration_connection(
         &mut websocket,
-        hook_base,
+        hook_route,
         ready_file,
         pending,
         decorations,
@@ -1712,7 +1712,7 @@ async fn monitor_registrations_over_unix(
 #[cfg(not(unix))]
 async fn monitor_registrations_over_unix(
     _socket: &Path,
-    _hook_base: &str,
+    _hook_route: &crate::codex_hook::HookRoute,
     _ready_file: &mut Option<PathBuf>,
     _pending: &mut HashMap<String, ThreadRegistration>,
     _decorations: &mut HashMap<String, ThreadNameDecoration>,
@@ -1724,7 +1724,7 @@ async fn monitor_registrations_over_unix(
 
 async fn monitor_registration_connection<S>(
     websocket: &mut WebSocketStream<S>,
-    hook_base: &str,
+    hook_route: &crate::codex_hook::HookRoute,
     ready_file: &mut Option<PathBuf>,
     pending: &mut HashMap<String, ThreadRegistration>,
     decorations: &mut HashMap<String, ThreadNameDecoration>,
@@ -1757,7 +1757,7 @@ where
         for session_id in session_ids {
             if let Some(registration) = try_pending_registration(
                 websocket,
-                hook_base,
+                hook_route,
                 pending,
                 decorations,
                 &session_id,
@@ -1807,7 +1807,7 @@ where
                     pending.insert(session_id.clone(), registration);
                     if let Some(registration) = try_pending_registration(
                         websocket,
-                        hook_base,
+                        hook_route,
                         pending,
                         decorations,
                         &session_id,
@@ -1876,7 +1876,7 @@ where
                 for session_id in session_ids {
                     if let Some(registration) = try_pending_registration(
                         websocket,
-                        hook_base,
+                        hook_route,
                         pending,
                         decorations,
                         &session_id,
@@ -2072,7 +2072,7 @@ fn update_pending_thread_name(
 
 async fn try_pending_registration<S>(
     websocket: &mut WebSocketStream<S>,
-    hook_base: &str,
+    hook_route: &crate::codex_hook::HookRoute,
     pending: &mut HashMap<String, ThreadRegistration>,
     decorations: &mut HashMap<String, ThreadNameDecoration>,
     session_id: &str,
@@ -2083,12 +2083,13 @@ where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
     let registration = pending.get(session_id).cloned()?;
-    let base = hook_base.to_string();
+    let route = hook_route.clone();
     let (sid, cwd) = (registration.session_id.clone(), registration.cwd.clone());
-    let nickname =
-        tokio::task::spawn_blocking(move || crate::codex_hook::register_session(&base, &sid, &cwd))
-            .await
-            .unwrap_or(None);
+    let nickname = tokio::task::spawn_blocking(move || {
+        crate::codex_hook::register_session(&route, &sid, &cwd)
+    })
+    .await
+    .unwrap_or(None);
     if let Some(nickname) = nickname {
         let decoration = ThreadNameDecoration {
             thread_id: registration.thread_id.clone(),
@@ -3327,7 +3328,7 @@ mod tests {
         });
         let watcher = tokio::spawn(watch_app_server_registrations(
             AppServerEndpoint::WebSocket(format!("ws://{app_address}")),
-            format!("http://{hook_address}"),
+            crate::codex_hook::HookRoute::direct(format!("http://{hook_address}")),
             Some(ready_file.clone()),
             Some(launcher),
             RegisteredThreads::default(),
@@ -3441,7 +3442,7 @@ mod tests {
         });
         let watcher = tokio::spawn(watch_app_server_registrations(
             AppServerEndpoint::WebSocket(format!("ws://{app_address}")),
-            format!("http://{hook_address}"),
+            crate::codex_hook::HookRoute::direct(format!("http://{hook_address}")),
             None,
             None,
             RegisteredThreads::default(),
