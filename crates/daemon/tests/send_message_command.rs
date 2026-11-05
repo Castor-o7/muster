@@ -615,3 +615,27 @@ fn an_empty_recipient_is_refused_not_sent_to_the_sender() {
     }
     assert_eq!(message_count(&ctx), 0, "nothing is stored");
 }
+
+#[test]
+fn an_unbound_caller_is_refused_with_the_stable_code() {
+    // MUS-80: the shim retries this refusal by its code, so the daemon's
+    // refusal must carry it.
+    let ctx = setup();
+    set_session(&ctx, &session("recipient", Some("c-recipient")));
+    let err = SendMessage {
+        response_required: false,
+        to_session_id: SessionId(Arc::from("recipient")),
+        body: "hi".into(),
+        as_session: None,
+        idempotency_key: None,
+    }
+    .execute(cmd_ctx(&ctx, Some("c-nobody")))
+    .expect_err("a client with no session is refused");
+    assert!(
+        muster_entities::is_unregistered_refusal(&err.message),
+        "{}",
+        err.message
+    );
+    assert!(err.message.starts_with(muster_entities::UNREGISTERED_CODE));
+    assert_eq!(message_count(&ctx), 0);
+}

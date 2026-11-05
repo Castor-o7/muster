@@ -80,8 +80,8 @@ muster-daemon unlink murph      # forgets it; on Murph, `muster-daemon unlink a1
 **For upstream, which has no CLI.** Offer both: (a) the `link`, `links` and
 `unlink` subcommands, landing with the Gate PR's `pair` family, or (b) a
 `MARSHAL_LINKS` variable naming a file of link codes, read at start. The
-operator asks upstream which it wants, together with `--tls` against
-`MARSHAL_TLS`.
+operator asks upstream which it wants. (For TLS itself the operator chose the
+`--tls` flag, with `--plain` as the escape, on 2026-11-05.)
 
 ## The link protocol
 

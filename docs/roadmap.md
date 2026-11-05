@@ -450,7 +450,9 @@ Rally.
 - [x] **MUS-64: Make the TLS gate optional (G3).** Plain WebSocket by default, like upstream, and
   a switch ("cert mode") that turns on the gate, pinning, tokens and pairing. Done when: tests
   cover both modes. Offer both a `--tls` flag and a `MUSTER_TLS=1` variable, and check upstream's
-  daemon for which it uses; the operator asks upstream which it wants. Design in #82. Built with
+  daemon for which it uses. For upstream the operator chose `--tls` (2026-11-05, "--tls
+  please", replacing a relayed `MARSHAL_TLS=1` choice from the night before), with `--plain` as
+  the escape when pairings exist and no environment variable. Design in #82. Built with
   both, one port for local and remote, and a refusal to run plain while pairings exist unless
   `MUSTER_TLS=0` says so; the gate e2e covers both modes. **Murph's unit needs
   `Environment=MUSTER_TLS=1` before the restart that brings this in**, or the daemon refuses to
@@ -476,6 +478,14 @@ Rally.
   on the dialed side does nothing, because it edits only the dialer's `links` file. Done when:
   `unpair` takes `--machine` or `--link`, a bare name that matches both is refused with both
   forms named, `unlink` on the dialed side removes `link:<name>`, and an e2e covers each case.
+- [ ] **MUS-85: Fail closed when the paired machines can't be read.** From the watchman's
+  review of the upstream Gate port: `run_daemon` decides whether machines are paired with
+  `token_names(&state_dir).unwrap_or_default()`, so a tokens file that exists but can't be read
+  (permissions, an I/O error, invalid UTF-8) reads as no pairings, and a daemon whose unit lost
+  `MUSTER_TLS=1` starts plain without the refusal MUS-64 added. A line that doesn't parse is
+  skipped the same way. Done when: an unreadable tokens file stops the daemon with the error
+  named, any non-blank line counts as a pairing for this check, and a test covers both. The
+  upstream port (port/gate-v2) does this as `mode::has_pairings`.
 - [x] **MUS-72: Hold a session's first writes until it's registered.** Found by tangerine-wombat
   in the G5 run on Murph: a tool call right after `initialize` reached the daemon before the
   shim's Session SET and failed "caller has no session on the roster". A real agent's first
@@ -585,16 +595,17 @@ Rally.
   all 8 were delivered, with no "no session on the roster" refusal in the daemon log.
 - [ ] **MUS-81: A pushed message is lost if the harness loses it after the push.** From MUS-69,
   the push-side twin of MUS-75. `SendMessage` writes `MessageRead` as soon as the live push reaches
-  the recipient's connection. A plugin harness (Pi and opencode, and probably Prime Agent) then
+  the recipient's connection. A plugin harness (Pi, opencode or Prime Agent) then
   hands it to the model, and if that fails, the next turn's inbox drain finds nothing unread. The
-  conformance suite's `pi` and `opencode` × `dropped-ack-redelivers` cells show it. Done when: a pushed message
+  conformance suite's `pi`, `opencode` and `prime-agent` × `dropped-ack-redelivers` cells show it. Done when: a pushed message
   that the harness didn't take stays unread (the plugin acks after handing it over, or another
   design), and those cells pass.
 - [ ] **MUS-82: Resuming wakes doesn't wake a push session with held mail.** From MUS-69. While
   wakes are paused, the live push is skipped and the mail stays unread. On resume, Claude's waiter
   and the Codex bridge (MUS-74) wake for it, but nothing pushes it again, so a push session (a
-  plugin, or Claude with channels on) waits for its next turn. The suite's `pi` and `opencode` ×
-  `resume-wakes-held-mail` cells show it. A channels-on Claude session likely has the same gap,
+  plugin, or Claude with channels on) waits for its next turn. The suite's plugin cells (`pi`,
+  `opencode` and `prime-agent` ×
+  `resume-wakes-held-mail`) show it. A channels-on Claude session likely has the same gap,
   but no conformance fake models one yet. Done when: unread direct mail held by a pause is pushed
   when wakes resume, and those cells pass.
 
