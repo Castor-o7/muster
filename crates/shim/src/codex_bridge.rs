@@ -55,10 +55,9 @@ use std::{
 
 use anyhow::{Context, Result};
 use futures_util::{SinkExt, StreamExt};
-use hyphae::Gettable;
+use hyphae::{Gettable, Watchable};
 use muster_entities::{
-    GetAllMessageReads, GetAllMessages, GetAllSessions, GetAllWakePauses, Message, MessageRead,
-    Session, SessionId,
+    GetAllSessions, GetAllWakePauses, ReadMessages, ReadMessagesResult, Session, SessionId,
 };
 use myko::client::MykoClient;
 use serde::{Deserialize, Serialize};
@@ -250,6 +249,8 @@ impl WakeLeadership {
 #[derive(Debug)]
 struct BridgeArgs {
     daemon: String,
+    /// `--daemon` was given, which wins over a pairing (MUS-18).
+    daemon_explicit: bool,
     app_server: AppServerEndpoint,
     poll: Duration,
     wake_thread: Option<SessionId>,
@@ -1142,8 +1143,25 @@ pub async fn run(args: &[String]) -> Result<()> {
     }
     muster_entities::link();
 
-    let local_host = short_host();
-    let hook_base = crate::codex_hook::registration_base(&args.daemon);
+    // A paired machine reaches the daemon through its TLS gate (MUS-18), as the
+    // MCP shim does, unless `--daemon` names an address. The gate records the
+    // pairing name as the host of this machine's sessions, so that's the host
+    // to look for on the roster.
+    let pairing = crate::link::load_pairing().filter(|_| !args.daemon_explicit);
+    let local_host = pairing
+        .as_ref()
+        .map_or_else(short_host, |pairing| pairing.name.clone());
+    let (daemon_url, credential) = match &pairing {
+        Some(_) => crate::daemon_address().await?,
+        None => (
+            crate::with_local_token(args.daemon.clone()),
+            crate::refusal::Credential::LocalToken(
+                muster_entities::pairing::config_dir()
+                    .map(|d| d.join(muster_entities::pairing::LOCAL_TOKEN_FILE)),
+            ),
+        ),
+    };
+    let hook_route = crate::codex_hook::HookRoute::for_bridge(&args.daemon, args.daemon_explicit);
     let launcher = args
         .launcher_state_file
         .clone()
@@ -1164,7 +1182,7 @@ pub async fn run(args: &[String]) -> Result<()> {
     let registered: RegisteredThreads = Arc::default();
     let mut registration_task = tokio::spawn(watch_app_server_registrations(
         args.app_server.clone(),
-        hook_base.clone(),
+        hook_route.clone(),
         args.ready_file.clone(),
         launcher,
         registered.clone(),
@@ -1175,18 +1193,37 @@ pub async fn run(args: &[String]) -> Result<()> {
     let mut watched_at: Option<Instant> = None;
     let client = Arc::new(MykoClient::new());
     let sessions = client.watch_query::<GetAllSessions>(GetAllSessions {});
-    let messages = client.watch_query::<GetAllMessages>(GetAllMessages {});
-    let reads = client.watch_query::<GetAllMessageReads>(GetAllMessageReads {});
     // The operator's pause (MUS-10), which the daemon publishes as one
     // `WakePause` record. Claude's waiter honours it at `/hook/wait`; the
     // bridge has to honour it here (MUS-74).
     let pauses = client.watch_query::<GetAllWakePauses>(GetAllWakePauses {});
-    client.set_address(Some(args.daemon.clone()));
+    // While disconnected, ask the daemon once why, and say so if it refused
+    // this bridge's credential (MUS-83), rather than wake nothing in silence.
+    let runtime = tokio::runtime::Handle::current();
+    let probe_url = daemon_url.clone();
+    let conn_guard = client.connection_status().subscribe(move |signal| {
+        if let hyphae::Signal::Value(status) = signal {
+            match &**status {
+                myko::client::ConnectionStatus::Connected(_) => crate::refusal::clear(),
+                myko::client::ConnectionStatus::Disconnected => {
+                    runtime.spawn(crate::refusal::probe(probe_url.clone(), credential.clone()));
+                }
+                _ => {}
+            }
+        }
+    });
+    client.connection_status().own(conn_guard);
+    client.set_address(Some(daemon_url));
 
     log::info!(
-        "[codex-bridge] watching host={local_host} daemon={} app_server={}",
+        "[codex-bridge] watching host={local_host} daemon={} app_server={}{}",
         args.daemon,
-        args.app_server
+        args.app_server,
+        if pairing.is_some() {
+            " (paired, through the gate)"
+        } else {
+            ""
+        }
     );
 
     let mut wake_leadership = WakeLeadership::new(&args.app_server, &args.daemon);
@@ -1225,11 +1262,11 @@ pub async fn run(args: &[String]) -> Result<()> {
         };
         for registration in missing {
             reregistered_at.insert(registration.session_id.clone(), now);
-            let base = hook_base.clone();
+            let route = hook_route.clone();
             let session_id = registration.session_id.clone();
             let registered_again = tokio::task::spawn_blocking(move || {
                 crate::codex_hook::register_session(
-                    &base,
+                    &route,
                     &registration.session_id,
                     &registration.cwd,
                 )
@@ -1269,7 +1306,7 @@ pub async fn run(args: &[String]) -> Result<()> {
         let refresh_due = watched_at.is_none_or(|at| now.duration_since(at) >= WATCH_REFRESH);
         let (watch, unwatch) = watch_plan(&can_wake, &watched, refresh_due);
         if !watch.is_empty() || !unwatch.is_empty() {
-            sync_watches(&hook_base, &watch, &unwatch, &mut watched).await;
+            sync_watches(&hook_route, &watch, &unwatch, &mut watched).await;
         }
         if refresh_due {
             watched_at = Some(now);
@@ -1286,15 +1323,11 @@ pub async fn run(args: &[String]) -> Result<()> {
             continue;
         }
 
-        let session_snapshot = sessions.get();
-        let message_snapshot = messages.get();
-        let read_snapshot = reads.get();
-        let candidates = unread_local_codex_sessions(
-            &session_snapshot,
-            &message_snapshot,
-            &read_snapshot,
-            &local_host,
-        );
+        let watched = {
+            let registered = registered.lock().unwrap();
+            local_registered_hook_sessions(&sessions.get(), &registered, &local_host)
+        };
+        let candidates = with_unread_mail(&client, watched).await;
         retain_active_cooldowns(&mut cooldowns, now);
 
         for session_id in candidates {
@@ -1325,9 +1358,9 @@ pub async fn run(args: &[String]) -> Result<()> {
     registration_task.abort();
     // This bridge can't wake anything once it stops.
     let unwatch: Vec<String> = watched.iter().cloned().collect();
-    sync_watches(&hook_base, &[], &unwatch, &mut watched).await;
+    sync_watches(&hook_route, &[], &unwatch, &mut watched).await;
     // Keep the client and watched cells live until the loop exits.
-    drop((pauses, reads, messages, sessions, client));
+    drop((pauses, sessions, client));
     Ok(())
 }
 
@@ -1389,24 +1422,24 @@ fn watch_plan(
 /// daemon says so; one the bridge stops watching is forgotten either way, and the daemon's
 /// record runs out by itself if the request was lost.
 async fn sync_watches(
-    hook_base: &str,
+    hook_route: &crate::codex_hook::HookRoute,
     watch: &[String],
     unwatch: &[String],
     watched: &mut HashSet<String>,
 ) {
-    let base = hook_base.to_string();
+    let route = hook_route.clone();
     let watch = watch.to_vec();
     let unwatch = unwatch.to_vec();
     let results = tokio::task::spawn_blocking(move || {
         let watching: Vec<(String, bool)> = watch
             .into_iter()
             .map(|session| {
-                let ok = crate::codex_hook::bridge_watch(&base, &session, true);
+                let ok = crate::codex_hook::bridge_watch(&route, &session, true);
                 (session, ok)
             })
             .collect();
         for session in &unwatch {
-            crate::codex_hook::bridge_watch(&base, session, false);
+            crate::codex_hook::bridge_watch(&route, session, false);
         }
         (watching, unwatch)
     })
@@ -1504,6 +1537,7 @@ fn parse_args(args: &[String]) -> Result<BridgeArgs> {
         }
     }
 
+    let daemon_explicit = daemon.is_some();
     let daemon = daemon
         .or_else(crate::read_address_from_config_file)
         .or_else(|| std::env::var(crate::ADDRESS_ENV).ok())
@@ -1547,6 +1581,7 @@ fn parse_args(args: &[String]) -> Result<BridgeArgs> {
 
     Ok(BridgeArgs {
         daemon,
+        daemon_explicit,
         app_server,
         poll: poll_ms.map(Duration::from_millis).unwrap_or(DEFAULT_POLL),
         wake_thread,
@@ -1736,7 +1771,7 @@ struct ThreadNameUpdate {
 /// and teardown.
 async fn watch_app_server_registrations(
     app_server: AppServerEndpoint,
-    hook_base: String,
+    hook_route: crate::codex_hook::HookRoute,
     mut ready_file: Option<PathBuf>,
     launcher: Option<SharedLauncherState>,
     registered: RegisteredThreads,
@@ -1759,7 +1794,7 @@ async fn watch_app_server_registrations(
                     Ok(Ok((mut websocket, _))) => {
                         monitor_registration_connection(
                             &mut websocket,
-                            &hook_base,
+                            &hook_route,
                             &mut ready_file,
                             &mut pending,
                             &mut decorations,
@@ -1777,7 +1812,7 @@ async fn watch_app_server_registrations(
             AppServerEndpoint::Unix(socket) => {
                 monitor_registrations_over_unix(
                     socket,
-                    &hook_base,
+                    &hook_route,
                     &mut ready_file,
                     &mut pending,
                     &mut decorations,
@@ -1805,7 +1840,7 @@ async fn watch_app_server_registrations(
 #[cfg(unix)]
 async fn monitor_registrations_over_unix(
     socket: &Path,
-    hook_base: &str,
+    hook_route: &crate::codex_hook::HookRoute,
     ready_file: &mut Option<PathBuf>,
     pending: &mut HashMap<String, ThreadRegistration>,
     decorations: &mut HashMap<String, ThreadNameDecoration>,
@@ -1830,7 +1865,7 @@ async fn monitor_registrations_over_unix(
     .context("upgrading Codex app-server Unix socket to WebSocket")?;
     monitor_registration_connection(
         &mut websocket,
-        hook_base,
+        hook_route,
         ready_file,
         pending,
         decorations,
@@ -1843,7 +1878,7 @@ async fn monitor_registrations_over_unix(
 #[cfg(not(unix))]
 async fn monitor_registrations_over_unix(
     _socket: &Path,
-    _hook_base: &str,
+    _hook_route: &crate::codex_hook::HookRoute,
     _ready_file: &mut Option<PathBuf>,
     _pending: &mut HashMap<String, ThreadRegistration>,
     _decorations: &mut HashMap<String, ThreadNameDecoration>,
@@ -1855,7 +1890,7 @@ async fn monitor_registrations_over_unix(
 
 async fn monitor_registration_connection<S>(
     websocket: &mut WebSocketStream<S>,
-    hook_base: &str,
+    hook_route: &crate::codex_hook::HookRoute,
     ready_file: &mut Option<PathBuf>,
     pending: &mut HashMap<String, ThreadRegistration>,
     decorations: &mut HashMap<String, ThreadNameDecoration>,
@@ -1892,7 +1927,7 @@ where
         for session_id in session_ids {
             if let Some(registration) = try_pending_registration(
                 websocket,
-                hook_base,
+                hook_route,
                 pending,
                 decorations,
                 &session_id,
@@ -1939,7 +1974,7 @@ where
                     pending.insert(session_id.clone(), registration);
                     if let Some(registration) = try_pending_registration(
                         websocket,
-                        hook_base,
+                        hook_route,
                         pending,
                         decorations,
                         &session_id,
@@ -2005,7 +2040,7 @@ where
                 for session_id in session_ids {
                     if let Some(registration) = try_pending_registration(
                         websocket,
-                        hook_base,
+                        hook_route,
                         pending,
                         decorations,
                         &session_id,
@@ -2201,7 +2236,7 @@ fn update_pending_thread_name(
 
 async fn try_pending_registration<S>(
     websocket: &mut WebSocketStream<S>,
-    hook_base: &str,
+    hook_route: &crate::codex_hook::HookRoute,
     pending: &mut HashMap<String, ThreadRegistration>,
     decorations: &mut HashMap<String, ThreadNameDecoration>,
     session_id: &str,
@@ -2212,12 +2247,13 @@ where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
     let registration = pending.get(session_id).cloned()?;
-    let base = hook_base.to_string();
+    let route = hook_route.clone();
     let (sid, cwd) = (registration.session_id.clone(), registration.cwd.clone());
-    let nickname =
-        tokio::task::spawn_blocking(move || crate::codex_hook::register_session(&base, &sid, &cwd))
-            .await
-            .unwrap_or(None);
+    let nickname = tokio::task::spawn_blocking(move || {
+        crate::codex_hook::register_session(&route, &sid, &cwd)
+    })
+    .await
+    .unwrap_or(None);
     if let Some(nickname) = nickname {
         let decoration = ThreadNameDecoration {
             thread_id: registration.thread_id.clone(),
@@ -2411,41 +2447,63 @@ fn wakes_paused(pauses: &[Arc<muster_entities::WakePause>]) -> bool {
     pauses.iter().any(|p| p.paused)
 }
 
-/// Direct, unread, hook-owned sessions on this host. Hook-owned Codex sessions
-/// have no WS `client_id`; Claude shims do. The app-server itself is the final
-/// authority: a plain Codex thread is not present there and the wake request
-/// simply fails while its durable inbox remains untouched.
-fn unread_local_codex_sessions(
+/// The hook-owned sessions on this host that this bridge registered. Hook-owned
+/// Codex sessions have no WS `client_id`; Claude shims do. The app-server
+/// itself is the final authority: a thread no longer there just fails to wake,
+/// and its durable inbox is untouched.
+fn local_registered_hook_sessions(
     sessions: &[Arc<Session>],
-    messages: &[Arc<Message>],
-    reads: &[Arc<MessageRead>],
+    registered: &HashMap<String, ThreadRegistration>,
     local_host: &str,
-) -> HashSet<SessionId> {
-    let local_hook_sessions: HashSet<SessionId> = sessions
+) -> Vec<SessionId> {
+    sessions
         .iter()
         .filter(|session| {
             session.client_id.is_none()
+                && registered.contains_key(session.id.0.as_ref())
                 && session
                     .host
                     .as_ref()
                     .is_some_and(|host| host.name == local_host)
         })
         .map(|session| session.id.clone())
-        .collect();
-    let read_pairs: HashSet<(&str, &str)> = reads
-        .iter()
-        .map(|read| (read.message_id.0.as_ref(), read.session_id.0.as_ref()))
-        .collect();
-
-    messages
-        .iter()
-        .filter_map(|message| {
-            let recipient = message.to_session_id.as_ref()?;
-            (local_hook_sessions.contains(recipient)
-                && !read_pairs.contains(&(message.id.0.as_ref(), recipient.0.as_ref())))
-            .then(|| recipient.clone())
-        })
         .collect()
+}
+
+/// How long the bridge waits for one session's `ReadMessages`.
+const UNREAD_CHECK_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Which of `sessions` have unread direct mail, asked as each session with
+/// `ReadMessages` (MUS-18). That's one command per session per tick, but the
+/// gate allows it for a machine's own sessions, where it refuses a paired
+/// machine the whole message and read tables. A failed check counts as no
+/// mail; the next tick asks again.
+async fn with_unread_mail(client: &MykoClient, sessions: Vec<SessionId>) -> HashSet<SessionId> {
+    let mut unread = HashSet::new();
+    for session in sessions {
+        let cell = client.send_command::<ReadMessages, ReadMessagesResult>(&ReadMessages {
+            room: None,
+            from: None,
+            to_session: Some(session.clone()),
+            inbox: false,
+            sent: false,
+            unread: true,
+            since: None,
+            limit: Some(1),
+            as_session: Some(session.clone()),
+        });
+        match crate::tools::await_command(cell, UNREAD_CHECK_TIMEOUT).await {
+            Ok(result) if !result.messages.is_empty() => {
+                unread.insert(session);
+            }
+            Ok(_) => {}
+            Err(error) => log::debug!(
+                "[codex-bridge] couldn't check thread={}'s mail: {error}",
+                session.0
+            ),
+        }
+    }
+    unread
 }
 
 async fn start_thread(app_server: &AppServerEndpoint, session_id: &SessionId) -> Result<String> {
@@ -2656,7 +2714,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use muster_entities::{HostInfo, MessageId, MessageReadId};
+    use muster_entities::HostInfo;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio_tungstenite::{accept_async, connect_async};
 
@@ -2938,19 +2996,6 @@ mod tests {
         })
     }
 
-    fn message(id: &str, recipient: Option<&str>) -> Arc<Message> {
-        Arc::new(Message {
-            response_required: false,
-            id: MessageId(Arc::from(id)),
-            from_session_id: SessionId(Arc::from("sender")),
-            to_session_id: recipient.map(|id| SessionId(Arc::from(id))),
-            to_room_id: None,
-            to_operator: None,
-            body: "hello".into(),
-            sent_at: 2,
-        })
-    }
-
     #[test]
     fn wake_cooldown_survives_an_empty_unread_snapshot() {
         let session = SessionId(Arc::from("thread"));
@@ -3083,37 +3128,23 @@ mod tests {
     }
 
     #[test]
-    fn selects_only_local_hook_owned_sessions_with_unread_direct_messages() {
+    fn watches_only_local_hook_owned_sessions_this_bridge_registered() {
         let sessions = vec![
             session("local-codex", "host-a", true),
+            session("unregistered-codex", "host-a", true),
             session("local-claude", "host-a", false),
             session("remote-codex", "host-b", true),
         ];
-        let messages = vec![
-            message("m-local", Some("local-codex")),
-            message("m-claude", Some("local-claude")),
-            message("m-remote", Some("remote-codex")),
-            message("m-room", None),
-        ];
+        let registered: HashMap<String, ThreadRegistration> =
+            ["local-codex", "local-claude", "remote-codex"]
+                .into_iter()
+                .map(|id| (id.to_string(), registration(id)))
+                .collect();
 
         assert_eq!(
-            unread_local_codex_sessions(&sessions, &messages, &[], "host-a"),
-            HashSet::from([SessionId(Arc::from("local-codex"))])
+            local_registered_hook_sessions(&sessions, &registered, "host-a"),
+            vec![SessionId(Arc::from("local-codex"))]
         );
-    }
-
-    #[test]
-    fn read_direct_message_does_not_trigger() {
-        let sessions = vec![session("local-codex", "host-a", true)];
-        let messages = vec![message("m-local", Some("local-codex"))];
-        let reads = vec![Arc::new(MessageRead {
-            id: MessageReadId(Arc::from("m-local::local-codex")),
-            message_id: MessageId(Arc::from("m-local")),
-            session_id: SessionId(Arc::from("local-codex")),
-            read_at: 3,
-        })];
-
-        assert!(unread_local_codex_sessions(&sessions, &messages, &reads, "host-a").is_empty());
     }
 
     #[test]
@@ -3461,7 +3492,7 @@ mod tests {
         });
         let watcher = tokio::spawn(watch_app_server_registrations(
             AppServerEndpoint::WebSocket(format!("ws://{app_address}")),
-            format!("http://{hook_address}"),
+            crate::codex_hook::HookRoute::direct(format!("http://{hook_address}")),
             Some(ready_file.clone()),
             Some(launcher),
             RegisteredThreads::default(),
@@ -3575,7 +3606,7 @@ mod tests {
         });
         let watcher = tokio::spawn(watch_app_server_registrations(
             AppServerEndpoint::WebSocket(format!("ws://{app_address}")),
-            format!("http://{hook_address}"),
+            crate::codex_hook::HookRoute::direct(format!("http://{hook_address}")),
             None,
             None,
             RegisteredThreads::default(),
