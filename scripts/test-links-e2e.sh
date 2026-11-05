@@ -5,6 +5,15 @@
 set -u
 BIN=$(cd "$(dirname "$0")/.." && pwd)/target/debug
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/muster-links-e2e.XXXX")
+# Free ports for this run, picked together so they differ, and exported for
+# the Python helpers below. Two runs on one host no longer collide (MUS-88).
+FREE=($(python3 -I -c 'import socket; s=[socket.socket() for _ in range(6)]; [x.bind(("127.0.0.1", 0)) for x in s]; print(*[x.getsockname()[1] for x in s])'))
+export P_L_GATE=$FREE[1]
+export P_L_HOOK=$FREE[2]
+export P_L_MYKO=$FREE[3]
+export P_D_GATE=$FREE[4]
+export P_D_HOOK=$FREE[5]
+export P_D_MYKO=$FREE[6]
 unset MUSTER_BASE_URL MUSTER_DAEMON_ADDRESS MUSTER_TLS MYKO_POSTGRES_URL
 T() { perl -e 'alarm 15; exec @ARGV' "$@"; }
 pass=0; fail=0
@@ -13,11 +22,11 @@ waitfor() { for i in {1..100}; do eval "$1" && return 0; sleep 0.2; done; return
 
 # L listens (the far daemon, "lhost"); D dials it ("dhost").
 L_ENV=(XDG_CONFIG_HOME=$WORK/L MUSTER_STATE_DIR=$WORK/L/state MUSTER_HOST=lhost MUSTER_TLS=1 MUSTER_ACK_LEASE_SECS=2
-       MUSTER_BIND=127.0.0.1:16655 MUSTER_HOOK_BIND=127.0.0.1:16656 MUSTER_MYKO_BIND=127.0.0.1:16658)
+       MUSTER_BIND=127.0.0.1:${P_L_GATE} MUSTER_HOOK_BIND=127.0.0.1:${P_L_HOOK} MUSTER_MYKO_BIND=127.0.0.1:${P_L_MYKO})
 D_ENV=(XDG_CONFIG_HOME=$WORK/D MUSTER_STATE_DIR=$WORK/D/state MUSTER_HOST=dhost MUSTER_TLS=1 MUSTER_ACK_LEASE_SECS=2
-       MUSTER_BIND=127.0.0.1:16755 MUSTER_HOOK_BIND=127.0.0.1:16756 MUSTER_MYKO_BIND=127.0.0.1:16758)
-start_l() { env $L_ENV RUST_LOG=info $BIN/muster-daemon >>$WORK/L.log 2>&1 & LPID=$!; waitfor 'nc -z 127.0.0.1 16656 2>/dev/null && nc -z 127.0.0.1 16655 2>/dev/null'; }
-start_d() { env $D_ENV RUST_LOG=info $BIN/muster-daemon >>$WORK/D.log 2>&1 & DPID=$!; waitfor 'nc -z 127.0.0.1 16756 2>/dev/null && nc -z 127.0.0.1 16755 2>/dev/null'; }
+       MUSTER_BIND=127.0.0.1:${P_D_GATE} MUSTER_HOOK_BIND=127.0.0.1:${P_D_HOOK} MUSTER_MYKO_BIND=127.0.0.1:${P_D_MYKO})
+start_l() { env $L_ENV RUST_LOG=info $BIN/muster-daemon >>$WORK/L.log 2>&1 & LPID=$!; waitfor 'nc -z 127.0.0.1 ${P_L_HOOK} 2>/dev/null && nc -z 127.0.0.1 ${P_L_GATE} 2>/dev/null'; }
+start_d() { env $D_ENV RUST_LOG=info $BIN/muster-daemon >>$WORK/D.log 2>&1 & DPID=$!; waitfor 'nc -z 127.0.0.1 ${P_D_HOOK} 2>/dev/null && nc -z 127.0.0.1 ${P_D_GATE} 2>/dev/null'; }
 start_l; start_d
 trap 'kill $LPID $DPID 2>/dev/null; wait 2>/dev/null' EXIT
 L_TOKEN=$(<$WORK/L/muster/local-token); D_TOKEN=$(<$WORK/D/muster/local-token)
@@ -26,11 +35,11 @@ L_TOKEN=$(<$WORK/L/muster/local-token); D_TOKEN=$(<$WORK/D/muster/local-token)
 SL=a0000000-0000-4000-8000-0000000001a1   # on L
 SD=a0000000-0000-4000-8000-0000000001d1   # on D
 register() { curl -s -m 5 -o /dev/null -w %{http_code} -H "Authorization: Bearer $2" -X POST "http://127.0.0.1:$1/hook/session-start" -d "{\"session_id\":\"$3\",\"cwd\":\"/tmp/$4\"}"; }
-check "a session registers on each daemon" '[[ $(register 16656 $L_TOKEN $SL left) == 200 && $(register 16756 $D_TOKEN $SD right) == 200 ]]'
+check "a session registers on each daemon" '[[ $(register ${P_L_HOOK} $L_TOKEN $SL left) == 200 && $(register ${P_D_HOOK} $D_TOKEN $SD right) == 200 ]]'
 waitmail() { curl -s -m 12 -H "Authorization: Bearer $2" -X POST "http://127.0.0.1:$1/hook/wait?timeout=${4:-8}" -d "{\"session_id\":\"$3\",\"cwd\":\"/tmp/x\"}"; }
 
 # A link is made with a one-time code, like a pairing (MUS-8).
-OUT=$(T env $L_ENV $BIN/muster-daemon pair --name dhost --link --address 127.0.0.1:16655 2>/dev/null)
+OUT=$(T env $L_ENV $BIN/muster-daemon pair --name dhost --link --address 127.0.0.1:${P_L_GATE} 2>/dev/null)
 CODE=${OUT#muster-daemon link }
 check "pair --link prints a muster-daemon link command" '[[ $OUT == "muster-daemon link muster-pair:v2:"* ]]'
 OUT=$(T env HOME=$WORK/shim XDG_CONFIG_HOME=$WORK/shim $BIN/muster-shim pair "$CODE" 2>&1); RC=$?
@@ -38,11 +47,11 @@ check "muster-shim pair refuses a link code" '[[ $RC != 0 && $OUT == *"links two
 OUT=$(T env $D_ENV MUSTER_TLS=0 $BIN/muster-daemon link "$CODE" 2>&1); RC=$?
 check "link refuses without TLS (and doesn't spend the code)" '[[ $RC != 0 && $OUT == *"need TLS on both daemons"* ]]'
 OUT=$(T env $D_ENV $BIN/muster-daemon link "$CODE" 2>&1); RC=$?
-check "link redeems the code and stores the link" '[[ $RC == 0 && $OUT == "linked to lhost at 127.0.0.1:16655"* ]]'
+check "link redeems the code and stores the link" '[[ $RC == 0 && $OUT == "linked to lhost at 127.0.0.1:${P_L_GATE}"* ]]'
 check "the stored link is owner-only" '[[ $(python3 -I -c "import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777))" $WORK/D/state/links) == 0o600 ]]'
 OUT=$(T env $D_ENV $BIN/muster-daemon link "$CODE" 2>&1); RC=$?
 check "a used code is refused" '[[ $RC != 0 && $OUT == *"already used or has expired"* ]]'
-check "links lists it on both sides" '[[ $(T env $D_ENV $BIN/muster-daemon links) == *"lhost (this daemon dials 127.0.0.1:16655)"* && $(T env $L_ENV $BIN/muster-daemon links) == *"dhost (dials this daemon)"* ]]'
+check "links lists it on both sides" '[[ $(T env $D_ENV $BIN/muster-daemon links) == *"lhost (this daemon dials 127.0.0.1:${P_L_GATE})"* && $(T env $L_ENV $BIN/muster-daemon links) == *"dhost (dials this daemon)"* ]]'
 check "the link comes up on both sides" 'waitfor "grep -q \"\\[link\\] lhost: up\" $WORK/D.log && grep -q \"\\[link\\] dhost: up\" $WORK/L.log"'
 
 
@@ -90,39 +99,39 @@ p.kill()
 PY
 mcp() { perl -e 'alarm 60; exec @ARGV' python3 -I $MCP $BIN/muster-shim "$@"; }
 
-OUT=$(mcp $WORK/D ws://127.0.0.1:16755 $SD "[[\"wait_remote\",\"$SL\"]]")
+OUT=$(mcp $WORK/D ws://127.0.0.1:${P_D_GATE} $SD "[[\"wait_remote\",\"$SL\"]]")
 check "D's roster lists L's session, via lhost" '[[ $OUT == *"\"via\": \"lhost\""* && $OUT == *"\"address\": "*"@lhost"* ]]'
 check "and shares no cwd" '[[ $OUT != *"/tmp/left"* ]]'
 SL_ADDR=$(print -r -- "$OUT" | python3 -I -c 'import json,sys; l=sys.stdin.read(); print(json.loads(l.split("REMOTE ",1)[1])["address"]) if "REMOTE " in l else print("")')
-OUT=$(mcp $WORK/D ws://127.0.0.1:16755 $SD "[[\"wait_remote\",\"$SL\"],[\"send\",\"$SL_ADDR\",\"hello across the link\"]]")
+OUT=$(mcp $WORK/D ws://127.0.0.1:${P_D_GATE} $SD "[[\"wait_remote\",\"$SL\"],[\"send\",\"$SL_ADDR\",\"hello across the link\"]]")
 check "a session on D sends to nickname@lhost" '[[ $OUT == *via_link*lhost* ]]'
 [[ $OUT == *via_link*lhost* ]] || print -r -- "send from D: $OUT"
-MAIL=$(waitmail 16656 $L_TOKEN $SL)
+MAIL=$(waitmail ${P_L_HOOK} $L_TOKEN $SL)
 check "and L's session gets it, from nickname@dhost" '[[ $MAIL == *"hello across the link"* && $MAIL == *"@dhost"* ]]'
 SD_ADDR=$(print -r -- "$MAIL" | grep -o "from [a-z]*-[a-z]*@dhost" | head -1 | cut -c6-)
-OUT=$(mcp $WORK/L ws://127.0.0.1:16655 $SL "[[\"wait_remote\",\"$SD\"],[\"send\",\"$SD_ADDR\",\"and back again\"]]")
+OUT=$(mcp $WORK/L ws://127.0.0.1:${P_L_GATE} $SL "[[\"wait_remote\",\"$SD\"],[\"send\",\"$SD_ADDR\",\"and back again\"]]")
 check "L's session answers to the address it was shown" '[[ -n $SD_ADDR && $OUT == *via_link*dhost* ]]'
-MAIL=$(waitmail 16756 $D_TOKEN $SD)
+MAIL=$(waitmail ${P_D_HOOK} $D_TOKEN $SD)
 check "and D's session gets the answer" '[[ $MAIL == *"and back again"* && $MAIL == *"@lhost"* ]]'
-check "a message arrives once" '[[ $(waitmail 16756 $D_TOKEN $SD 2) != *"and back again"* ]]'
+check "a message arrives once" '[[ $(waitmail ${P_D_HOOK} $D_TOKEN $SD 2) != *"and back again"* ]]'
 
 # The listener restarts while mail waits in D's outbox.
 kill $LPID; wait $LPID 2>/dev/null
-OUT=$(mcp $WORK/D ws://127.0.0.1:16755 $SD "[[\"sleep\",3],[\"send\",\"$SL_ADDR\",\"sent while lhost was down\"]]")
+OUT=$(mcp $WORK/D ws://127.0.0.1:${P_D_GATE} $SD "[[\"sleep\",3],[\"send\",\"$SL_ADDR\",\"sent while lhost was down\"]]")
 check "a send while the link is down queues and says so" '[[ $OUT == *via_link*lhost* && $OUT == *link_up*false* ]]'
 start_l
 L_TOKEN=$(<$WORK/L/muster/local-token)
-register 16656 $L_TOKEN $SL left >/dev/null
-MAIL=$(waitmail 16656 $L_TOKEN $SL 20)
+register ${P_L_HOOK} $L_TOKEN $SL left >/dev/null
+MAIL=$(waitmail ${P_L_HOOK} $L_TOKEN $SL 20)
 check "after the restart, the queued message arrives" '[[ $MAIL == *"sent while lhost was down"* ]]'
-check "once" '[[ $(waitmail 16656 $L_TOKEN $SL 3) != *"sent while lhost was down"* ]]'
+check "once" '[[ $(waitmail ${P_L_HOOK} $L_TOKEN $SL 3) != *"sent while lhost was down"* ]]'
 
 PEER=$WORK/peer.py
 cat >$PEER <<'PY'
 import base64, json, os, socket, ssl, sys
 token, scenario, local_id = sys.argv[1:4]
 ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
-s = ctx.wrap_socket(socket.create_connection(("127.0.0.1", 16655), timeout=10), server_hostname="muster-daemon")
+s = ctx.wrap_socket(socket.create_connection(("127.0.0.1", int(os.environ["P_L_GATE"])), timeout=10), server_hostname="muster-daemon")
 s.sendall(("GET /link HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\n"
            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nAuthorization: Bearer %s\r\n\r\n" % token).encode())
 head = b""
@@ -195,31 +204,31 @@ PY
 # One link can't act on mail queued for another: a second link, ehost,
 # answers for a message waiting in L's outbox for dhost.
 kill $DPID; wait $DPID 2>/dev/null
-OUT=$(mcp $WORK/L ws://127.0.0.1:16655 $SL "[[\"sleep\",3],[\"send\",\"$SD_ADDR\",\"queued for dhost only\"]]")
+OUT=$(mcp $WORK/L ws://127.0.0.1:${P_L_GATE} $SL "[[\"sleep\",3],[\"send\",\"$SD_ADDR\",\"queued for dhost only\"]]")
 QUEUED_ID=$(print -r -- "$OUT" | grep -o '\\"message_id\\": \\"[^\\]*' | head -1 | sed 's/.*\\"//')
 check "mail for dhost queues while D is down" '[[ -n $QUEUED_ID && $OUT == *link_up*false* ]]'
-ECODE=$(T env $L_ENV $BIN/muster-daemon pair --name ehost --link --address 127.0.0.1:16655 2>/dev/null)
+ECODE=$(T env $L_ENV $BIN/muster-daemon pair --name ehost --link --address 127.0.0.1:${P_L_GATE} 2>/dev/null)
 ECODE=${ECODE#muster-daemon link }
 EINV=$(python3 -I -c 'import sys,json,base64; s=sys.argv[1].split(":",2)[2]; print(json.loads(base64.urlsafe_b64decode(s+"="*(-len(s)%4)))["invite"])' "$ECODE")
-E_TOKEN=$(curl -sk -m 5 -X POST -H "Authorization: Bearer $EINV" https://127.0.0.1:16655/pair | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["token"])')
+E_TOKEN=$(curl -sk -m 5 -X POST -H "Authorization: Bearer $EINV" https://127.0.0.1:${P_L_GATE}/pair | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["token"])')
 OUT=$(FAKE_ID=e0000000-0000-4000-8000-0000000000ee OTHER_ID=$QUEUED_ID perl -e 'alarm 30; exec @ARGV' python3 -I $PEER $E_TOKEN answers $SL 2>&1)
 check "ehost's answers about dhost's message are ignored" '[[ $OUT == *ANSWERED* ]] && [[ $(grep -c "ehost: ignored an answer about a message it wasn.t sent" $WORK/L.log) -ge 3 ]]'
-check "and its sender gets no forged refusal" '[[ $(waitmail 16656 $L_TOKEN $SL 2) != *"lies from another link"* ]]'
+check "and its sender gets no forged refusal" '[[ $(waitmail ${P_L_HOOK} $L_TOKEN $SL 2) != *"lies from another link"* ]]'
 start_d
 D_TOKEN=$(<$WORK/D/muster/local-token)
-register 16756 $D_TOKEN $SD right >/dev/null
-MAIL=$(waitmail 16756 $D_TOKEN $SD 20)
+register ${P_D_HOOK} $D_TOKEN $SD right >/dev/null
+MAIL=$(waitmail ${P_D_HOOK} $D_TOKEN $SD 20)
 check "and it still reaches dhost, not ehost, when D is back" '[[ $MAIL == *"queued for dhost only"* ]]'
 
 # Token kinds are kept apart at the gate.
 LINK_TOKEN=$(awk '{print $4}' $WORK/D/state/links)
-MCODE=$(T env $L_ENV $BIN/muster-daemon pair --name m1 --address 127.0.0.1:16655 2>/dev/null | awk '{print $3}')
+MCODE=$(T env $L_ENV $BIN/muster-daemon pair --name m1 --address 127.0.0.1:${P_L_GATE} 2>/dev/null | awk '{print $3}')
 INV=$(python3 -I -c 'import sys,json,base64; s=sys.argv[1].split(":",2)[2]; print(json.loads(base64.urlsafe_b64decode(s+"="*(-len(s)%4)))["invite"])' "$MCODE")
-MTOKEN=$(curl -sk -m 5 -X POST -H "Authorization: Bearer $INV" https://127.0.0.1:16655/pair | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["token"])')
+MTOKEN=$(curl -sk -m 5 -X POST -H "Authorization: Bearer $INV" https://127.0.0.1:${P_L_GATE}/pair | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["token"])')
 UPGRADE=(-H "Connection: Upgrade" -H "Upgrade: websocket" -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==")
-check "a machine's token can't open a link (403)" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_code} --http1.1 $UPGRADE -H "Authorization: Bearer $MTOKEN" https://127.0.0.1:16655/link) == 403 ]]'
-check "a link's token can't open myko (403)" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_code} --http1.1 $UPGRADE -H "Authorization: Bearer $LINK_TOKEN" https://127.0.0.1:16655/myko) == 403 ]]'
-check "or the hooks (403)" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_code} -H "Authorization: Bearer $LINK_TOKEN" -X POST https://127.0.0.1:16655/hook/session-start -d "{}") == 403 ]]'
+check "a machine's token can't open a link (403)" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_code} --http1.1 $UPGRADE -H "Authorization: Bearer $MTOKEN" https://127.0.0.1:${P_L_GATE}/link) == 403 ]]'
+check "a link's token can't open myko (403)" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_code} --http1.1 $UPGRADE -H "Authorization: Bearer $LINK_TOKEN" https://127.0.0.1:${P_L_GATE}/myko) == 403 ]]'
+check "or the hooks (403)" '[[ $(curl -sk -m 3 -o /dev/null -w %{http_code} -H "Authorization: Bearer $LINK_TOKEN" -X POST https://127.0.0.1:${P_L_GATE}/hook/session-start -d "{}") == 403 ]]'
 
 # A misbehaving peer holding D's link token. D is stopped first so it can't
 # take the link back mid-test.
@@ -230,11 +239,11 @@ OUT=$(peer forged)
 check "a deliver from a session the peer never advertised is refused" '[[ $OUT == *"FORGED"*"\"type\": \"refused\""*"isn'"'"'t one of that daemon"* ]]'
 check "a roster naming a local session id is refused" 'grep -q "refused $SL: that'"'"'s a local session'"'"'s id" $WORK/L.log'
 check "so mail can't come from it either" '[[ $OUT == *"TWIN"*"\"type\": \"refused\""* ]]'
-check "and the forged mail never reaches the session" '[[ $(waitmail 16656 $L_TOKEN $SL 2) != *forged* ]]'
+check "and the forged mail never reaches the session" '[[ $(waitmail ${P_L_HOOK} $L_TOKEN $SL 2) != *forged* ]]'
 OUT=$(peer flood)
 check "a flood past the rate limit is deferred, not refused" '[[ $OUT == *"\"deferred\": "* && $OUT == *"\"stored\": "* && $OUT != *refused* ]]'
 check "a resend of a stored message is answered stored" '[[ $OUT == *"RESEND"*"flood-0"* ]]'
-MAIL=$(curl -s -m 12 -H "Authorization: Bearer $L_TOKEN" -X POST "http://127.0.0.1:16656/hook/wait?timeout=3" -d "{\"session_id\":\"$SL\",\"cwd\":\"/tmp/x\"}")
+MAIL=$(curl -s -m 12 -H "Authorization: Bearer $L_TOKEN" -X POST "http://127.0.0.1:${P_L_HOOK}/hook/wait?timeout=3" -d "{\"session_id\":\"$SL\",\"cwd\":\"/tmp/x\"}")
 check "and flood 0 is in the inbox once" '[[ $(print -r -- "$MAIL" | grep -cw "flood 0") == 1 ]]'
 check "a frame over 128 KiB closes the link" '[[ $(peer big) == CLOSED ]]'
 
@@ -243,7 +252,7 @@ start_d
 check "the link comes back when D restarts" 'waitfor "[[ \$(grep -c \"\\[link\\] lhost: up\" $WORK/D.log) -ge 2 ]]"'
 D_LINES=$(wc -l <$WORK/D.log)
 # A machine paired under the link's name (MUS-84): a bare unpair mustn't take both.
-OUT=$(T env $L_ENV $BIN/muster-daemon pair --name dhost --address 127.0.0.1:16655 2>/dev/null)
+OUT=$(T env $L_ENV $BIN/muster-daemon pair --name dhost --address 127.0.0.1:${P_L_GATE} 2>/dev/null)
 T env HOME=$WORK/dmachine XDG_CONFIG_HOME=$WORK/dmachine $BIN/muster-shim pair "${OUT#muster-shim pair }" >/dev/null 2>&1
 check "a machine can be paired under a linked daemon's name" 'T env $L_ENV $BIN/muster-daemon pairs | grep -qx dhost'
 OUT=$(T env $L_ENV $BIN/muster-daemon unpair dhost 2>&1); RC=$?
