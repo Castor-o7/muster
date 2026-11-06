@@ -578,11 +578,7 @@ fn response_required(args: &Value) -> Result<bool, ToolError> {
 
 async fn send_message(host: &ToolHost, args: &Value) -> Result<ToolOutcome, ToolError> {
     let mut req = Required::new("send_message", args);
-    let to = req.string(
-        "to",
-        &["recipient", "to_session", "session"],
-        "session id or nickname",
-    );
+    let to = req.string("to", &["recipient", "to_session"], "session id or nickname");
     let body = req.string("body", &["message", "text"], "");
     let as_session = req.caller(host);
     req.finish()?;
