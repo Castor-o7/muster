@@ -562,6 +562,14 @@ Merged and needing a live run: MUS-36 and MUS-37.
   what it did, a test shows it rolls back a daemon that fails its health check, and a test shows a
   held wait ends cleanly on SIGTERM. The operator's direct OK is still needed to run it. Related:
   MUS-15, `scripts/restart-preview.sh`.
+- [x] **MUS-99: Say what a missing live channel means.** From the DiscoSim rally (2026-11-06,
+  issues log §1.1). Every send returned `live_push: unavailable` because no session ran with the
+  channels flag, which is expected under hook delivery, but nothing told senders why replies came
+  late. Done: the first send in a session that finds no live channel carries a `note` saying the
+  message waits in the inbox and shows at the recipient's next tool call or prompt, and that an
+  idle recipient is woken only when `wake` is `expected`. It is said once per shim, since #62
+  dropped the per-send note to keep tool output small. The statusline's `no live channel` warning
+  is unchanged: it still shows only when no wait hook is wired, the one case where it's a fault.
 - [ ] **MUS-30: Decide the future of the TypeScript plugins.** The operator decides
   whether to keep, freeze or remove them. Done when: the decision is recorded here,
   and if they're removed, the repository's `package.json` workspace goes with them.
