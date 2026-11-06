@@ -526,6 +526,14 @@ fn handle_prompt_submit(query: &str, body: &[u8], ctx: &Arc<MykoServerContext>) 
     let Some((sid, cmd_ctx)) = register_hook_session(query, body, ctx, Activity::Active) else {
         return HookOutcome::text(String::new());
     };
+    // MUS-103: Claude runs the session's hooks for a subagent's tool calls too,
+    // under the parent's session id, so an inbox shown here lands in the
+    // subagent's context and the main thread never sees it (rally log §10.1).
+    // The call still counts as activity; the mail waits for the main thread.
+    if let Some(agent) = parse_query(query).get("subagent").filter(|a| !a.is_empty()) {
+        log::debug!("[hook] {sid}: a subagent's hook ({agent}); mail waits for the main thread");
+        return HookOutcome::text(String::new());
+    }
 
     let (inbox, ids) = surface_unread(&cmd_ctx, &sid);
     // MUS-3: a session that took a predecessor's nickname over after it

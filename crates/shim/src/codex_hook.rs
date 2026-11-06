@@ -78,6 +78,28 @@ pub(crate) fn identity_q() -> String {
     }
 }
 
+/// The subagent a hook fired inside, if any (MUS-103). Claude runs the
+/// session's hooks for a subagent's tool calls with the parent's
+/// `session_id`, adding `agent_id` and `agent_type` (`agent_type` alone also
+/// appears under `--agent`, so it isn't a marker). A subagent's transcript
+/// lives under `<session>/subagents/`, checked too in case a version leaves
+/// `agent_id` out. The daemon then holds the mail for the main thread, whose
+/// context it's meant for.
+fn subagent_of(v: &serde_json::Value) -> Option<String> {
+    let field = |k: &str| {
+        v.get(k)
+            .and_then(|s| s.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    };
+    if field("agent_id").is_some() {
+        return Some(field("agent_type").unwrap_or("subagent").to_string());
+    }
+    field("transcript_path")
+        .filter(|p| p.contains("/subagents/") || p.contains("\\subagents\\"))
+        .map(|_| "subagent".to_string())
+}
+
 /// Shared hook body for both harnesses.
 pub fn run_for(harness: Harness, ep: &str, base_override: Option<&str>) {
     let mut input = String::new();
@@ -89,6 +111,7 @@ pub fn run_for(harness: Harness, ep: &str, base_override: Option<&str>) {
         return; // no session → nothing to surface
     }
     let cwd = v.get("cwd").and_then(|s| s.as_str()).unwrap_or("");
+    let subagent = subagent_of(&v);
 
     let base = resolve_base(base_override);
     let host = short_host();
@@ -114,11 +137,12 @@ pub fn run_for(harness: Harness, ep: &str, base_override: Option<&str>) {
     // has printed it, so a reply lost on the way (a hook killed at its timeout,
     // a dropped tunnel hop) leaves the mail unread (MUS-75).
     let path = format!(
-        "/hook/{endpoint}?host={}&operator={}&harness={}&ack=client{}",
+        "/hook/{endpoint}?host={}&operator={}&harness={}&ack=client{}{}",
         url_q(&host),
         url_q(&op),
         harness.name(),
-        identity_q()
+        identity_q(),
+        subagent.map_or_else(String::new, |a| format!("&subagent={}", url_q(&a)))
     );
 
     // A paired machine reaches the hooks through the daemon's TLS gate,
@@ -751,6 +775,34 @@ fn url_q(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_subagent_is_known_by_its_agent_id_or_transcript() {
+        let of = |v: serde_json::Value| super::subagent_of(&v);
+        assert_eq!(of(serde_json::json!({"session_id": "s"})), None);
+        assert_eq!(
+            of(serde_json::json!({"agent_type": "reviewer"})),
+            None,
+            "--agent sets agent_type in the main thread too"
+        );
+        assert_eq!(
+            of(serde_json::json!({"agent_id": "a1", "agent_type": "Explore"})).as_deref(),
+            Some("Explore")
+        );
+        assert_eq!(
+            of(serde_json::json!({"agent_id": "a1"})).as_deref(),
+            Some("subagent")
+        );
+        assert_eq!(
+            of(serde_json::json!({"transcript_path": "/h/.claude/projects/p/s/subagents/agent-a1.jsonl"}))
+                .as_deref(),
+            Some("subagent")
+        );
+        assert_eq!(
+            of(serde_json::json!({"transcript_path": "/h/.claude/projects/p/s.jsonl"})),
+            None
+        );
+    }
+
     use super::*;
 
     #[test]

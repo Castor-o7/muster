@@ -278,6 +278,31 @@ fn stored_message_surfaces_via_prompt_submit_hook() {
         "bounded preview re-surfaced after successful hook write"
     );
 
+    // MUS-103: a subagent's hook leaves the mail for the main thread.
+    SendMessage {
+        response_required: false,
+        to_session_id: SessionId(Arc::from("recipient")),
+        body: "FOR-THE-MAIN-THREAD".into(),
+        as_session: None,
+        idempotency_key: None,
+    }
+    .execute(cmd_ctx(&ctx, Some("c-sender")))
+    .expect("send persists");
+    let in_subagent = http_post(
+        addr,
+        "/hook/prompt-submit?subagent=Explore",
+        r#"{"session_id":"recipient"}"#,
+    );
+    assert!(
+        !in_subagent.contains("FOR-THE-MAIN-THREAD"),
+        "a subagent's hook was handed the main thread's mail: {in_subagent:?}"
+    );
+    let main_thread = http_post(addr, "/hook/prompt-submit", r#"{"session_id":"recipient"}"#);
+    assert!(
+        main_thread.contains("FOR-THE-MAIN-THREAD"),
+        "the mail a subagent's hook skipped didn't wait for the main thread: {main_thread:?}"
+    );
+
     // a wrong /hook path must 404 (the misroute that caused the outage).
     let mut s = TcpStream::connect(addr).unwrap();
     s.write_all(
