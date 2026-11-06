@@ -41,6 +41,7 @@ fn session(cwd: &str, identity: Option<&str>, client: Option<&str>) -> Session {
         last_activity_at: Some(chrono::Utc::now().timestamp_millis()),
         last_tool: None,
         last_tool_at: None,
+        current_task_at: None,
         operator: Some("op@example.com".into()),
         host: Some(HostInfo {
             name: "a1".into(),

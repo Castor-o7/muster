@@ -818,6 +818,7 @@ mod operator_routing_tests {
             last_activity_at: Some(last_activity_at),
             last_tool: None,
             last_tool_at: None,
+            current_task_at: None,
             operator: Some("op@example.test".to_string()),
             host: None,
             project: None,

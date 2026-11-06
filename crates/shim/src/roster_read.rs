@@ -78,6 +78,7 @@ fn view(
                     "last_tool_at": s.last_tool_at,
                     "connected_at": s.connected_at,
                     "current_task": s.current_task,
+                    "current_task_at": s.current_task_at,
                     "session_name": s.session_name,
                     "kind": s.kind,
                     "project": s.project,
@@ -154,6 +155,7 @@ mod tests {
             last_activity_at: Some(2),
             last_tool: None,
             last_tool_at: None,
+            current_task_at: None,
             operator: Some("op".into()),
             host: Some(HostInfo {
                 name: "a1".into(),

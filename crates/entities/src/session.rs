@@ -67,6 +67,7 @@ mod tests {
             last_activity_at: Some(1_700_000_005_000_i64),
             last_tool: Some("send_message".into()),
             last_tool_at: Some(1_700_000_004_500_i64),
+            current_task_at: None,
             operator: None,
             host: None,
             project: None,
@@ -101,6 +102,7 @@ mod tests {
             last_activity_at: None,
             last_tool: None,
             last_tool_at: None,
+            current_task_at: None,
             operator: Some("trevor".into()),
             project: None,
             host: Some(HostInfo {
@@ -229,6 +231,13 @@ pub struct Session {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[myko_setter]
     pub last_tool_at: Option<i64>,
+
+    /// Wall-clock millis when `current_task` was last set, so a reader can
+    /// tell a fresh status from one left over from hours ago (rally log §1.5).
+    /// `None` from a shim that predates it, or before any status was set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[myko_setter]
+    pub current_task_at: Option<i64>,
 
     /// Which human this session belongs to. Resolved by the shim:
     /// `$MUSTER_OPERATOR` → `$USER` → `"anonymous"`. Anchors the
