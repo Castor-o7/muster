@@ -562,6 +562,16 @@ Merged and needing a live run: MUS-36 and MUS-37.
   what it did, a test shows it rolls back a daemon that fails its health check, and a test shows a
   held wait ends cleanly on SIGTERM. The operator's direct OK is still needed to run it. Related:
   MUS-15, `scripts/restart-preview.sh`.
+- [x] **MUS-103: A subagent's hook doesn't take the main thread's mail.** From the DiscoSim rally
+  (2026-11-06, issues log §10.1): DM 721382a6 to robust-warbler read `read: true` but never
+  reached it. The daemon log shows one PostToolUse hook acking two messages at 18:40:02, fired by
+  a subagent's tool call: Claude runs the session's hooks for subagents under the parent's
+  session id, so the inbox went into the subagent's context, which passed on one message and
+  dropped the other. Done: the Claude hook marks a call made inside a subagent (`agent_id` in the
+  hook input, or a transcript under `subagents/`) with `&subagent=<type>`, and the daemon then
+  counts the activity but surfaces, leases and acks nothing, logging it at debug. The mail waits
+  for the main thread's next hook or the wait hook. An older daemon ignores the parameter, which
+  is today's behaviour.
 - [ ] **MUS-30: Decide the future of the TypeScript plugins.** The operator decides
   whether to keep, freeze or remove them. Done when: the decision is recorded here,
   and if they're removed, the repository's `package.json` workspace goes with them.
