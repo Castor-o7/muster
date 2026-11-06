@@ -562,6 +562,12 @@ Merged and needing a live run: MUS-36 and MUS-37.
   what it did, a test shows it rolls back a daemon that fails its health check, and a test shows a
   held wait ends cleanly on SIGTERM. The operator's direct OK is still needed to run it. Related:
   MUS-15, `scripts/restart-preview.sh`.
+- [x] **MUS-102: A lone long DM arrives whole in a hook.** From the DiscoSim rally (2026-11-06,
+  issues log §1.3): team summaries arrived cut at 2,000 characters, each needing a resource read.
+  Done: a hook shows up to 6,000 characters of one message (`HOOK_BODY_MAX_CHARS`), still within
+  the 8,000-character batch budget and Claude's 10,000-character hook limit; the live push keeps
+  its 2,000. Not done: a `read_message(id)` tool, and §10.1 (mail marked read that the model
+  never saw), which needs its own look at when a hook's ack fires.
 - [ ] **MUS-30: Decide the future of the TypeScript plugins.** The operator decides
   whether to keep, freeze or remove them. Done when: the decision is recorded here,
   and if they're removed, the repository's `package.json` workspace goes with them.

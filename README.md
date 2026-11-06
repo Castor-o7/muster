@@ -533,8 +533,8 @@ successful durable inbox delivery.
 Direct messages start or enter a recipient turn, so they consume transcript
 context. Batch related details and reserve direct delivery for action, a
 blocker, or a needed reply. Use an unmentioned room broadcast for FYI/progress.
-Automatic body previews are bounded (2,000 characters per message and an
-8,000-character hook-batch budget); the complete durable message remains
+Automatic body previews are bounded (2,000 characters per live push; a hook
+shows up to 6,000 of one message within an 8,000-character batch budget); the complete durable message remains
 available through `muster://messages`. Codex wakes coalesce for 30 seconds so
 a burst can join the active turn.
 
