@@ -16,7 +16,7 @@ Marshal's channel push. Every claim was checked against the code at
 | Idle session wakes | yes, the notification starts a turn | yes, through the `wait` hook (below) |
 | Busy session sees it | yes, as a channel event | at the next tool call (`PostToolUse`) or prompt (`UserPromptSubmit`) |
 | Marked read when | the push is handed to the shim's WebSocket client (`send_message.rs`, the dedupe after `push_to_client`) | the hook output has been written back (prompt hooks), or the waiter has printed it and acked (`/hook/wait`) |
-| Message body in context | a bounded preview in `meta.body` (2,000 chars) | a bounded preview in the `<muster_inbox>` block: at most 20 messages, an 8,000-char budget split between them (min 256, max 2,000 each) |
+| Message body in context | a bounded preview in `meta.body` (2,000 chars) | a bounded preview in the `<muster_inbox>` block: at most 20 messages, an 8,000-char budget split between them (min 256, max 6,000 each, so a lone long message arrives whole) |
 | Room broadcasts | not pushed; ambient | not surfaced; ambient. Only direct mail is injected |
 
 Both paths share the daemon, the durable `Message` store and the read

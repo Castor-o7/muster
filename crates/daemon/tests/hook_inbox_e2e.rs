@@ -49,6 +49,7 @@ fn session(id: &str, client_id: Option<&str>) -> Session {
         last_activity_at: None,
         last_tool: None,
         last_tool_at: None,
+        current_task_at: None,
         operator: None,
         host: None,
         project: None,
@@ -242,7 +243,7 @@ fn stored_message_surfaces_via_prompt_submit_hook() {
 
     // Automatic delivery carries a bounded, UTF-8-safe preview. The complete
     // durable Message remains queryable even after the preview is acknowledged.
-    let long_body = format!("LONG-{}-TAIL", "é".repeat(3_000));
+    let long_body = format!("LONG-{}-TAIL", "é".repeat(7_000));
     SendMessage {
         response_required: false,
         to_session_id: SessionId(Arc::from("recipient")),
@@ -269,7 +270,7 @@ fn stored_message_surfaces_via_prompt_submit_hook() {
         "hook did not identify the bounded preview: {bounded:?}"
     );
     assert!(
-        bounded.chars().count() < 3_000,
+        bounded.chars().count() < 7_000,
         "automatic inbox context exceeded its per-message bound"
     );
     let after_bounded = http_post(addr, "/hook/prompt-submit", r#"{"session_id":"recipient"}"#);
@@ -277,6 +278,25 @@ fn stored_message_surfaces_via_prompt_submit_hook() {
         !after_bounded.contains("LONG-"),
         "bounded preview re-surfaced after successful hook write"
     );
+
+    // A lone DM well past the live push's 2,000-char preview arrives whole in a
+    // hook (rally log §1.3): a team summary shouldn't need a resource read.
+    let summary = format!("SUMMARY-{}-END", "x".repeat(4_000));
+    SendMessage {
+        response_required: false,
+        to_session_id: SessionId(Arc::from("recipient")),
+        body: summary.clone(),
+        as_session: None,
+        idempotency_key: None,
+    }
+    .execute(cmd_ctx(&ctx, Some("c-sender")))
+    .expect("send persists summary");
+    let whole = http_post(addr, "/hook/prompt-submit", r#"{"session_id":"recipient"}"#);
+    assert!(
+        whole.contains(&summary),
+        "a lone 4,000-char DM was cut: {whole:?}"
+    );
+    assert!(!whole.contains("[truncated"), "{whole:?}");
 
     // a wrong /hook path must 404 (the misroute that caused the outage).
     let mut s = TcpStream::connect(addr).unwrap();

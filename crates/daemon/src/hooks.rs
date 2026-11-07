@@ -36,13 +36,18 @@ use myko::{
 use serde_json::Value;
 
 use muster_entities::{
-    AckMessages, CONTEXT_BODY_MAX_CHARS, GetAllSessions, GetAllWakeWatchers, HostInfo, MessageId,
-    MessageView, ReadMessages, Session, SessionId, WakeWatcher, WakeWatcherId, context_preview,
-    nickname_for,
+    AckMessages, GetAllSessions, GetAllWakeWatchers, HostInfo, MessageId, MessageView,
+    ReadMessages, Session, SessionId, WakeWatcher, WakeWatcherId, context_preview, nickname_for,
 };
 
 const AUTO_INBOX_BODY_BUDGET_CHARS: usize = 8_000;
 const AUTO_INBOX_MIN_BODY_CHARS: usize = 256;
+/// The most of one body a hook shows. Higher than the live push's
+/// `CONTEXT_BODY_MAX_CHARS`, because a hook's block has room: a lone long DM
+/// (a team summary, a review) arrives whole instead of cut at 2,000 and
+/// needing a resource read (rally log §1.3). A batch still splits the
+/// 8,000-char budget, and the block stays under Claude's 10,000-char limit.
+const HOOK_BODY_MAX_CHARS: usize = 6_000;
 /// The most an inbox block may be. Claude Code takes at most 10,000 characters
 /// from a hook, and SessionStart puts the identity line in front of the block.
 const INBOX_BLOCK_MAX_CHARS: usize = 9_000;
@@ -539,6 +544,7 @@ fn register_hook_session(
             last_activity_at: active_at,
             last_tool: None,
             last_tool_at: None,
+            current_task_at: None,
             operator,
             host,
             project,
@@ -731,6 +737,7 @@ fn handle_session_end(body: &[u8], ctx: &Arc<MykoServerContext>) -> HookOutcome 
         last_activity_at: None,
         last_tool: None,
         last_tool_at: None,
+        current_task_at: None,
         operator: None,
         host: None,
         project: None,
@@ -804,9 +811,9 @@ fn surface_unread(cmd_ctx: &CommandContext, sid: &str) -> (String, Vec<MessageId
     // Automatic injection is deliberately bounded. The durable Message keeps
     // the complete body; a hook carries only a UTF-8-safe preview so one log
     // dump cannot monopolize the recipient's model context. Divide an 8k body
-    // budget across this batch, never exceeding the per-message live-push cap.
+    // budget across this batch, at most `HOOK_BODY_MAX_CHARS` each.
     let per_message_chars = (AUTO_INBOX_BODY_BUDGET_CHARS / result.messages.len())
-        .clamp(AUTO_INBOX_MIN_BODY_CHARS, CONTEXT_BODY_MAX_CHARS);
+        .clamp(AUTO_INBOX_MIN_BODY_CHARS, HOOK_BODY_MAX_CHARS);
     // Mail that came over a link names its sender as `nickname@link`, which is
     // also how to answer it (MUS-66).
     let message_links: Vec<Arc<muster_entities::MessageLink>> = cmd_ctx
