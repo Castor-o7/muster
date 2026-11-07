@@ -33,6 +33,7 @@ fn session(cwd: &str, at: i64) -> Session {
         cwd: cwd.into(),
         git_branch: None,
         current_task: None,
+        current_task_at: None,
         session_name: None,
         activity: None,
         kind: None,
