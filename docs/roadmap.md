@@ -562,6 +562,15 @@ Merged and needing a live run: MUS-36 and MUS-37.
   what it did, a test shows it rolls back a daemon that fails its health check, and a test shows a
   held wait ends cleanly on SIGTERM. The operator's direct OK is still needed to run it. Related:
   MUS-15, `scripts/restart-preview.sh`.
+- [x] **MUS-104: A waiter stands down when its session's id changes.** Reported by cobalt-bream
+  on 2026-11-06: a ghost row, mellow-weevil (64a05eda, pid 0), stayed on the roster, and the
+  daemon logged "64a05eda may take over from 02f2a191" every 3 s. One Claude process (3766675)
+  ran the shim as 02f2a191 while its wait hook, started before a `/clear` or compaction re-minted
+  the id, kept polling as 64a05eda; the parent stayed alive, so the waiter never exited and its
+  polls kept the row fresh. Done: each poll checks Claude's live manifest
+  (`~/.claude/sessions/<pid>.json`, the same source the shim follows, `canonical_session_id`),
+  and a waiter whose id is no longer the session's exits, so the next Stop hook waits under the
+  new id and the old row ages out. With no manifest nothing changes.
 - [x] **MUS-100: One error names every missing tool argument.** From the DiscoSim rally
   (2026-11-06, issues log §1.4). Calls like `broadcast(room, message)` failed one field at a
   time ("missing `to_room`", then "missing `body`"), costing two or three round trips. Done:
