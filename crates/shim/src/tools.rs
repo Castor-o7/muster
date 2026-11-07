@@ -114,32 +114,8 @@ impl Handler for CoordHandler {
         let name = name.to_string();
         Box::pin(async move {
             // Every tool here writes as this session, which the daemon refuses
-            // until the session's row is on the roster. An agent's first call can
-            // come before the shim's registration lands (MUS-72), so hold it
-            // briefly rather than fail it.
-            wait_until_registered(&host).await;
-            let first = dispatch_tool(&host, &name, &args).await;
-            // The hold can pass on a row still bound to an earlier connection
-            // for this session (one that died and the sweeper hasn't cleared),
-            // and the daemon then refuses the write, because it finds a caller
-            // by this connection's binding (MUS-79). A refused write stored
-            // nothing, so send the session again and retry it once.
-            match first {
-                Err(e) if !host.is_codex && is_unbound_refusal(&e.message) => {
-                    log::warn!(
-                        "[muster-shim] {name} was refused as unregistered; sending the session again and retrying once"
-                    );
-                    let snapshot = host.session.lock().unwrap().clone();
-                    if let Err(err) = crate::emit_session_set(&host.client, &snapshot) {
-                        log::warn!("[muster-shim] re-SET before a retry failed: {err}");
-                    }
-                    // The roster can't tell this connection's binding from an
-                    // older one, so give the SET a moment to land.
-                    tokio::time::sleep(UNBOUND_RETRY_AFTER).await;
-                    dispatch_tool(&host, &name, &args).await
-                }
-                other => other,
-            }
+            // until the session's row is on the roster (MUS-72, MUS-79).
+            as_registered(&host, &name, || dispatch_tool(&host, &name, &args)).await
         })
     }
 
@@ -152,7 +128,15 @@ impl Handler for CoordHandler {
                 "whoami" => Ok(read_whoami(&host, &uri, &parsed.query)),
                 "roster" => Ok(read_roster(&host, &uri)),
                 "rooms" => Ok(read_rooms(&host, &uri)),
-                "messages" => read_messages(&host, &uri, &parsed.query).await,
+                // The daemon finds whose mail to read by this connection's
+                // binding, so a read right after connecting is refused the
+                // way an early write is (MUS-114): hold it the same way.
+                "messages" => {
+                    as_registered(&host, "muster://messages", || {
+                        read_messages(&host, &uri, &parsed.query)
+                    })
+                    .await
+                }
                 other => Err(ResourceError {
                     code: METHOD_NOT_FOUND,
                     message: format!("no resource at 'muster://{other}'"),
@@ -434,6 +418,42 @@ async fn dispatch_tool(
             message: format!("unknown tool: {other}"),
             data: None,
         }),
+    }
+}
+
+/// Run `run`, a command sent as this session, once the session is on the
+/// roster. An agent's first call can come before the shim's registration lands
+/// (MUS-72), so it's held briefly rather than failed. The hold can also pass on
+/// a row still bound to an earlier connection for this session (one that died
+/// and the sweeper hasn't cleared), and the daemon then refuses the command,
+/// because it finds a caller by this connection's binding (MUS-79). A refused
+/// command did nothing, so the session is sent again and the command retried
+/// once. Reads that the daemon resolves by connection need this as much as
+/// writes do (MUS-114).
+async fn as_registered<T, Fut>(
+    host: &ToolHost,
+    what: &str,
+    run: impl Fn() -> Fut,
+) -> Result<T, ToolError>
+where
+    Fut: std::future::Future<Output = Result<T, ToolError>>,
+{
+    wait_until_registered(host).await;
+    match run().await {
+        Err(e) if !host.is_codex && is_unbound_refusal(&e.message) => {
+            log::warn!(
+                "[muster-shim] {what} was refused as unregistered; sending the session again and retrying once"
+            );
+            let snapshot = host.session.lock().unwrap().clone();
+            if let Err(err) = crate::emit_session_set(&host.client, &snapshot) {
+                log::warn!("[muster-shim] re-SET before a retry failed: {err}");
+            }
+            // The roster can't tell this connection's binding from an older
+            // one, so give the SET a moment to land.
+            tokio::time::sleep(UNBOUND_RETRY_AFTER).await;
+            run().await
+        }
+        other => other,
     }
 }
 

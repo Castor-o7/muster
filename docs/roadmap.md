@@ -616,6 +616,14 @@ Merged and needing a live run: MUS-36 and MUS-37.
   another key; release.yml says so; threat-model.md has the note; tests cover each. Built with a
   placeholder key that fails closed. Left: Josh adds his public key (to release/allowed_signers
   and both scripts) before signing the first release (MUS-14).
+- [x] **MUS-114: A resource read right after connecting waits for registration, as a write does.**
+  From CI on 2026-11-06: `scripts/test-restart-file-e2e.sh` failed on #185 and #194, whose diffs couldn't
+  touch it, and in 2 of 15 local runs. The read of `muster://messages?inbox=true&unread=true` was refused
+  with `[unregistered] caller (client …) has no session on the roster`: a fresh shim read before its
+  Session SET landed, and its row from the run before (same session id, a dead connection) let the
+  registration wait pass. Tool calls already wait and retry once (MUS-72, MUS-79); the messages read did
+  neither. Done: both go through one `as_registered`, which holds until the session is on the roster and,
+  on that refusal, sends the session again and retries once.
 - [ ] **MUS-30: Decide the future of the TypeScript plugins.** The operator decides
   whether to keep, freeze or remove them. Done when: the decision is recorded here,
   and if they're removed, the repository's `package.json` workspace goes with them.
