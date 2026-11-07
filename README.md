@@ -169,7 +169,10 @@ muster-daemon resume
 muster-daemon allow a1           # from now on only listed machines may send or broadcast
 muster-daemon disallow a1
 muster-daemon senders            # show the list; `senders --clear` lets any machine send again
+muster-daemon forget mellow-weevil   # remove a stuck session from the roster: id, 8+ char id prefix, or nickname
 ```
+
+`forget` is for a ghost row, one whose session is gone but whose row stays (MUS-105). The running daemon removes the row within 2 seconds, logs which session it removed, and refuses that session's hooks for 10 minutes, so a waiter still polling under the old id can't put it straight back. A session that's still alive registers again after that, and a shim's own connection re-registers at once, so it doesn't remove a live session for good.
 
 The daemon's own host is always allowed, so an allowlist never cuts off the sessions running beside it. Machine names are compared without regard to case. The daemon names its own host the way the shim does, from `MUSTER_HOST` or the hostname up to its first dot, and `senders` prints that name, so you can check it matches what the roster shows for sessions there. A session with no machine on its row is refused while a list is set. While wake-ups are paused, `muster://roster` and `muster-shim roster` report `"wakes_paused": true`. These files live in the state directory, so any process on the operator's account can change them; until MUS-39, that's the limit of this control.
 

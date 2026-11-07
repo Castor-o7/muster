@@ -571,6 +571,13 @@ Merged and needing a live run: MUS-36 and MUS-37.
   `to_room`, `message`/`text` for `body`, `recipient` for `to`, `current_task`/`status` for
   `text`, `room` for `join_room`'s `name`, and `ids` or one `message_id` for `message_ids`.
   The canonical name wins when both are given. The advertised schemas are unchanged.
+- [x] **MUS-105: The operator can forget a session.** Requested by Josh on 2026-11-06, after the
+  ghost row mellow-weevil (MUS-104) stayed on the roster with no way to remove it.
+  Done: `muster-daemon forget <id | 8+ char prefix | nickname>` appends to `forget-sessions` in
+  the state directory, like `pause` and `allow`. The running daemon resolves it within 2 s,
+  deletes the session's row (the sweeper then drops its memberships and wake records), logs it,
+  and refuses that id's hooks for 10 minutes (`FORGET_HOLD`) so a stale waiter can't re-register
+  it. A target that names no session, or several, removes nothing.
 - [ ] **MUS-30: Decide the future of the TypeScript plugins.** The operator decides
   whether to keep, freeze or remove them. Done when: the decision is recorded here,
   and if they're removed, the repository's `package.json` workspace goes with them.

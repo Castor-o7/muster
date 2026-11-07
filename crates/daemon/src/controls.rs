@@ -4,6 +4,9 @@
 //!
 //! - `wakes-paused`: present while wake-ups are paused; holds when, in ms.
 //! - `allowed-senders`: present while an allowlist is set; one machine per line.
+//! - `forget-sessions`: sessions the operator asked to remove (MUS-105), one
+//!   `<session id, id prefix or nickname>\t<ms>` per line, kept for
+//!   [`FORGET_HOLD`].
 //!
 //! The running daemon reads them every [`REFRESH`], applies them to
 //! `muster_entities::controls`, and publishes the pause as a `WakePause` record
@@ -21,6 +24,10 @@ use myko::wire::{MEvent, MEventType};
 
 pub const PAUSED_FILE: &str = "wakes-paused";
 pub const ALLOWED_FILE: &str = "allowed-senders";
+pub const FORGET_FILE: &str = "forget-sessions";
+/// How long a forgotten session's hooks are refused, so a waiter still
+/// polling under its id (MUS-104) can't put the row straight back.
+pub const FORGET_HOLD: Duration = Duration::from_secs(10 * 60);
 /// How soon the running daemon sees a change.
 pub const REFRESH: Duration = Duration::from_secs(2);
 
@@ -92,6 +99,142 @@ pub fn clear_allowed(dir: &Path) -> io::Result<()> {
     }
 }
 
+/// Ask the running daemon to forget a session (MUS-105): `target` is its id,
+/// an id prefix of at least 8 characters, or its nickname.
+pub fn forget(dir: &Path, target: &str) -> io::Result<()> {
+    use std::io::Write as _;
+    std::fs::create_dir_all(dir)?;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join(FORGET_FILE))?;
+    writeln!(
+        file,
+        "{}\t{}",
+        target.trim(),
+        chrono::Utc::now().timestamp_millis()
+    )
+}
+
+fn forget_requests(dir: &Path) -> Vec<(String, i64)> {
+    std::fs::read_to_string(dir.join(FORGET_FILE))
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| {
+            let (target, at) = l.split_once('\t')?;
+            Some((target.trim().to_string(), at.trim().parse().ok()?))
+        })
+        .filter(|(t, _)| !t.is_empty())
+        .collect()
+}
+
+/// Session ids whose hooks are refused while their forget holds.
+static HELD: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// Whether the operator forgot this session within [`FORGET_HOLD`].
+pub fn is_forgotten(session_id: &str) -> bool {
+    HELD.lock()
+        .map(|h| h.iter().any(|id| id == session_id))
+        .unwrap_or(false)
+}
+
+/// Which session a forget names: an exact id or nickname, else the one id
+/// that starts with it (at least 8 characters). `None` when it names none,
+/// or several.
+pub fn resolve_target(
+    target: &str,
+    ids: &[String],
+    nicknames: &[(String, String)],
+) -> Option<String> {
+    if ids.iter().any(|id| id == target) {
+        return Some(target.to_string());
+    }
+    if let Some((id, _)) = nicknames.iter().find(|(_, nick)| nick == target) {
+        return Some(id.clone());
+    }
+    if target.len() < 8 {
+        return None;
+    }
+    let mut matches = ids.iter().filter(|id| id.starts_with(target));
+    match (matches.next(), matches.next()) {
+        (Some(id), None) => Some(id.clone()),
+        _ => None,
+    }
+}
+
+/// Remove the sessions the operator forgot, and hold their ids off.
+fn apply_forgets(dir: &Path, ctx: &MykoServerContext) {
+    use hyphae::{Gettable as _, Materialize as _};
+    use muster_entities::{Session, SessionNickname};
+    use myko::{core::item::Eventable as _, utils::downcast_item};
+
+    let now = chrono::Utc::now().timestamp_millis();
+    let requests = forget_requests(dir);
+    let live: Vec<(String, i64)> = requests
+        .iter()
+        .filter(|(_, at)| now - at < FORGET_HOLD.as_millis() as i64)
+        .cloned()
+        .collect();
+    if live.len() != requests.len() {
+        let text: String = live.iter().map(|(t, at)| format!("{t}\t{at}\n")).collect();
+        let _ = if text.is_empty() {
+            std::fs::remove_file(dir.join(FORGET_FILE))
+        } else {
+            std::fs::write(dir.join(FORGET_FILE), text)
+        };
+    }
+    if live.is_empty() {
+        if let Ok(mut held) = HELD.lock() {
+            held.clear();
+        }
+        return;
+    }
+    let ids: Vec<String> = ctx
+        .registry
+        .get(Session::ENTITY_NAME_STATIC)
+        .map(|s| {
+            s.entries()
+                .materialize()
+                .get()
+                .into_iter()
+                .map(|(id, _)| id.to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    let nicknames: Vec<(String, String)> = ctx
+        .registry
+        .get(SessionNickname::ENTITY_NAME_STATIC)
+        .map(|s| {
+            s.entries()
+                .materialize()
+                .get()
+                .into_iter()
+                .filter_map(|(id, item)| {
+                    downcast_item::<SessionNickname>(&item)
+                        .map(|n| (id.to_string(), n.nickname.clone()))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut held = Vec::new();
+    for (target, _) in &live {
+        // A full id stays held after its row is gone, when it no longer resolves.
+        let id = resolve_target(target, &ids, &nicknames).unwrap_or_else(|| target.clone());
+        if ids.contains(&id) {
+            match ctx.del_by_id(Session::ENTITY_NAME_STATIC, &id) {
+                Ok(()) => log::warn!(
+                    "[controls] forgot session {id} ({target}) at the operator's request"
+                ),
+                Err(e) => log::warn!("[controls] couldn't forget session {id}: {e}"),
+            }
+        }
+        held.push(id);
+    }
+    if let Ok(mut h) = HELD.lock() {
+        *h = held;
+    }
+}
+
 /// Apply the files once, and publish the pause if it changed since `last`.
 /// Without `allowlist` (plain mode, MUS-64) the sender list is ignored: with no
 /// pairing there are no machine names to check senders against.
@@ -107,6 +250,7 @@ pub fn apply(dir: &Path, ctx: &MykoServerContext, last: &mut Option<(bool, i64)>
         list
     });
     muster_entities::controls::set_allowed_senders(senders);
+    apply_forgets(dir, ctx);
     let now = (since.is_some(), since.unwrap_or(0));
     if *last != Some(now) {
         let record = WakePause {
@@ -145,6 +289,42 @@ mod tests {
         let d = std::env::temp_dir().join(format!("muster-controls-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         d
+    }
+
+    #[test]
+    fn a_forget_names_an_id_a_nickname_or_one_prefix() {
+        let ids = vec![
+            "64a05eda-eab4-46f8-9aa9-0ee0ec43eea5".to_string(),
+            "64a05edb-0000-0000-0000-000000000000".to_string(),
+            "02f2a191-6522-43d9-9a5d-7e1713f90121".to_string(),
+        ];
+        let nicks = vec![(ids[0].clone(), "mellow-weevil".to_string())];
+        assert_eq!(
+            resolve_target(&ids[2], &ids, &nicks).as_deref(),
+            Some(ids[2].as_str())
+        );
+        assert_eq!(
+            resolve_target("mellow-weevil", &ids, &nicks).as_deref(),
+            Some(ids[0].as_str())
+        );
+        assert_eq!(
+            resolve_target("02f2a191", &ids, &nicks).as_deref(),
+            Some(ids[2].as_str())
+        );
+        assert_eq!(resolve_target("64a05ed", &ids, &nicks), None, "too short");
+        assert_eq!(resolve_target("64a05ed", &ids, &nicks), None);
+        assert_eq!(resolve_target("64a05ed-", &ids, &nicks), None, "no match");
+        assert_eq!(resolve_target("64a05e", &ids, &nicks), None);
+    }
+
+    #[test]
+    fn forget_requests_round_trip() {
+        let d = dir("forget");
+        forget(&d, " mellow-weevil ").unwrap();
+        forget(&d, "02f2a191").unwrap();
+        let got: Vec<String> = forget_requests(&d).into_iter().map(|(t, _)| t).collect();
+        assert_eq!(got, vec!["mellow-weevil", "02f2a191"]);
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]
