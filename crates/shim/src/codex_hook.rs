@@ -297,6 +297,12 @@ fn wait_for_mail(
         if parent_pid() != parent {
             return false;
         }
+        if superseded(session_id, parent) {
+            log::info!(
+                "[muster-shim] waiter for {session_id}: the session's id has changed; exiting so the next one waits under the new id"
+            );
+            return false;
+        }
         let post = |path: &str, body: &str, timeout| match crate::link::load_pairing()
             .filter(|_| !explicit)
         {
@@ -403,6 +409,21 @@ fn clear_refusal(session_id: &str) {
 
 /// This process's parent, which changes when the parent exits. `None` where
 /// that can't be checked, so `watch --once` simply keeps running there.
+/// Whether Claude has moved this waiter's session to a new id (MUS-104). A
+/// `/clear` or compaction re-mints the id in the same process, so the parent
+/// stays alive and a waiter started before it would poll under the old id
+/// forever: a ghost row that is never reaped, and that keeps claiming it may
+/// take over from the live one (mellow-weevil, 2026-11-06). Claude's live
+/// per-PID manifest names the current id; with no manifest, nothing changes.
+fn superseded(session_id: &str, parent: Option<u32>) -> bool {
+    let current = parent.and_then(crate::session_discovery::canonical_session_id);
+    id_moved(session_id, current.as_ref().map(|s| s.0.as_ref()))
+}
+
+fn id_moved(session_id: &str, current: Option<&str>) -> bool {
+    current.is_some_and(|current| current != session_id)
+}
+
 fn parent_pid() -> Option<u32> {
     #[cfg(unix)]
     {
@@ -776,6 +797,16 @@ fn url_q(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_waiter_whose_session_id_moved_stands_down() {
+        assert!(
+            super::id_moved("old", Some("new")),
+            "a /clear re-minted the id"
+        );
+        assert!(!super::id_moved("same", Some("same")));
+        assert!(!super::id_moved("old", None), "no manifest: keep waiting");
+    }
+
     use super::*;
 
     #[test]
