@@ -663,6 +663,12 @@ Merged and needing a live run: MUS-36 and MUS-37.
   idle recipient is woken only when `wake` is `expected`. It is said once per shim, since #62
   dropped the per-send note to keep tool output small. The statusline's `no live channel` warning
   is unchanged: it still shows only when no wait hook is wired, the one case where it's a fault.
+- [x] **MUS-102: A lone long DM arrives whole in a hook.** From the DiscoSim rally (2026-11-06,
+  issues log §1.3): team summaries arrived cut at 2,000 characters, each needing a resource read.
+  Done: a hook shows up to 6,000 characters of one message (`HOOK_BODY_MAX_CHARS`), still within
+  the 8,000-character batch budget and Claude's 10,000-character hook limit; the live push keeps
+  its 2,000. Not done: a `read_message(id)` tool, and §10.1 (mail marked read that the model
+  never saw), which needs its own look at when a hook's ack fires.
 - [ ] **MUS-111: `setup.sh --from-source` builds a pinned release, not the default branch.** Filed by
   robust-warbler: `--from-source` ran `cargo install --locked --git` on the unpinned default branch.
   Done when: a build takes the latest release's tag by default, looked up once so it's the same
