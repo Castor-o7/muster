@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use myko::prelude::{EventPublishing as _, Querying as _, RegistryScoped as _, RequestScoped as _};
 use myko::{
-    command::{CommandContext, CommandError},
+    command::{CommandContext, CommandError, CommandHandler},
     entities::client::ClientId,
-    myko_item,
+    myko_command, myko_item,
 };
 use serde::{Deserialize, Serialize};
 
@@ -161,9 +161,9 @@ pub struct Session {
 
     /// Free-form short status text, settable via the `set_status` command.
     /// Surfaces on the roster so peers can see what this session is up to
-    /// without needing a separate task system.
+    /// without needing a separate task system. Set by [`SetSessionCurrentTask`], which also sets
+    /// `current_task_at`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[myko_setter]
     pub current_task: Option<String>,
 
     /// Human-facing session name. For Claude Code this is the operator's
@@ -234,7 +234,8 @@ pub struct Session {
 
     /// Wall-clock millis when `current_task` was last set, so a reader can
     /// tell a fresh status from one left over from hours ago (rally log §1.5).
-    /// `None` from a shim that predates it, or before any status was set.
+    /// `None` before any status was set, and while none is. [`SetSessionCurrentTask`] stamps it
+    /// with the daemon's clock (MUS-113), and the shim's `SetSessionCurrentTaskAt` may follow it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[myko_setter]
     pub current_task_at: Option<i64>,
@@ -300,6 +301,45 @@ pub struct Session {
     ///   holder is live.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identity: Option<String>,
+}
+
+/// Set a session's status, `current_task`, and stamp `current_task_at` with the daemon's clock:
+/// now when there's a status, `None` when it's cleared (MUS-113). This replaces the
+/// `#[myko_setter]` that wrote `current_task` alone, under the same name and wire shape
+/// (`{id, currentTask}`), so every client keeps working. A client that sets the status without a
+/// time, such as the TypeScript plugins, then can't leave an older time beside the new status,
+/// which would make a fresh status read as old. The shim may still follow it with
+/// `SetSessionCurrentTaskAt`, its own clock's stamp, which an older daemon needs.
+#[myko_command]
+pub struct SetSessionCurrentTask {
+    pub id: SessionId,
+    pub current_task: Option<Arc<str>>,
+}
+
+impl CommandHandler for SetSessionCurrentTask {
+    fn execute(self, ctx: CommandContext) -> Result<(), CommandError> {
+        let session = ctx
+            .exec_report(GetSessionById {
+                id: self.id.clone(),
+            })?
+            .ok_or_else(|| {
+                CommandError::new(
+                    ctx.tx(),
+                    ctx.command_id.to_string(),
+                    format!("Session {} not found", self.id),
+                )
+            })?;
+        let current_task = self.current_task.as_deref().map(str::to_owned);
+        let current_task_at = current_task
+            .as_ref()
+            .map(|_| chrono::Utc::now().timestamp_millis());
+        ctx.emit_set(&Session {
+            current_task,
+            current_task_at,
+            ..session.as_ref().clone()
+        })?;
+        Ok(())
+    }
 }
 
 /// Resolve the session a write command is acting *as*.

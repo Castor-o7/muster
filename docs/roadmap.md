@@ -573,7 +573,17 @@ Merged and needing a live run: MUS-36 and MUS-37.
   Not done: nudging a session whose status is old while it keeps calling tools; the daemon
   stamping the time itself rather than trusting the shim's clock; the TypeScript plugins setting
   it (their sessions show no age); and setting the status and its time in one atomic command
-  rather than two.
+  rather than two. (MUS-113 does the last three for any client the daemon serves.)
+- [x] **MUS-113: A status set without a time doesn't keep the old one.** Found by the watchman
+  reading MUS-101: a TypeScript plugin sets `current_task` with `SetSessionCurrentTask` alone,
+  so the `current_task_at` an earlier status left stayed beside the new one, and a fresh status
+  read as hours old. Done: `SetSessionCurrentTask` is written by hand in place of the
+  `#[myko_setter]`, under the same name and wire shape (`{id, currentTask}`), and stamps
+  `current_task_at` with the daemon's clock as it sets the status, or clears it with the status.
+  So every client, the plugins included, gets a true age from one command. The shim still sends
+  `SetSessionCurrentTaskAt` after it, which an older daemon needs; on a new daemon it only
+  replaces the stamp with the shim's clock's. A test in `crates/daemon/tests/status_time.rs`
+  sends the plugins' shape over a stale time and checks it's replaced, and that a clear leaves none.
 - [x] **MUS-100: One error names every missing tool argument.** From the DiscoSim rally
   (2026-11-06, issues log §1.4). Calls like `broadcast(room, message)` failed one field at a
   time ("missing `to_room`", then "missing `body`"), costing two or three round trips. Done:
