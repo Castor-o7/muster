@@ -63,6 +63,12 @@ export function withMykoPath(addr: string): string {
   }
 }
 
+/** The URL the client opens: the `/myko` path first, then the local token
+ *  (MUS-7) as a query, so the token never lands inside the path. */
+export function daemonUrl(address: string): string {
+  return withLocalToken(withMykoPath(address));
+}
+
 export interface DaemonConfig {
   address: string;
   cwd: string;
@@ -151,7 +157,7 @@ export class MusterDaemon {
     });
 
     // With TLS on, a loopback connection needs the host's local token (MUS-7).
-    this.client.setAddress(withMykoPath(withLocalToken(this.cfg.address)));
+    this.client.setAddress(daemonUrl(this.cfg.address));
   }
 
   stop(): void {

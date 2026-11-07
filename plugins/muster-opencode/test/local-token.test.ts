@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
+import { withMykoPath } from "../src/daemon.js";
 import { readLocalToken, withLocalToken, type TokenEnv } from "../src/local-token.js";
 
 // With TLS on, the daemon's local gate admits a loopback connection only with
@@ -29,5 +30,14 @@ describe("the local token", () => {
   });
   test("is found under XDG_CONFIG_HOME like the Rust side", () => {
     expect(readLocalToken(env({ "/x/muster/local-token": "t\n" }, { XDG_CONFIG_HOME: "/x" }))).toBe("t");
+  });
+
+  test("composes with the /myko path from the default address", () => {
+    // What daemonUrl does, with an injected token file.
+    for (const address of ["ws://localhost:6255", "ws://localhost:6255/", "ws://127.0.0.1:6255/myko"]) {
+      const url = new URL(withLocalToken(withMykoPath(address), withToken));
+      expect(url.pathname).toBe("/myko");
+      expect(url.searchParams.get("token")).toBe("abc123");
+    }
   });
 });
