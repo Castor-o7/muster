@@ -185,77 +185,116 @@ fn apply_forgets(dir: &Path, ctx: &MykoServerContext) {
         .filter(|(_, at)| now - at < FORGET_HOLD.as_millis() as i64)
         .cloned()
         .collect();
-    if live.len() != requests.len() {
-        let text: String = live.iter().map(|(t, at)| format!("{t}\t{at}\n")).collect();
+    let mut changed = live.len() != requests.len();
+    let unresolved = live.iter().any(|(t, _)| !t.starts_with(RESOLVED));
+    let ids: Vec<String> = if live.is_empty() {
+        Vec::new()
+    } else {
+        ctx.registry
+            .get(Session::ENTITY_NAME_STATIC)
+            .map(|s| {
+                s.entries()
+                    .materialize()
+                    .get()
+                    .into_iter()
+                    .map(|(id, _)| id.to_string())
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let nicknames: Vec<(String, String)> = if unresolved {
+        ctx.registry
+            .get(SessionNickname::ENTITY_NAME_STATIC)
+            .map(|s| {
+                s.entries()
+                    .materialize()
+                    .get()
+                    .into_iter()
+                    .filter_map(|(id, item)| {
+                        downcast_item::<SessionNickname>(&item)
+                            .map(|n| (id.to_string(), n.nickname.clone()))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let (kept, held, notes) = plan_forgets(&live, &ids, &nicknames);
+    changed |= kept != live;
+    for note in notes {
+        log::warn!("[controls] {note}");
+    }
+    // Deleted again on every refresh while the forget holds, should anything
+    // have put the row back; only ever by the id resolved at the first refresh.
+    for id in &held {
+        if ids.contains(id) {
+            match ctx.del_by_id(Session::ENTITY_NAME_STATIC, id) {
+                Ok(()) => log::warn!("[controls] forgot session {id} at the operator's request"),
+                Err(e) => log::warn!("[controls] couldn't forget session {id}: {e}"),
+            }
+        }
+    }
+    if changed {
+        let text: String = kept.iter().map(|(t, at)| format!("{t}\t{at}\n")).collect();
         let _ = if text.is_empty() {
             std::fs::remove_file(dir.join(FORGET_FILE))
         } else {
             std::fs::write(dir.join(FORGET_FILE), text)
         };
     }
-    if live.is_empty() {
-        if let Ok(mut held) = HELD.lock() {
-            held.clear();
-        }
-        return;
-    }
-    let ids: Vec<String> = ctx
-        .registry
-        .get(Session::ENTITY_NAME_STATIC)
-        .map(|s| {
-            s.entries()
-                .materialize()
-                .get()
-                .into_iter()
-                .map(|(id, _)| id.to_string())
-                .collect()
-        })
-        .unwrap_or_default();
-    let nicknames: Vec<(String, String)> = ctx
-        .registry
-        .get(SessionNickname::ENTITY_NAME_STATIC)
-        .map(|s| {
-            s.entries()
-                .materialize()
-                .get()
-                .into_iter()
-                .filter_map(|(id, item)| {
-                    downcast_item::<SessionNickname>(&item)
-                        .map(|n| (id.to_string(), n.nickname.clone()))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    let mut held = Vec::new();
-    for (target, _) in &live {
-        let id = match resolve_target(target, &ids, &nicknames) {
-            Ok(Some(id)) => id,
-            // A full id stays held after its row is gone, when it no longer resolves.
-            Ok(None) => target.clone(),
-            Err(candidates) => {
-                log::warn!(
-                    "[controls] not forgetting {target}: it names {} sessions ({}); forget one by its id",
-                    candidates.len(),
-                    candidates.join(", ")
-                );
-                continue;
-            }
-        };
-        // Deleted again on every refresh while the forget holds, should
-        // anything have put the row back.
-        if ids.contains(&id) {
-            match ctx.del_by_id(Session::ENTITY_NAME_STATIC, &id) {
-                Ok(()) => log::warn!(
-                    "[controls] forgot session {id} ({target}) at the operator's request"
-                ),
-                Err(e) => log::warn!("[controls] couldn't forget session {id}: {e}"),
-            }
-        }
-        held.push(id);
-    }
     if let Ok(mut h) = HELD.lock() {
         *h = held;
     }
+}
+
+/// Marks a control-file line already resolved to a full session id.
+const RESOLVED: &str = "id:";
+
+/// Resolve each forget once (MUS-105). A line naming a session by nickname or
+/// prefix is rewritten to `id:<full id>` at its first refresh, and from then on
+/// held and deleted only by that id: resolving it again after the row is gone
+/// would lose the hold, and could pick a new session given the freed nickname.
+/// A name matching nothing or several is dropped, with a note for the log.
+/// Returns the lines to keep, the ids to hold, and the notes.
+fn plan_forgets(
+    lines: &[(String, i64)],
+    ids: &[String],
+    nicknames: &[(String, String)],
+) -> (Vec<(String, i64)>, Vec<String>, Vec<String>) {
+    let (mut kept, mut held, mut notes) = (Vec::new(), Vec::new(), Vec::new());
+    for (target, at) in lines {
+        if let Some(id) = target.strip_prefix(RESOLVED) {
+            held.push(id.to_string());
+            kept.push((target.clone(), *at));
+            continue;
+        }
+        let id = match resolve_target(target, ids, nicknames) {
+            Ok(Some(id)) => id,
+            // A full id that isn't on the roster now (its row already went)
+            // is still held, so its hooks can't bring it back.
+            Ok(None) if target.len() >= 32 && crate::credentials::safe_session_id(target) => {
+                target.clone()
+            }
+            Ok(None) => {
+                notes.push(format!(
+                    "not forgetting {target}: it names no session on the roster"
+                ));
+                continue;
+            }
+            Err(candidates) => {
+                notes.push(format!(
+                    "not forgetting {target}: it names {} sessions ({}); forget one by its id",
+                    candidates.len(),
+                    candidates.join(", ")
+                ));
+                continue;
+            }
+        };
+        kept.push((format!("{RESOLVED}{id}"), *at));
+        held.push(id);
+    }
+    (kept, held, notes)
 }
 
 /// Apply the files once, and publish the pause if it changed since `last`.
@@ -356,6 +395,37 @@ mod tests {
             nick("left", "mellow-weevil"),
         ];
         assert_eq!(one("mellow-weevil", &gone), Ok(Some(ids[0].clone())));
+    }
+
+    #[test]
+    fn a_forget_is_resolved_once_then_held_by_id() {
+        let ghost = "64a05eda-eab4-46f8-9aa9-0ee0ec43eea5".to_string();
+        let newcomer = "7195eda2-fd79-4bc1-a71c-4ffe6c6b1533".to_string();
+        let nick = |id: &str| (id.to_string(), "mellow-weevil".to_string());
+
+        // First refresh: the nickname names the ghost, and the line becomes its id.
+        let lines = vec![("mellow-weevil".to_string(), 1)];
+        let (kept, held, _) = plan_forgets(&lines, std::slice::from_ref(&ghost), &[nick(&ghost)]);
+        assert_eq!(kept, vec![(format!("id:{ghost}"), 1)]);
+        assert_eq!(held, vec![ghost.clone()]);
+
+        // Later: the ghost's row is gone and a new session has its nickname.
+        let (kept2, held2, _) =
+            plan_forgets(&kept, std::slice::from_ref(&newcomer), &[nick(&newcomer)]);
+        assert_eq!(kept2, kept, "the line isn't resolved again");
+        assert_eq!(
+            held2,
+            vec![ghost.clone()],
+            "still the ghost, never the newcomer"
+        );
+
+        // A full id already off the roster is still held; a name matching
+        // nothing is dropped with a note.
+        let lines = vec![(ghost.clone(), 1), ("nobody-here".to_string(), 2)];
+        let (kept, held, notes) = plan_forgets(&lines, &[], &[]);
+        assert_eq!(held, vec![ghost.clone()]);
+        assert_eq!(kept, vec![(format!("id:{ghost}"), 1)]);
+        assert_eq!(notes.len(), 1, "{notes:?}");
     }
 
     #[test]

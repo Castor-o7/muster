@@ -8,7 +8,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use hyphae::{Gettable, Materialize};
-use muster_entities::{Session, SessionId};
+use muster_entities::{Session, SessionId, SessionNickname, SessionNicknameId};
 use myko::{
     core::item::Eventable,
     entities::client::ClientId,
@@ -153,4 +153,76 @@ fn forgetting_removes_the_row_and_holds_its_hooks_off() {
     http_post(addr, "/hook/prompt-submit?harness=claude", RECIPIENT);
     assert!(!ids(&ctx).contains(&"recipient".to_string()), "held off");
     assert!(!daemon::controls::is_forgotten("sender"));
+
+    a_forget_by_nickname_holds_the_old_id_and_spares_a_newcomer(&ctx, addr);
+}
+
+fn nickname_of(ctx: &MykoServerContext, id: &str) -> Option<String> {
+    ctx.registry
+        .get(SessionNickname::ENTITY_NAME_STATIC)?
+        .entries()
+        .materialize()
+        .get()
+        .into_iter()
+        .find(|(k, _)| k.as_ref() == id)
+        .and_then(|(_, item)| {
+            myko::utils::downcast_item::<SessionNickname>(&item).map(|n| n.nickname.clone())
+        })
+}
+
+/// Run by the test above: the hold list is process-wide, so the cases share one
+/// test rather than race. Forgetting by nickname resolves once: after the row is gone, a new session
+/// given the freed nickname survives, and the old id's hooks stay refused.
+fn a_forget_by_nickname_holds_the_old_id_and_spares_a_newcomer(
+    ctx: &MykoServerContext,
+    addr: SocketAddr,
+) {
+    let ghost = "ghost-0000-0000-0000-000000000000";
+    let ghost_body = format!(r#"{{"session_id":"{ghost}","cwd":"/work/repo"}}"#);
+    http_post(addr, "/hook/session-register?harness=claude", &ghost_body);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let nick = loop {
+        if let Some(n) = nickname_of(ctx, ghost) {
+            break n;
+        }
+        assert!(Instant::now() < deadline, "the ghost never got a nickname");
+        thread::sleep(Duration::from_millis(25));
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    daemon::controls::forget(dir.path(), &nick).unwrap();
+    daemon::controls::apply(dir.path(), ctx, &mut None, false);
+    assert!(
+        !ids(ctx).contains(&ghost.to_string()),
+        "the ghost's row is gone"
+    );
+
+    // A new session takes the freed nickname.
+    let mut newcomer = sender();
+    newcomer.id = SessionId(Arc::from("newcomer"));
+    newcomer.client_id = None;
+    let named = SessionNickname {
+        id: SessionNicknameId(Arc::from("newcomer")),
+        nickname: nick.clone(),
+    };
+    ctx.apply_event_batch(vec![
+        MEvent::from_item(&newcomer, MEventType::SET, &Uuid::new_v4().to_string()),
+        MEvent::from_item(&named, MEventType::SET, &Uuid::new_v4().to_string()),
+    ])
+    .expect("seed the newcomer");
+
+    daemon::controls::apply(dir.path(), ctx, &mut None, false);
+    assert!(
+        ids(ctx).contains(&"newcomer".to_string()),
+        "the newcomer survives"
+    );
+    assert!(
+        daemon::controls::is_forgotten(ghost),
+        "the old id is still held"
+    );
+    http_post(addr, "/hook/prompt-submit?harness=claude", &ghost_body);
+    assert!(
+        !ids(ctx).contains(&ghost.to_string()),
+        "its hook can't bring it back"
+    );
 }

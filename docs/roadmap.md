@@ -577,7 +577,9 @@ Merged and needing a live run: MUS-36 and MUS-37.
   the state directory, like `pause` and `allow`. The running daemon resolves it within 2 s,
   deletes the session's row (the sweeper then drops its memberships and wake records), logs it,
   and refuses that id's hooks for 10 minutes (`FORGET_HOLD`) so a stale waiter can't re-register
-  it. A target that names no session, or several, removes nothing.
+  it. A target that names no session, or several, removes nothing. A nickname or prefix is
+  resolved once, at the first refresh, and the line rewritten to `id:<full id>`, so the hold
+  stays on that id and a new session given the freed nickname is never touched.
 - [ ] **MUS-30: Decide the future of the TypeScript plugins.** The operator decides
   whether to keep, freeze or remove them. Done when: the decision is recorded here,
   and if they're removed, the repository's `package.json` workspace goes with them.
