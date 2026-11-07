@@ -603,6 +603,19 @@ Merged and needing a live run: MUS-36 and MUS-37.
   run says which ref it would build; only with no release at all does it build the default branch,
   saying it's unpinned; a malformed tag, a short rev, or both together are refused; and
   `scripts/test-setup.sh` covers each.
+- [ ] **MUS-110: Sign releases, so SHA256SUMS proves who published them.** Filed with MUS-111:
+  SHA256SUMS comes from the same release as the binaries, so it catches a corrupt download but
+  not a release whose assets were replaced. Josh chose on 2026-11-06 to sign locally, so CI holds
+  no key. Done when: `release/allowed_signers` names the release key, and `install-codex.sh` and
+  `setup.sh` carry the same lines and check SHA256SUMS.sig with `ssh-keygen -Y verify -n
+  muster-release` before trusting any checksum, refusing a bad or other key's signature and a
+  SHA256SUMS changed after signing; both refuse an unsigned release, so deleting the signature
+  buys nothing, and only `setup.sh --from-source` builds its tag instead (while there's no key
+  yet, `setup.sh` builds the tag, saying why); `scripts/sign-release.sh <tag> --key <public key>` signs a draft
+  through the key's agent, checks the signature, uploads it, and refuses a published release or
+  another key; release.yml says so; threat-model.md has the note; tests cover each. Built with a
+  placeholder key that fails closed. Left: Josh adds his public key (to release/allowed_signers
+  and both scripts) before signing the first release (MUS-14).
 - [ ] **MUS-30: Decide the future of the TypeScript plugins.** The operator decides
   whether to keep, freeze or remove them. Done when: the decision is recorded here,
   and if they're removed, the repository's `package.json` workspace goes with them.
