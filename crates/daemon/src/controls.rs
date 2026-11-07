@@ -138,28 +138,38 @@ pub fn is_forgotten(session_id: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Which session a forget names: an exact id or nickname, else the one id
-/// that starts with it (at least 8 characters). `None` when it names none,
-/// or several.
+/// Which session a forget names: an exact id, else the one session on the
+/// roster with that nickname, else the one id that starts with it (at least 8
+/// characters). `Err` holds the candidates when it names several, which
+/// removes nothing: nicknames repeat across restarts (a ghost and its live
+/// successor were both `mellow-weevil` on 2026-11-06), so a guess could remove
+/// the live one.
 pub fn resolve_target(
     target: &str,
     ids: &[String],
     nicknames: &[(String, String)],
-) -> Option<String> {
+) -> Result<Option<String>, Vec<String>> {
     if ids.iter().any(|id| id == target) {
-        return Some(target.to_string());
+        return Ok(Some(target.to_string()));
     }
-    if let Some((id, _)) = nicknames.iter().find(|(_, nick)| nick == target) {
-        return Some(id.clone());
+    let one = |mut found: Vec<String>| match found.len() {
+        0 => Ok(None),
+        1 => Ok(found.pop()),
+        _ => Err(found),
+    };
+    let named: Vec<String> = nicknames
+        .iter()
+        .filter(|(id, nick)| nick == target && ids.contains(id))
+        .map(|(id, _)| id.clone())
+        .collect();
+    if !named.is_empty() || target.len() < 8 {
+        return one(named);
     }
-    if target.len() < 8 {
-        return None;
-    }
-    let mut matches = ids.iter().filter(|id| id.starts_with(target));
-    match (matches.next(), matches.next()) {
-        (Some(id), None) => Some(id.clone()),
-        _ => None,
-    }
+    one(ids
+        .iter()
+        .filter(|id| id.starts_with(target))
+        .cloned()
+        .collect())
 }
 
 /// Remove the sessions the operator forgot, and hold their ids off.
@@ -218,8 +228,21 @@ fn apply_forgets(dir: &Path, ctx: &MykoServerContext) {
         .unwrap_or_default();
     let mut held = Vec::new();
     for (target, _) in &live {
-        // A full id stays held after its row is gone, when it no longer resolves.
-        let id = resolve_target(target, &ids, &nicknames).unwrap_or_else(|| target.clone());
+        let id = match resolve_target(target, &ids, &nicknames) {
+            Ok(Some(id)) => id,
+            // A full id stays held after its row is gone, when it no longer resolves.
+            Ok(None) => target.clone(),
+            Err(candidates) => {
+                log::warn!(
+                    "[controls] not forgetting {target}: it names {} sessions ({}); forget one by its id",
+                    candidates.len(),
+                    candidates.join(", ")
+                );
+                continue;
+            }
+        };
+        // Deleted again on every refresh while the forget holds, should
+        // anything have put the row back.
         if ids.contains(&id) {
             match ctx.del_by_id(Session::ENTITY_NAME_STATIC, &id) {
                 Ok(()) => log::warn!(
@@ -292,29 +315,47 @@ mod tests {
     }
 
     #[test]
-    fn a_forget_names_an_id_a_nickname_or_one_prefix() {
+    fn a_forget_names_one_session_or_removes_nothing() {
         let ids = vec![
             "64a05eda-eab4-46f8-9aa9-0ee0ec43eea5".to_string(),
-            "64a05edb-0000-0000-0000-000000000000".to_string(),
+            "64a05eda-0000-0000-0000-000000000000".to_string(),
             "02f2a191-6522-43d9-9a5d-7e1713f90121".to_string(),
+            "7195eda2-fd79-4bc1-a71c-4ffe6c6b1533".to_string(),
         ];
-        let nicks = vec![(ids[0].clone(), "mellow-weevil".to_string())];
+        let nick = |id: &str, n: &str| (id.to_string(), n.to_string());
+        let one = |t: &str, n: &[(String, String)]| resolve_target(t, &ids, n);
+        let nicks = vec![nick(&ids[0], "mellow-weevil")];
+
+        assert_eq!(one(&ids[2], &nicks), Ok(Some(ids[2].clone())), "an id");
+        assert_eq!(one("mellow-weevil", &nicks), Ok(Some(ids[0].clone())));
         assert_eq!(
-            resolve_target(&ids[2], &ids, &nicks).as_deref(),
-            Some(ids[2].as_str())
+            one("02f2a191", &nicks),
+            Ok(Some(ids[2].clone())),
+            "a prefix"
         );
+        assert_eq!(one("02f2a19", &nicks), Ok(None), "too short a prefix");
+        assert_eq!(one("99999999", &nicks), Ok(None), "no match");
         assert_eq!(
-            resolve_target("mellow-weevil", &ids, &nicks).as_deref(),
-            Some(ids[0].as_str())
+            one("64a05eda", &nicks),
+            Err(vec![ids[0].clone(), ids[1].clone()]),
+            "a prefix two ids share removes nothing"
         );
+        // Nicknames repeat across restarts: the ghost and its live successor.
+        let twice = vec![
+            nick(&ids[0], "mellow-weevil"),
+            nick(&ids[3], "mellow-weevil"),
+        ];
         assert_eq!(
-            resolve_target("02f2a191", &ids, &nicks).as_deref(),
-            Some(ids[2].as_str())
+            one("mellow-weevil", &twice),
+            Err(vec![ids[0].clone(), ids[3].clone()]),
+            "a repeated nickname removes nothing"
         );
-        assert_eq!(resolve_target("64a05ed", &ids, &nicks), None, "too short");
-        assert_eq!(resolve_target("64a05ed", &ids, &nicks), None);
-        assert_eq!(resolve_target("64a05ed-", &ids, &nicks), None, "no match");
-        assert_eq!(resolve_target("64a05e", &ids, &nicks), None);
+        // A nickname row whose session has left the roster doesn't count.
+        let gone = vec![
+            nick(&ids[0], "mellow-weevil"),
+            nick("left", "mellow-weevil"),
+        ];
+        assert_eq!(one("mellow-weevil", &gone), Ok(Some(ids[0].clone())));
     }
 
     #[test]
