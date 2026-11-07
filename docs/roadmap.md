@@ -474,9 +474,12 @@ Merged and needing a live run: MUS-36 and MUS-37.
   unread mail, read state and an ad hoc membership across a restart, which the
   same script without the setting loses. Making it the default waits on Josh,
   after a release.*
-- [ ] **MUS-18: Extend pairing to Codex.** Codex goes through the Rust shim. Done
+- [x] **MUS-18: Extend pairing to Codex.** Codex goes through the Rust shim. Done
   when: Codex can connect through the gate. The Pi, opencode and Prime Agent plugins
-  are left out under the language decision.
+  are left out under the language decision. Done in #130: the MCP server, hooks and
+  app-server bridge read the pairing, and the conformance suite's `codex-tls` cells pass.
+  The README said otherwise until the README-vs-main pass (2026-11-06), which also dropped
+  a duplicate `codex-tls` row from the suite's harness list.
 - [ ] **MUS-19: Fix stale docs.** Most were corrected on 2026-10-30. Done when: following the README on a clean machine works. Needs a run: the Muster team, on a clean machine.
   Progress 2026-11-05 (sienna-mullet): followed the README literally in two isolated HOMEs on
   a1 (a TLS daemon on spare ports, and a client): `cargo install --git`, then `muster-daemon
