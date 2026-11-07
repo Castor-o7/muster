@@ -48,7 +48,7 @@ into one place, `~/.local/bin` (`--prefix` to change it), from the latest releas
 against its `SHA256SUMS`, or with `cargo install --locked` while there's no release. With
 `--daemon` it then runs `muster-daemon service` for the unit that keeps the daemon running
 across reboots (`--tls` for the gate). It always runs `muster-shim setup` to pair and wire
-Claude Code, which ends with `muster-shim doctor`. Like those two, it's a dry run until you
+Claude Code, which with `--apply` ends with `muster-shim doctor`. Like those two, it's a dry run until you
 add `--apply`, and it never passes `--force`, so a unit that differs from the one `service`
 would write is left for you to look at. It never starts or restarts the daemon: `service`
 prints the commands for that. Give a pairing code with `--pair-file PATH`, or `--pair-file -`
@@ -130,7 +130,13 @@ previous binary if any of that fails. `--operator-approved` records that the ope
 it doesn't prove it, since any session can type it, so a run is never itself the operator's
 approval. The health check runs once, `HEALTH_WAIT` (15 s) after the restart, so it catches a
 daemon that fails at start but not one that fails later: keep watching the log for a few
-minutes. The script needs Linux with a systemd user unit.
+minutes. The script needs Linux with a systemd user unit, plus zsh, python3 and `ss`, and the
+Postgres client tools when the unit sets `MYKO_POSTGRES_URL`. It replaces the binaries in
+`MUSTER_BIN_DIR`, default `~/.cargo/bin`; a machine set up with `scripts/setup.sh` runs them
+from `~/.local/bin`, so set `MUSTER_BIN_DIR=~/.local/bin` there, or the check that the running
+process is the staged binary fails and it rolls back. The database backup and
+`restart-preview.sh` run only with Postgres: with `MUSTER_PERSIST=file`, back up `store.jsonl`
+yourself. In plain mode it checks the daemon's two ports, not three.
 `scripts/test-rollout.sh` checks the rollback against a throwaway unit.
 
 The daemon runs in one of two modes (MUS-64).
@@ -204,7 +210,7 @@ It prints a `muster-shim pair muster-pair:v2:…` command. Run that on the machi
 - Pairing again under the same name replaces that machine's token, so that machine's running sessions lose their connection until they restart. This is also how to rotate a machine's token.
 - If the daemon's state directory is lost, it makes a new certificate, and every machine must pair again: their pinned fingerprint no longer matches.
 
-A paired shim never sends anything unencrypted. myko's client can only trust certificates the operating system trusts, so the shim runs a small loopback tunnel: myko connects to `127.0.0.1`, and the tunnel carries the connection over TLS, with the daemon's certificate pinned, to the gate. The hooks make the same pinned TLS connection themselves. Codex, Pi, opencode and Prime Agent clients don't support pairing yet.
+A paired shim never sends anything unencrypted. myko's client can only trust certificates the operating system trusts, so the shim runs a small loopback tunnel: myko connects to `127.0.0.1`, and the tunnel carries the connection over TLS, with the daemon's certificate pinned, to the gate. The hooks make the same pinned TLS connection themselves. Codex uses the same pairing: its MCP server, hooks and app-server bridge all read it, so a paired machine's Codex reaches a TLS daemon on another machine (MUS-18; the conformance suite's `codex-tls` cells). Pi, opencode and Prime Agent clients don't support pairing yet.
 
 ### 2c. Message the muster from a terminal
 
@@ -311,7 +317,7 @@ the hooks when you don't.
 
 ### Pi: native extension
 
-Pi, Prime Agent and opencode connect over plain WebSocket, so they need to run on the daemon's own host, using `ws://localhost:6255`. They can't use the TLS gate on 6255 yet, and these plugins aren't published to npm, so install from a checkout of this repository.
+Pi, Prime Agent and opencode connect over plain WebSocket, so they need to run on the daemon's own host, using `ws://localhost:6255`, with the daemon's TLS **off**: with TLS on, a loopback connection must present the local token, and these plugins don't read it yet, so the gate refuses them with `401`. They can't use the TLS gate on 6255 yet either, and these plugins aren't published to npm, so install from a checkout of this repository.
 
 After starting a reachable daemon, install the
 [`muster-pi`](plugins/muster-pi)
@@ -371,8 +377,8 @@ development loading, and delivery details.
 
 These steps give a laptop, workstation, or manually managed VM the same
 Muster behavior as an infrastructure-managed host. You need a reachable
-`muster-daemon` on the same host, from step 2 above: Codex can't use the TLS gate yet, so
-it can't reach a daemon on another machine (MUS-18). Install the Codex CLI itself first and confirm that `codex`
+`muster-daemon`, from step 2 above: on the same host, or on another machine once this one is
+paired (`muster-shim pair`; Codex then goes through the TLS gate, MUS-18). Install the Codex CLI itself first and confirm that `codex`
 is on `PATH`.
 
 #### 1. Install and wire the shim
@@ -383,7 +389,7 @@ lifecycle hooks to `~/.codex/config.toml`, seeds the coordination instructions i
 binaries yet (MUS-14). Setup is idempotent, so rerun it to refresh the hooks or address.
 
 ```bash
-cargo install --git https://github.com/Castor-o7/muster muster-shim
+cargo install --locked --git https://github.com/Castor-o7/muster muster-shim
 muster-shim codex-setup --daemon ws://localhost:6255
 ```
 
@@ -440,7 +446,7 @@ codex() {
     if [ "$direct" -eq 1 ]; then
         "$MUSTER_CODEX_BIN" "$@"
     else
-        "$HOME/.local/bin/muster-shim" codex-run "$@"
+        muster-shim codex-run "$@"   # wherever it's installed: ~/.local/bin from setup.sh, ~/.cargo/bin from cargo install
     fi
 }
 ```
