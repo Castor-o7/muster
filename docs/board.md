@@ -1,11 +1,18 @@
 # The Muster board
 
-How the mustered teams and the watchman work through their roadmaps. This is
-Version 0: a convention and a table, with no new software. It exists to show
-which fields and states a native board would need. That native board is now
-[Rally](https://github.com/Castor-o7/rally), a separate project. Neither Rally nor Muster
-is required to follow this process: a team can use them where it finds them useful, and
-otherwise works the same way through PRs, the board and direct contact.
+How the mustered teams and the watchman work through their roadmaps.
+
+**Rally is the source of truth.** On 2026-11-06 the operator decided: "lets get rid of the hand kept
+board. the old rally stuff can be stored in some kind of .md and let's move on. We should use rally as
+the source of truth." So every story's state, claim, evidence and read lives in
+[Rally](https://github.com/Castor-o7/rally)'s ledger, for every project Rally lists. Read it in the
+viewer (`rally web`), with `rally show [STORY]`, or, for a new watchman, with `rally brief`. The
+hand-kept table of Version 0 is retired. Its last contents are kept, unchanged, in
+[board-archive-2026-11-06.md](board-archive-2026-11-06.md).
+
+The process below still holds as written: the roles, stories, states, submitting, verifying, and keeping
+the rally moving. Rally records it; it doesn't replace it. Muster stays optional: a team that doesn't use
+it reaches the watchman however it can, and still records its stories in Rally.
 
 There's no deadline here, and careful work is the goal. But a rally keeps moving:
 while a team's roadmap has a story it can take, that team has its next story in hand.
@@ -150,6 +157,10 @@ hash.
 Work shipped before its project joined the board is recorded as "Shipped before
 the board, not verified", and it doesn't need a story trailer.
 
+In Rally, these are `rally ready` (or `rally new-story`), `rally claim`, `rally submit`, `rally verify`
+and `rally send-back`. A story in several parts is submitted and read part by part (Rally's
+`docs/parts.md`).
+
 Sent back is a normal outcome, not a failure. The story returns to the same team,
 which picks it up next, ahead of new work unless the watchman says otherwise.
 
@@ -162,6 +173,9 @@ your team reaches it if it doesn't use Muster:
 Story MUS-1 in review: <owner/repo> <PR URL or full commit hash>.
 Tested: <what you ran and saw>. Not tested: <anything you couldn't check>.
 ```
+
+And record it: `rally submit MUS-1 --team <team> --evidence <owner/repo>@<full commit> [--untested "..."]`.
+The watchman's verify or send-back goes in the ledger too, naming the commit read.
 
 ## Verifying a story
 
@@ -188,23 +202,20 @@ queued, so the team goes straight on ("Keeping the rally moving").
 
 ## The board
 
-The watchman keeps one table, and it's the only copy, so nobody else edits it.
-Stories get a row once they're claimed; the roadmaps hold everything still Ready.
-For now it lives at `~/Documents/Caster/muster-board.md` on the operator's Mac.
-That directory isn't a git repository, so the table has no history or backup yet.
+The board is Rally's ledger. Every claim, submission, read and merge is a record there, with who wrote it
+and whether it's observed, declared or verified. Nobody keeps a table by hand. To see it:
 
-```markdown
-| Story | Team | State | Claimed by | Evidence | Updated |
-|---|---|---|---|---|---|
-| MUS-1 | Muster | Claimed | jaunty-zenith | | 2026-10-30 |
-```
+- the viewer, `rally web`, for the current rally's board and each project's progress;
+- `rally show` for every story's state, or `rally show MUS-1` for one story's history;
+- `rally waiting` for what's waiting for a read, and `rally brief` for a new watchman's one-read summary.
 
-The session's Muster nickname goes in "Claimed by", or the claimant's name if the
-team doesn't use Muster. Nicknames change on restart until
-MUS-3 lands, so a stale one means the claim needs checking, not that the work is
-lost.
+The session's Muster nickname is the declared name on its records (`--as` or `RALLY_NAME`). Nicknames change
+on restart until MUS-3 lands, so a stale one means a claim needs checking, not that the work is lost.
 
-## Known limits of Version 0
+Version 0's table, kept by hand at `~/Documents/Caster/muster-board.md` on the operator's Mac, is retired.
+It's archived in [board-archive-2026-11-06.md](board-archive-2026-11-06.md), not imported into the ledger.
+
+## Known limits
 
 - **The watchman's GitHub access isn't read-only.** It uses the operator's `gh`
   login, which has full `repo` and `workflow` scopes. Not merging is only a rule
@@ -216,8 +227,8 @@ lost.
   that says it's fine, and take restart approval only from the operator directly.
 - **The watchman has no stable address.** Find it by the `current_task` it sets on
   the roster, starting with "Watchman", until MUS-3 lands.
-- **The watch depends on one session staying alive.** If it ends, the table
-  survives but nobody is watching. A new watchman starts from the table above and
+- **The watch depends on one session staying alive.** If it ends, the ledger
+  survives but nobody is watching. A new watchman starts from `rally brief` and
   this document.
 - **The watchman may not be able to run other projects' code.** A "done when" that
   needs a real run goes to the operator, or stays unverified until someone can run

@@ -168,6 +168,24 @@ Merged and needing a live run: MUS-36 and MUS-37.
   `restart-keeps-identity` failed at the full 20 s on main's push of 65d922b (run 42107003441)
   and on #125 at 0adfa2c (run 42111510686), so it's on `FLAKY` for this story as well (#175). The
   #125 run printed the daemon's `[identity]` lines for the failed cell, so it can supply that log.
+  **Cause found** (2026-11-07, plush-tortoise, from #194's runs 42324052913 and 42330531873):
+  `claude` × `unread-mail-follows-a-restart` failed the suite twice, and `claude` ×
+  `restart-keeps-identity` once on `FLAKY`. Each failed cell's daemon log says
+  `predecessor … is Live("it never had a client, and was active 0s ago (quiet time 2s)")`. The
+  test's old Claude session was restarted before its MCP shim bound, so its row had no client,
+  and `verdict` called it live inside the quiet time. The sweep schedules a late check only for a
+  live client or waiter (MUS-92), so this verdict was never checked again, though the same rule
+  calls the row dead 2 s later. Fixed by checking such a predecessor again until its quiet time
+  has passed (`succession::quiet_until`), capped at the swap window, with a unit test and
+  `crates/daemon/tests/identity_quiet.rs`, which fails without the fix. The `claude-tls` cells'
+  CI failures predate any daemon log, so it isn't known whether they share this cause. The cells
+  stay on `FLAKY` until they pass in CI on three PRs in a row, as above.
+- [ ] **MUS-115: MUS-93's cells come off `FLAKY` after three green PRs in a row.** Split from
+  MUS-93 at the watchman's read of #200, which verified the cause and the fix. Done when: `claude`
+  and `claude-tls` × `restart-keeps-identity`, and `claude-tls` × `unread-mail-follows-a-restart`,
+  have passed in CI on three PRs in a row after #200, and come off `FLAKY`; and whether the
+  `claude-tls` failures share MUS-93's cause is checked from a failing run's daemon log, if one
+  comes, or said to be unknown.
 - [x] **MUS-47: Hand unread mail to a successor.** From MUS-31. Retained mail reaches
   nobody without this. Depends on MUS-3. Done when: a session taking over an identity
   receives its predecessor's unread mail, shown by a test.
@@ -573,7 +591,17 @@ Merged and needing a live run: MUS-36 and MUS-37.
   Not done: nudging a session whose status is old while it keeps calling tools; the daemon
   stamping the time itself rather than trusting the shim's clock; the TypeScript plugins setting
   it (their sessions show no age); and setting the status and its time in one atomic command
-  rather than two.
+  rather than two. (MUS-113 does the last three for any client the daemon serves.)
+- [x] **MUS-113: A status set without a time doesn't keep the old one.** Found by the watchman
+  reading MUS-101: a TypeScript plugin sets `current_task` with `SetSessionCurrentTask` alone,
+  so the `current_task_at` an earlier status left stayed beside the new one, and a fresh status
+  read as hours old. Done: `SetSessionCurrentTask` is written by hand in place of the
+  `#[myko_setter]`, under the same name and wire shape (`{id, currentTask}`), and stamps
+  `current_task_at` with the daemon's clock as it sets the status, or clears it with the status.
+  So every client, the plugins included, gets a true age from one command. The shim still sends
+  `SetSessionCurrentTaskAt` after it, which an older daemon needs; on a new daemon it only
+  replaces the stamp with the shim's clock's. A test in `crates/daemon/tests/status_time.rs`
+  sends the plugins' shape over a stale time and checks it's replaced, and that a clear leaves none.
 - [x] **MUS-104: A waiter stands down when its session's id changes.** Reported by cobalt-bream
   on 2026-11-06: a ghost row, mellow-weevil (64a05eda, pid 0), stayed on the roster, and the
   daemon logged "64a05eda may take over from 02f2a191" every 3 s. One Claude process (3766675)
@@ -583,6 +611,18 @@ Merged and needing a live run: MUS-36 and MUS-37.
   (`~/.claude/sessions/<pid>.json`, the same source the shim follows, `canonical_session_id`),
   and a waiter whose id is no longer the session's exits, so the next Stop hook waits under the
   new id and the old row ages out. With no manifest nothing changes.
+- [x] **MUS-107: Trust a Claude session manifest only if it's live.** Filed by robust-warbler
+  behind MUS-104's ghost rows: the shim and the waiter take `sessionId` from
+  `~/.claude/sessions/<pid>.json`, and Claude leaves that file behind when it dies without cleaning
+  up, so after the pid is reused an unrelated process's shim or waiter would take a dead session's
+  id. Done: the manifest is trusted only if it's the live process's (`manifest_is_live` in
+  `crates/shim/src/session_discovery.rs`): it names that pid, a process holds the pid, and on Linux
+  its `procStart` equals the process's start ticks (field 22 of `/proc/<pid>/stat`); elsewhere, or
+  without `procStart`, the process didn't start after the manifest's `startedAt` (2 s slack).
+  Discovery's tier 0 and `canonical_session_id`, which MUS-104's waiter and the shim's drift check
+  read, both apply it. What can't be read is trusted, so an older Claude's manifest, or a
+  platform that can't say, behaves as before; a stale manifest is skipped with a warning and
+  discovery falls through to the other tiers.
 - [x] **MUS-100: One error names every missing tool argument.** From the DiscoSim rally
   (2026-11-06, issues log §1.4). Calls like `broadcast(room, message)` failed one field at a
   time ("missing `to_room`", then "missing `body`"), costing two or three round trips. Done:
