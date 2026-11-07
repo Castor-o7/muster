@@ -45,7 +45,9 @@ Install the binaries, run the daemon, then wire the harnesses you use.
 
 Or let `scripts/setup.sh` (MUS-98) do the first steps in one command. It installs the binaries
 into one place, `~/.local/bin` (`--prefix` to change it), from the latest release checked
-against its `SHA256SUMS`, or with `cargo install --locked` while there's no release. With
+against its `SHA256SUMS` and that against the release key's signature (MUS-110), or with
+`cargo install --locked` of the release's tag while there's no release or no release key yet,
+or with `--from-source` (`--tag` or `--rev` to pick, MUS-111). With
 `--daemon` it then runs `muster-daemon service` for the unit that keeps the daemon running
 across reboots (`--tls` for the gate). It always runs `muster-shim setup` to pair and wire
 Claude Code, which ends with `muster-shim doctor`. Like those two, it's a dry run until you
@@ -169,7 +171,10 @@ muster-daemon resume
 muster-daemon allow a1           # from now on only listed machines may send or broadcast
 muster-daemon disallow a1
 muster-daemon senders            # show the list; `senders --clear` lets any machine send again
+muster-daemon forget mellow-weevil   # remove a stuck session from the roster: id, 8+ char id prefix, or nickname
 ```
+
+`forget` is for a ghost row, one whose session is gone but whose row stays (MUS-105). The running daemon removes the row within 2 seconds and logs which session it removed. For the next 10 minutes it refuses that session's hooks and deletes the row again on every 2-second refresh, so a waiter still polling under the old id can't put it back. A name that matches several sessions removes nothing: nicknames repeat across restarts, so the log lists the candidate ids and you forget one by its id. A session that's still alive registers again after that, and a shim's own connection re-registers at once, so it doesn't remove a live session for good.
 
 The daemon's own host is always allowed, so an allowlist never cuts off the sessions running beside it. Machine names are compared without regard to case. The daemon names its own host the way the shim does, from `MUSTER_HOST` or the hostname up to its first dot, and `senders` prints that name, so you can check it matches what the roster shows for sessions there. A session with no machine on its row is refused while a list is set. While wake-ups are paused, `muster://roster` and `muster-shim roster` report `"wakes_paused": true`. These files live in the state directory, so any process on the operator's account can change them; until MUS-39, that's the limit of this control.
 
@@ -585,7 +590,7 @@ it to a LAN or mesh address, or `0.0.0.0:6255`, to accept other machines.
 | [`muster-prime-agent`](plugins/muster-prime-agent/) | Prime Agent live-conversation extension. |
 | [`muster-opencode`](plugins/muster-opencode/) | opencode native plugin. |
 
-Muster has no published release or packages yet; install from the repository (see Install). `.github/workflows/release.yml` builds muster-shim and muster-daemon for macOS arm64 and Linux x86_64 with a `SHA256SUMS` (MUS-14), and `scripts/install-codex.sh` checks the shim against that file before running it (MUS-96). Both come from the same release, so the check guards against a corrupt or swapped download, not against a compromised release. CI (`.github/workflows/ci.yml`) runs fmt, clippy, the tests and `scripts/test-gate-e2e.sh` on every push and pull request to `main`.
+Muster has no published release or packages yet; install from the repository (see Install). `.github/workflows/release.yml` builds muster-shim and muster-daemon for macOS arm64 and Linux x86_64 with a `SHA256SUMS` (MUS-14), and `scripts/install-codex.sh` checks the shim against that file before running it (MUS-96). That file is signed by the release key in `release/allowed_signers` (MUS-110), and both installers check the signature before trusting any checksum, so a release whose assets were replaced is refused too. CI holds no key: the operator signs each draft release with `scripts/sign-release.sh`. Until the operator adds the key, there is none, and no release verifies. CI (`.github/workflows/ci.yml`) runs fmt, clippy, the tests and `scripts/test-gate-e2e.sh` on every push and pull request to `main`.
 
 ## Status
 

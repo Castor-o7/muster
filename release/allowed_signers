@@ -1,0 +1,11 @@
+# The key that signs muster releases (MUS-110), in ssh-keygen's allowed-signers format:
+#
+#   muster-release namespaces="muster-release" <key type> <public key>
+#
+# scripts/install-codex.sh and scripts/setup.sh carry the same lines in ALLOWED_SIGNERS, since a
+# script piped from curl has no checkout to read this file from; scripts/test-install-codex.sh
+# checks the three agree. scripts/sign-release.sh signs a draft release's SHA256SUMS with the
+# private half, which stays with the operator.
+#
+# There is no key yet, so nothing verifies and both installers refuse a signed release's binaries
+# (fail closed) until the operator adds the public key line here and in both scripts.

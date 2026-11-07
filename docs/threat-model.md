@@ -101,6 +101,21 @@ MUS-56 narrows the firewall to listed machines.
 
 ## Known gaps
 
+- **Release binaries are only as trusted as the release key (MUS-110).** `install-codex.sh`
+  and `setup.sh` check a release's SHA256SUMS against SHA256SUMS.sig, an `ssh-keygen -Y sign
+  -n muster-release` signature by the key in `release/allowed_signers`, before trusting any
+  checksum, and refuse a bad one. So whoever can only change a release's assets, or the
+  download in flight, can't get a binary run. A missing signature is refused by both, so
+  deleting SHA256SUMS.sig can't buy an unsigned install or build; only an explicit
+  `setup.sh --from-source` builds the pinned tag (MUS-111) instead, which trusts GitHub's copy
+  of the repository rather than the assets. CI holds no key: the operator
+  signs each draft with `scripts/sign-release.sh`, through the agent holding the key
+  (Secretive, say), so it never leaves their machine. What's not covered: someone who can
+  change `allowed_signers` and the scripts in the repository can name their own key, since the
+  scripts are fetched from the same place; and until the operator adds the key, there is none,
+  so no release verifies: `install-codex.sh` refuses, and `setup.sh` builds the pinned tag,
+  saying why.
+
 - **A kept store holds mail at rest, unencrypted** (MUS-17). With `MUSTER_PERSIST=file`,
   up to 14 days of mail sit in plain text in the state directory, beside the tokens:
   no new attacker reaches it, but a lost disk or a backup now loses mail too. It's
