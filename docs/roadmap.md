@@ -584,6 +584,15 @@ Merged and needing a live run: MUS-36 and MUS-37.
   `SetSessionCurrentTaskAt` after it, which an older daemon needs; on a new daemon it only
   replaces the stamp with the shim's clock's. A test in `crates/daemon/tests/status_time.rs`
   sends the plugins' shape over a stale time and checks it's replaced, and that a clear leaves none.
+- [x] **MUS-104: A waiter stands down when its session's id changes.** Reported by cobalt-bream
+  on 2026-11-06: a ghost row, mellow-weevil (64a05eda, pid 0), stayed on the roster, and the
+  daemon logged "64a05eda may take over from 02f2a191" every 3 s. One Claude process (3766675)
+  ran the shim as 02f2a191 while its wait hook, started before a `/clear` or compaction re-minted
+  the id, kept polling as 64a05eda; the parent stayed alive, so the waiter never exited and its
+  polls kept the row fresh. Done: each poll checks Claude's live manifest
+  (`~/.claude/sessions/<pid>.json`, the same source the shim follows, `canonical_session_id`),
+  and a waiter whose id is no longer the session's exits, so the next Stop hook waits under the
+  new id and the old row ages out. With no manifest nothing changes.
 - [x] **MUS-100: One error names every missing tool argument.** From the DiscoSim rally
   (2026-11-06, issues log §1.4). Calls like `broadcast(room, message)` failed one field at a
   time ("missing `to_room`", then "missing `body`"), costing two or three round trips. Done:
@@ -593,6 +602,15 @@ Merged and needing a live run: MUS-36 and MUS-37.
   `to_room`, `message`/`text` for `body`, `recipient` for `to`, `current_task`/`status` for
   `text`, `room` for `join_room`'s `name`, and `ids` or one `message_id` for `message_ids`.
   The canonical name wins when both are given. The advertised schemas are unchanged.
+- [x] **MUS-105: The operator can forget a session.** Requested by Josh on 2026-11-06, after the
+  ghost row mellow-weevil (MUS-104) stayed on the roster with no way to remove it.
+  Done: `muster-daemon forget <id | 8+ char prefix | nickname>` appends to `forget-sessions` in
+  the state directory, like `pause` and `allow`. The running daemon resolves it within 2 s,
+  deletes the session's row (the sweeper then drops its memberships and wake records), logs it,
+  and refuses that id's hooks for 10 minutes (`FORGET_HOLD`) so a stale waiter can't re-register
+  it. A target that names no session, or several, removes nothing. A nickname or prefix is
+  resolved once, at the first refresh, and the line rewritten to `id:<full id>`, so the hold
+  stays on that id and a new session given the freed nickname is never touched.
 - [x] **MUS-106: OpenCode shows the second message of a burst.** Main's run 42317108239 (at
   22e31eb) failed `opencode × burst-both-delivered`: "never shown: burst-b (the wake showed
   burst-a, the next delivery point "")", though #182's own run passed it. Cause: after the first
@@ -600,6 +618,13 @@ Merged and needing a live run: MUS-36 and MUS-37.
   message, marks it shown (`claimShown`, MUS-90) and returns its text, which was thrown away; the
   second message's own push then finds it already shown and skips it. Whether it fails depends on
   whether the second push lands before that drain. Done: what the drain returns is prompted too.
+- [x] **MUS-112: The TypeScript plugins reach a TLS daemon on their own host.** From the README audit
+  (2026-11-06): with TLS on, a plain loopback connection must present the local token (MUS-7),
+  and no plugin read it, so Pi, opencode and Prime Agent worked only with TLS off. Done: each
+  plugin's `local-token.ts` finds `<config dir>/muster/local-token` the way the Rust side does
+  (`XDG_CONFIG_HOME`, `APPDATA` on Windows, else `~/.config`) and adds `?token=` to a loopback
+  address that has none. It never sends the token to another host. Pairing (reaching a daemon
+  on another machine) is still Rust-only, under MUS-30.
 - [x] **MUS-99: Say what a missing live channel means.** From the DiscoSim rally (2026-11-06,
   issues log §1.1). Every send returned `live_push: unavailable` because no session ran with the
   channels flag, which is expected under hook delivery, but nothing told senders why replies came
