@@ -441,17 +441,20 @@ async fn serve() -> Result<()> {
     let activity = manifest.as_ref().and_then(|m| m.activity.clone());
     let kind = manifest.and_then(|m| m.kind);
 
+    let connected_at = Utc::now().timestamp_millis();
+    let current_task = default_current_task(&cwd, git_branch.as_deref());
     let session = Session {
         id: session_id.clone(),
         client_id: None,
         pid,
         cwd: cwd.clone(),
         git_branch: git_branch.clone(),
-        current_task: default_current_task(&cwd, git_branch.as_deref()),
+        current_task_at: current_task.as_ref().map(|_| connected_at),
+        current_task,
         session_name,
         activity,
         kind,
-        connected_at: Utc::now().timestamp_millis(),
+        connected_at,
         last_activity_at: None,
         last_tool: None,
         last_tool_at: None,
@@ -715,12 +718,23 @@ async fn serve() -> Result<()> {
                         git_branch: arc_branch,
                     },
                 );
+                let followed_at = followed
+                    .as_ref()
+                    .map(|task| task.as_ref().map(|_| chrono::Utc::now().timestamp_millis()));
                 if let Some(task) = &followed {
+                    let id = session_for_watch.lock().unwrap().id.clone();
                     let _ = client_for_watch
                         .send_command::<muster_entities::SetSessionCurrentTask, ()>(
                             &muster_entities::SetSessionCurrentTask {
-                                id: session_for_watch.lock().unwrap().id.clone(),
+                                id: id.clone(),
                                 current_task: task.as_deref().map(Arc::<str>::from),
+                            },
+                        );
+                    let _ = client_for_watch
+                        .send_command::<muster_entities::SetSessionCurrentTaskAt, ()>(
+                            &muster_entities::SetSessionCurrentTaskAt {
+                                id,
+                                current_task_at: followed_at.flatten(),
                             },
                         );
                 }
@@ -728,6 +742,7 @@ async fn serve() -> Result<()> {
                     s.git_branch = current;
                     if let Some(task) = followed {
                         s.current_task = task;
+                        s.current_task_at = followed_at.flatten();
                     }
                 }
                 log::info!("[muster-shim] git branch changed -> {last_branch:?}; pushed to roster");
@@ -1693,6 +1708,7 @@ mod tests {
                 last_activity_at: None,
                 last_tool: None,
                 last_tool_at: None,
+                current_task_at: None,
                 operator: None,
                 host: None,
                 project: None,

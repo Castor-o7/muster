@@ -248,6 +248,10 @@ fn read_roster(host: &ToolHost, uri: &str) -> ResourceContent {
                 "cwd": s.cwd,
                 "git_branch": s.git_branch,
                 "current_task": s.current_task,
+                // How old the status is (rally log §1.5): a status from hours ago
+                // reads the same as a fresh one otherwise. Absent when unknown.
+                "current_task_at": s.current_task_at,
+                "current_task_age_s": status_age_s(s, now_ms),
                 "session_name": s.session_name,
                 "activity": s.activity,
                 "kind": s.kind,
@@ -573,15 +577,26 @@ async fn set_status(host: &ToolHost, args: &Value) -> Result<ToolOutcome, ToolEr
     };
     // Codex: target the agent's own session (asSession); else our own row.
     let id = as_session.unwrap_or_else(|| host.session.lock().unwrap().id.clone());
+    // When it was set, so readers can tell a fresh status from a stale one.
+    let set_at = (!text.is_empty()).then(|| chrono::Utc::now().timestamp_millis());
     let _ = host
         .client
         .send_command::<SetSessionCurrentTask, ()>(&SetSessionCurrentTask {
-            id,
+            id: id.clone(),
             current_task: new_task,
         });
+    let _ = host
+        .client
+        .send_command::<muster_entities::SetSessionCurrentTaskAt, ()>(
+            &muster_entities::SetSessionCurrentTaskAt {
+                id,
+                current_task_at: set_at,
+            },
+        );
     if !host.is_codex {
         let mut sess = host.session.lock().unwrap();
         sess.current_task = if text.is_empty() { None } else { Some(text) };
+        sess.current_task_at = set_at;
     }
     Ok(ToolOutcome::Json(json!({ "ok": true })))
 }
@@ -1094,6 +1109,12 @@ fn join_and(items: &[String]) -> String {
     }
 }
 
+/// Seconds since `current_task` was set, when both are known.
+fn status_age_s(s: &Session, now_ms: i64) -> Option<i64> {
+    s.current_task.as_ref()?;
+    s.current_task_at.map(|at| (now_ms - at).max(0) / 1000)
+}
+
 fn parse_bool(s: &str) -> bool {
     matches!(s.to_ascii_lowercase().as_str(), "true" | "1" | "yes" | "y")
 }
@@ -1331,6 +1352,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn status_age_needs_both_a_status_and_its_time() {
+        let mut s = (*session("s1")).clone();
+        assert_eq!(status_age_s(&s, 10_000), None, "no status");
+        s.current_task = Some("MUS-1".into());
+        assert_eq!(status_age_s(&s, 10_000), None, "an older shim sent no time");
+        s.current_task_at = Some(4_000);
+        assert_eq!(status_age_s(&s, 10_000), Some(6));
+        assert_eq!(
+            status_age_s(&s, 1_000),
+            Some(0),
+            "a skewed clock reads as fresh"
+        );
+    }
+
+    #[test]
     fn one_error_names_every_missing_field_and_what_was_given() {
         let args = json!({"room_name": "x"});
         let mut req = Required::new("broadcast", &args);
@@ -1421,6 +1457,7 @@ mod tests {
             last_activity_at: None,
             last_tool: None,
             last_tool_at: None,
+            current_task_at: None,
             operator: None,
             host: None,
             project: None,
