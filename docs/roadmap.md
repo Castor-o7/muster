@@ -300,6 +300,8 @@ Merged and needing a live run: MUS-36 and MUS-37.
   an allowlist over a format myko parses separately, which is where three bypasses came
   from. Open for the operator: propose a hook upstream, or carry a fork meanwhile. Done
   when: myko refuses these writes itself, a test shows it, and the filter is retired.
+  Design, with the route for the operator to choose: [myko-authorization.md](myko-authorization.md)
+  (sienna-mullet, 2026-11-05).
 - [x] **MUS-33: Harden the gate further.** From the 2026-10-30 adversarial review, not
   fixed yet: a compromised machine can capture operator-addressed mail by being the most
   active session, including with a far-future `lastActivityAt`; `project` is unattested,
