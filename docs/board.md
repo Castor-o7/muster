@@ -111,6 +111,47 @@ But nobody waits for work while the roadmap has some.
 Whoever merges: if a second read has been requested, the merge waits for it, and that
 read must cover the head being merged.
 
+## Keeping the services current
+
+The operator, 2026-11-05 14:10 EST: "we should be ALWAYS updating rally AND muster.
+We are in open development and we need to stay on the most recent stable version."
+
+The **lamplighter** owns this: the session that keeps `muster-daemon` and
+`rally.service` running on Murph. It says so in its Muster status.
+
+- **Most recent stable** means the newest commit on `main` whose CI is green,
+  in Castor-o7/muster and in Castor-o7/rally.
+- **After every merge to `main`,** the lamplighter takes that commit, once its CI
+  is green, through these steps. No separate word from the operator is needed
+  each time:
+  1. Preflight it. For Muster that's `scripts/rollout.sh preflight <sha>` from a
+     clean worktree: build, gate e2e, a staged binary and a restart preview. For
+     Rally it's a clean release build and `rally check` with the unit's
+     environment.
+  2. Warn the `everyone` room before restarting `muster-daemon`, since a restart
+     drops every session briefly.
+  3. Deploy with a backup and a rollback:
+     - Muster: `rollout.sh apply`, which backs up the binaries, the unit and the
+       database and rolls back by itself when the health check fails.
+     - Rally: `rally backup` from a1 first, keep the old binary as
+       `~/.local/bin/rally.<sha>`, then install the new one as a new inode.
+  4. Check it: the unit is active, the listeners answer, sessions reconnect, and
+     for Rally the certificate fingerprint and `rally check` hold.
+  5. Report the deployed sha to the watchman for the board.
+- **Several merges in a row** can go out as one deploy of the newest green head.
+  A docs-only change whose build comes out byte-identical to the live binary
+  needs no restart; the lamplighter records it as current.
+- **Holds.** A red or pending CI run, or a failed preflight, holds the deploy.
+  The lamplighter reports the hold and the reason to the watchman, and deploys
+  the next green head. A Rally change that an older binary can't read back, such
+  as the first `designate --credential`, isn't held, but it ends the rollback
+  window, and the report says so.
+- **Clients too.** On Murph, `muster-shim` is installed with the daemon, and the
+  `rally` CLI is the service binary. The watchman updates a1's clients
+  (`muster-shim` and the `rally` CLI) after each green `main`, and the
+  lamplighter tells it each new Muster sha it deploys. Running sessions keep
+  their old shim until they restart.
+
 ## Stories
 
 A story lives in its project's roadmap and has an ID and a "done when" line that
