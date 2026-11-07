@@ -41,6 +41,7 @@ import {
   type SessionNicknameItem,
 } from "./entities.ts";
 import type { Identity } from "./identity.ts";
+import { withLocalToken } from "./local-token.ts";
 import { InboxPuller, holdLeaseFromEnv, type InboxPull, type PushHold } from "./inbox-pull.ts";
 
 const LIVENESS_INTERVAL_MS = 5_000;
@@ -60,6 +61,12 @@ export function withMykoPath(addr: string): string {
   } catch {
     return /\/myko\/?$/.test(addr) ? addr : `${addr.replace(/\/+$/, "")}/myko`;
   }
+}
+
+/** The URL the client opens: the `/myko` path first, then the local token
+ *  (MUS-7) as a query, so the token never lands inside the path. */
+export function daemonUrl(address: string): string {
+  return withLocalToken(withMykoPath(address));
 }
 
 export interface DaemonConfig {
@@ -149,7 +156,8 @@ export class MusterDaemon {
       this.nicknames = items;
     });
 
-    this.client.setAddress(withMykoPath(this.cfg.address));
+    // With TLS on, a loopback connection needs the host's local token (MUS-7).
+    this.client.setAddress(daemonUrl(this.cfg.address));
   }
 
   stop(): void {
