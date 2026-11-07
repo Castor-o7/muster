@@ -663,16 +663,24 @@ fn real_parent_info() -> Option<ParentInfo> {
 
 #[cfg(target_os = "macos")]
 fn macos_process_start_time(pid: u32) -> Option<SystemTime> {
+    // `lstart` is printed in the local time zone, with no offset, so `ps` is
+    // run in UTC to print the time [`parse_lstart_utc`] reads. Parsed as UTC
+    // while printed in local time, a Mac east of UTC saw a live Claude as
+    // starting hours after its manifest's `startedAt`, and refused it (MUS-107).
     let out = std::process::Command::new("ps")
+        .env("TZ", "UTC")
         .args(["-o", "lstart=", "-p", &pid.to_string()])
         .output()
         .ok()?;
     if !out.status.success() {
         return None;
     }
-    let s = String::from_utf8(out.stdout).ok()?;
-    // lstart format: "Tue Jun 10 17:31:30 2026". chrono parses this with
-    // %a %b %e %H:%M:%S %Y; the shim already pulls in chrono.
+    parse_lstart_utc(&String::from_utf8(out.stdout).ok()?)
+}
+
+/// A `ps -o lstart` time, such as "Tue Jun 10 17:31:30 2026", printed in UTC.
+#[cfg(any(target_os = "macos", test))]
+fn parse_lstart_utc(s: &str) -> Option<SystemTime> {
     chrono::NaiveDateTime::parse_from_str(s.trim(), "%a %b %e %H:%M:%S %Y")
         .ok()
         .and_then(|dt| dt.and_utc().timestamp_millis().try_into().ok())
@@ -921,6 +929,36 @@ mod tests {
                 &at(started + 60_000)
             ),
             "an older Claude's manifest, with neither, is trusted"
+        );
+    }
+
+    #[test]
+    fn lstart_is_read_as_utc() {
+        // 2026-11-07T02:55:15Z, as `TZ=UTC ps -o lstart=` prints it.
+        let at = parse_lstart_utc("Sat Nov  7 02:55:15 2026\n").expect("parses");
+        assert_eq!(
+            at.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs(),
+            1_794_020_115
+        );
+        assert_eq!(parse_lstart_utc("not a time"), None);
+    }
+
+    /// On the platform that runs `ps` for it, the start time read for this
+    /// process is close to the truth, whatever the local time zone.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn this_process_start_time_is_recent_in_any_zone() {
+        let started = macos_process_start_time(std::process::id()).expect("ps lstart");
+        let age = SystemTime::now()
+            .duration_since(started)
+            .unwrap_or_default();
+        assert!(
+            age < Duration::from_secs(3600),
+            "{age:?}: lstart was read in the wrong zone"
+        );
+        assert!(
+            started <= SystemTime::now() + Duration::from_secs(2),
+            "lstart read as later than now: the wrong zone"
         );
     }
 
