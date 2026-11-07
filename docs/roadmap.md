@@ -571,6 +571,18 @@ Merged and needing a live run: MUS-36 and MUS-37.
   (`~/.claude/sessions/<pid>.json`, the same source the shim follows, `canonical_session_id`),
   and a waiter whose id is no longer the session's exits, so the next Stop hook waits under the
   new id and the old row ages out. With no manifest nothing changes.
+- [x] **MUS-107: Trust a Claude session manifest only if it's live.** Filed by robust-warbler
+  behind MUS-104's ghost rows: the shim and the waiter take `sessionId` from
+  `~/.claude/sessions/<pid>.json`, and Claude leaves that file behind when it dies without cleaning
+  up, so after the pid is reused an unrelated process's shim or waiter would take a dead session's
+  id. Done: the manifest is trusted only if it's the live process's (`manifest_is_live` in
+  `crates/shim/src/session_discovery.rs`): it names that pid, a process holds the pid, and on Linux
+  its `procStart` equals the process's start ticks (field 22 of `/proc/<pid>/stat`); elsewhere, or
+  without `procStart`, the process didn't start after the manifest's `startedAt` (2 s slack).
+  Discovery's tier 0 and `canonical_session_id`, which MUS-104's waiter and the shim's drift check
+  read, both apply it. What can't be read is trusted, so an older Claude's manifest, or a
+  platform that can't say, behaves as before; a stale manifest is skipped with a warning and
+  discovery falls through to the other tiers.
 - [x] **MUS-100: One error names every missing tool argument.** From the DiscoSim rally
   (2026-11-06, issues log §1.4). Calls like `broadcast(room, message)` failed one field at a
   time ("missing `to_room`", then "missing `body`"), costing two or three round trips. Done:
