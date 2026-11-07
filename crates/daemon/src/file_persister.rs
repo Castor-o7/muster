@@ -798,6 +798,24 @@ mod tests {
         assert!(err.to_string().contains("line 2"), "{err}");
     }
 
+    /// Open the store again after dropping the last persister. The background
+    /// thread may still hold an upgraded `Arc` for one sync or compaction tick,
+    /// and the lock goes only when it lets go, so a reopen can briefly see
+    /// `WouldBlock`. That's the test racing its own previous persister, not a
+    /// second daemon, so wait it out (seen on macOS, where `sync_data` is slow).
+    fn reopen(dir: &Path) -> Opened {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match FilePersister::open(dir) {
+                Ok(opened) => return opened,
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock && Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Err(e) => panic!("reopen: {e}"),
+            }
+        }
+    }
+
     #[test]
     fn a_kind_muster_doesnt_keep_is_refused() {
         let err = fold(&lines(&[set("Client", "c1", "")])[..]).unwrap_err();
@@ -816,7 +834,7 @@ mod tests {
             p.persist(set("MessageRead", "m2::s1", "")).unwrap();
             p.persist(set("Client", "c1", "")).unwrap(); // not kept
         }
-        let opened = FilePersister::open(dir.path()).unwrap();
+        let opened = reopen(dir.path());
         assert_eq!(
             state(&opened.folded),
             [
@@ -870,7 +888,7 @@ mod tests {
             b"half a compaction",
         )
         .unwrap();
-        let opened = FilePersister::open(dir.path()).unwrap();
+        let opened = reopen(dir.path());
         assert!(opened.folded.events.is_empty());
         assert!(!dir.path().join(format!("{STORE_FILE}.tmp")).exists());
     }
@@ -900,7 +918,7 @@ mod tests {
         p.compact().unwrap();
         drop(p);
         // ...and the file folds cleanly at the next boot.
-        let reopened = FilePersister::open(dir.path()).unwrap();
+        let reopened = reopen(dir.path());
         assert!(!reopened.folded.torn_tail);
         assert_eq!(
             state(&reopened.folded),
@@ -939,7 +957,7 @@ mod tests {
         );
         drop(p);
         // The rename did happen, so the file on disk is the compacted one, whole.
-        let reopened = FilePersister::open(dir.path()).unwrap();
+        let reopened = reopen(dir.path());
         assert_eq!(
             state(&reopened.folded),
             [("Message".into(), "m1".into(), "before".into())]
@@ -1006,10 +1024,7 @@ mod tests {
         expected.push(("Message".into(), "m4".into(), "after".into()));
         assert_eq!(file_state(&path), expected);
         drop(p);
-        assert_eq!(
-            state(&FilePersister::open(dir.path()).unwrap().folded),
-            expected
-        );
+        assert_eq!(state(&reopen(dir.path()).folded), expected);
     }
 
     #[test]
