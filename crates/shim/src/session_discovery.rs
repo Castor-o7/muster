@@ -667,8 +667,10 @@ fn macos_process_start_time(pid: u32) -> Option<SystemTime> {
     // run in UTC to print the time [`parse_lstart_utc`] reads. Parsed as UTC
     // while printed in local time, a Mac east of UTC saw a live Claude as
     // starting hours after its manifest's `startedAt`, and refused it (MUS-107).
+    // The day and month names follow the locale, so it's the C locale's.
     let out = std::process::Command::new("ps")
         .env("TZ", "UTC")
+        .env("LC_ALL", "C")
         .args(["-o", "lstart=", "-p", &pid.to_string()])
         .output()
         .ok()?;
