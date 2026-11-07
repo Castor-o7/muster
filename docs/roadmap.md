@@ -168,6 +168,18 @@ Merged and needing a live run: MUS-36 and MUS-37.
   `restart-keeps-identity` failed at the full 20 s on main's push of 65d922b (run 42107003441)
   and on #125 at 0adfa2c (run 42111510686), so it's on `FLAKY` for this story as well (#175). The
   #125 run printed the daemon's `[identity]` lines for the failed cell, so it can supply that log.
+  **Cause found** (2026-11-07, plush-tortoise, from #194's runs 42324052913 and 42330531873):
+  `claude` × `unread-mail-follows-a-restart` failed the suite twice, and `claude` ×
+  `restart-keeps-identity` once on `FLAKY`. Each failed cell's daemon log says
+  `predecessor … is Live("it never had a client, and was active 0s ago (quiet time 2s)")`. The
+  test's old Claude session was restarted before its MCP shim bound, so its row had no client,
+  and `verdict` called it live inside the quiet time. The sweep schedules a late check only for a
+  live client or waiter (MUS-92), so this verdict was never checked again, though the same rule
+  calls the row dead 2 s later. Fixed by checking such a predecessor again until its quiet time
+  has passed (`succession::quiet_until`), capped at the swap window, with a unit test and
+  `crates/daemon/tests/identity_quiet.rs`, which fails without the fix. The `claude-tls` cells'
+  CI failures predate any daemon log, so it isn't known whether they share this cause. The cells
+  stay on `FLAKY` until they pass in CI on three PRs in a row, as above.
 - [x] **MUS-47: Hand unread mail to a successor.** From MUS-31. Retained mail reaches
   nobody without this. Depends on MUS-3. Done when: a session taking over an identity
   receives its predecessor's unread mail, shown by a test.
