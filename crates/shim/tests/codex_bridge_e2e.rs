@@ -482,6 +482,7 @@ fn hook_session(id: &str, cwd: &str) -> Session {
         last_activity_at: Some(1),
         last_tool: None,
         last_tool_at: None,
+        current_task_at: None,
         operator: Some("wake-canary".into()),
         host: Some(HostInfo {
             name: TEST_HOST.into(),

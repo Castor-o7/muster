@@ -204,6 +204,7 @@ mod tests {
             last_activity_at: None,
             last_tool: None,
             last_tool_at: None,
+            current_task_at: None,
             operator: operator.map(str::to_string),
             host: None,
             project: None,

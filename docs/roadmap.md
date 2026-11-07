@@ -580,6 +580,28 @@ Merged and needing a live run: MUS-36 and MUS-37.
   what it did, a test shows it rolls back a daemon that fails its health check, and a test shows a
   held wait ends cleanly on SIGTERM. The operator's direct OK is still needed to run it. Related:
   MUS-15, `scripts/restart-preview.sh`.
+- [x] **MUS-101: The roster shows how old each status is.** From the DiscoSim rally (2026-11-06,
+  issues log §1.5): the watchman's `current_task` still described day 1 at stand-down, and a
+  stale status read the same as a fresh one. Done: `Session` gains `current_task_at` (its own
+  setter, `SetSessionCurrentTaskAt`, allowed through the gate for the caller's own session),
+  set by `set_status`, by the branch-following default (MUS-26) and at registration when the
+  default status is set. `muster://roster` adds `current_task_at` and `current_task_age_s`, and
+  `muster-shim roster` adds `current_task_at` under `declared`. A shim that predates it sends no
+  time, so the age is absent rather than wrong; an older daemon drops the setter harmlessly.
+  Not done: nudging a session whose status is old while it keeps calling tools; the daemon
+  stamping the time itself rather than trusting the shim's clock; the TypeScript plugins setting
+  it (their sessions show no age); and setting the status and its time in one atomic command
+  rather than two. (MUS-113 does the last three for any client the daemon serves.)
+- [x] **MUS-113: A status set without a time doesn't keep the old one.** Found by the watchman
+  reading MUS-101: a TypeScript plugin sets `current_task` with `SetSessionCurrentTask` alone,
+  so the `current_task_at` an earlier status left stayed beside the new one, and a fresh status
+  read as hours old. Done: `SetSessionCurrentTask` is written by hand in place of the
+  `#[myko_setter]`, under the same name and wire shape (`{id, currentTask}`), and stamps
+  `current_task_at` with the daemon's clock as it sets the status, or clears it with the status.
+  So every client, the plugins included, gets a true age from one command. The shim still sends
+  `SetSessionCurrentTaskAt` after it, which an older daemon needs; on a new daemon it only
+  replaces the stamp with the shim's clock's. A test in `crates/daemon/tests/status_time.rs`
+  sends the plugins' shape over a stale time and checks it's replaced, and that a clear leaves none.
 - [x] **MUS-104: A waiter stands down when its session's id changes.** Reported by cobalt-bream
   on 2026-11-06: a ghost row, mellow-weevil (64a05eda, pid 0), stayed on the roster, and the
   daemon logged "64a05eda may take over from 02f2a191" every 3 s. One Claude process (3766675)
@@ -650,6 +672,14 @@ Merged and needing a live run: MUS-36 and MUS-37.
   another key; release.yml says so; threat-model.md has the note; tests cover each. Built with a
   placeholder key that fails closed. Left: Josh adds his public key (to release/allowed_signers
   and both scripts) before signing the first release (MUS-14).
+- [x] **MUS-114: A resource read right after connecting waits for registration, as a write does.**
+  From CI on 2026-11-06: `scripts/test-restart-file-e2e.sh` failed on #185 and #194, whose diffs couldn't
+  touch it, and in 2 of 15 local runs. The read of `muster://messages?inbox=true&unread=true` was refused
+  with `[unregistered] caller (client …) has no session on the roster`: a fresh shim read before its
+  Session SET landed, and its row from the run before (same session id, a dead connection) let the
+  registration wait pass. Tool calls already wait and retry once (MUS-72, MUS-79); the messages read did
+  neither. Done: both go through one `as_registered`, which holds until the session is on the roster and,
+  on that refusal, sends the session again and retries once.
 - [ ] **MUS-30: Decide the future of the TypeScript plugins.** The operator decides
   whether to keep, freeze or remove them. Done when: the decision is recorded here,
   and if they're removed, the repository's `package.json` workspace goes with them.

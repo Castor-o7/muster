@@ -124,6 +124,7 @@ fn make_session(id: &str) -> Session {
         last_activity_at: None,
         last_tool: None,
         last_tool_at: None,
+        current_task_at: None,
         operator: None,
         host: None,
         project: None,

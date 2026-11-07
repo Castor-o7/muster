@@ -114,32 +114,8 @@ impl Handler for CoordHandler {
         let name = name.to_string();
         Box::pin(async move {
             // Every tool here writes as this session, which the daemon refuses
-            // until the session's row is on the roster. An agent's first call can
-            // come before the shim's registration lands (MUS-72), so hold it
-            // briefly rather than fail it.
-            wait_until_registered(&host).await;
-            let first = dispatch_tool(&host, &name, &args).await;
-            // The hold can pass on a row still bound to an earlier connection
-            // for this session (one that died and the sweeper hasn't cleared),
-            // and the daemon then refuses the write, because it finds a caller
-            // by this connection's binding (MUS-79). A refused write stored
-            // nothing, so send the session again and retry it once.
-            match first {
-                Err(e) if !host.is_codex && is_unbound_refusal(&e.message) => {
-                    log::warn!(
-                        "[muster-shim] {name} was refused as unregistered; sending the session again and retrying once"
-                    );
-                    let snapshot = host.session.lock().unwrap().clone();
-                    if let Err(err) = crate::emit_session_set(&host.client, &snapshot) {
-                        log::warn!("[muster-shim] re-SET before a retry failed: {err}");
-                    }
-                    // The roster can't tell this connection's binding from an
-                    // older one, so give the SET a moment to land.
-                    tokio::time::sleep(UNBOUND_RETRY_AFTER).await;
-                    dispatch_tool(&host, &name, &args).await
-                }
-                other => other,
-            }
+            // until the session's row is on the roster (MUS-72, MUS-79).
+            as_registered(&host, &name, || dispatch_tool(&host, &name, &args)).await
         })
     }
 
@@ -152,7 +128,15 @@ impl Handler for CoordHandler {
                 "whoami" => Ok(read_whoami(&host, &uri, &parsed.query)),
                 "roster" => Ok(read_roster(&host, &uri)),
                 "rooms" => Ok(read_rooms(&host, &uri)),
-                "messages" => read_messages(&host, &uri, &parsed.query).await,
+                // The daemon finds whose mail to read by this connection's
+                // binding, so a read right after connecting is refused the
+                // way an early write is (MUS-114): hold it the same way.
+                "messages" => {
+                    as_registered(&host, "muster://messages", || {
+                        read_messages(&host, &uri, &parsed.query)
+                    })
+                    .await
+                }
                 other => Err(ResourceError {
                     code: METHOD_NOT_FOUND,
                     message: format!("no resource at 'muster://{other}'"),
@@ -264,6 +248,10 @@ fn read_roster(host: &ToolHost, uri: &str) -> ResourceContent {
                 "cwd": s.cwd,
                 "git_branch": s.git_branch,
                 "current_task": s.current_task,
+                // How old the status is (rally log §1.5): a status from hours ago
+                // reads the same as a fresh one otherwise. Absent when unknown.
+                "current_task_at": s.current_task_at,
+                "current_task_age_s": status_age_s(s, now_ms),
                 "session_name": s.session_name,
                 "activity": s.activity,
                 "kind": s.kind,
@@ -437,6 +425,42 @@ async fn dispatch_tool(
     }
 }
 
+/// Run `run`, a command sent as this session, once the session is on the
+/// roster. An agent's first call can come before the shim's registration lands
+/// (MUS-72), so it's held briefly rather than failed. The hold can also pass on
+/// a row still bound to an earlier connection for this session (one that died
+/// and the sweeper hasn't cleared), and the daemon then refuses the command,
+/// because it finds a caller by this connection's binding (MUS-79). A refused
+/// command did nothing, so the session is sent again and the command retried
+/// once. Reads that the daemon resolves by connection need this as much as
+/// writes do (MUS-114).
+async fn as_registered<T, Fut>(
+    host: &ToolHost,
+    what: &str,
+    run: impl Fn() -> Fut,
+) -> Result<T, ToolError>
+where
+    Fut: std::future::Future<Output = Result<T, ToolError>>,
+{
+    wait_until_registered(host).await;
+    match run().await {
+        Err(e) if !host.is_codex && is_unbound_refusal(&e.message) => {
+            log::warn!(
+                "[muster-shim] {what} was refused as unregistered; sending the session again and retrying once"
+            );
+            let snapshot = host.session.lock().unwrap().clone();
+            if let Err(err) = crate::emit_session_set(&host.client, &snapshot) {
+                log::warn!("[muster-shim] re-SET before a retry failed: {err}");
+            }
+            // The roster can't tell this connection's binding from an older
+            // one, so give the SET a moment to land.
+            tokio::time::sleep(UNBOUND_RETRY_AFTER).await;
+            run().await
+        }
+        other => other,
+    }
+}
+
 /// How long a retried write waits for its re-SET to land (MUS-79).
 const UNBOUND_RETRY_AFTER: std::time::Duration = std::time::Duration::from_millis(750);
 
@@ -553,15 +577,26 @@ async fn set_status(host: &ToolHost, args: &Value) -> Result<ToolOutcome, ToolEr
     };
     // Codex: target the agent's own session (asSession); else our own row.
     let id = as_session.unwrap_or_else(|| host.session.lock().unwrap().id.clone());
+    // When it was set, so readers can tell a fresh status from a stale one.
+    let set_at = (!text.is_empty()).then(|| chrono::Utc::now().timestamp_millis());
     let _ = host
         .client
         .send_command::<SetSessionCurrentTask, ()>(&SetSessionCurrentTask {
-            id,
+            id: id.clone(),
             current_task: new_task,
         });
+    let _ = host
+        .client
+        .send_command::<muster_entities::SetSessionCurrentTaskAt, ()>(
+            &muster_entities::SetSessionCurrentTaskAt {
+                id,
+                current_task_at: set_at,
+            },
+        );
     if !host.is_codex {
         let mut sess = host.session.lock().unwrap();
         sess.current_task = if text.is_empty() { None } else { Some(text) };
+        sess.current_task_at = set_at;
     }
     Ok(ToolOutcome::Json(json!({ "ok": true })))
 }
@@ -1074,6 +1109,12 @@ fn join_and(items: &[String]) -> String {
     }
 }
 
+/// Seconds since `current_task` was set, when both are known.
+fn status_age_s(s: &Session, now_ms: i64) -> Option<i64> {
+    s.current_task.as_ref()?;
+    s.current_task_at.map(|at| (now_ms - at).max(0) / 1000)
+}
+
 fn parse_bool(s: &str) -> bool {
     matches!(s.to_ascii_lowercase().as_str(), "true" | "1" | "yes" | "y")
 }
@@ -1311,6 +1352,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn status_age_needs_both_a_status_and_its_time() {
+        let mut s = (*session("s1")).clone();
+        assert_eq!(status_age_s(&s, 10_000), None, "no status");
+        s.current_task = Some("MUS-1".into());
+        assert_eq!(status_age_s(&s, 10_000), None, "an older shim sent no time");
+        s.current_task_at = Some(4_000);
+        assert_eq!(status_age_s(&s, 10_000), Some(6));
+        assert_eq!(
+            status_age_s(&s, 1_000),
+            Some(0),
+            "a skewed clock reads as fresh"
+        );
+    }
+
+    #[test]
     fn one_error_names_every_missing_field_and_what_was_given() {
         let args = json!({"room_name": "x"});
         let mut req = Required::new("broadcast", &args);
@@ -1401,6 +1457,7 @@ mod tests {
             last_activity_at: None,
             last_tool: None,
             last_tool_at: None,
+            current_task_at: None,
             operator: None,
             host: None,
             project: None,
