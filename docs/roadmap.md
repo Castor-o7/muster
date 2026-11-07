@@ -571,6 +571,13 @@ Merged and needing a live run: MUS-36 and MUS-37.
   `to_room`, `message`/`text` for `body`, `recipient` for `to`, `current_task`/`status` for
   `text`, `room` for `join_room`'s `name`, and `ids` or one `message_id` for `message_ids`.
   The canonical name wins when both are given. The advertised schemas are unchanged.
+- [x] **MUS-106: OpenCode shows the second message of a burst.** Main's run 42317108239 (at
+  22e31eb) failed `opencode × burst-both-delivered`: "never shown: burst-b (the wake showed
+  burst-a, the next delivery point "")", though #182's own run passed it. Cause: after the first
+  push's prompt, `onNotify` drains the inbox to ack it, and that drain also takes the second
+  message, marks it shown (`claimShown`, MUS-90) and returns its text, which was thrown away; the
+  second message's own push then finds it already shown and skips it. Whether it fails depends on
+  whether the second push lands before that drain. Done: what the drain returns is prompted too.
 - [ ] **MUS-30: Decide the future of the TypeScript plugins.** The operator decides
   whether to keep, freeze or remove them. Done when: the decision is recorded here,
   and if they're removed, the repository's `package.json` workspace goes with them.

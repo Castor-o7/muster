@@ -103,7 +103,15 @@ export const MusterPlugin: Plugin = async (input) => {
     await client.session
       .prompt({ path: { id: sid }, body: { parts: [{ type: "text", text }] } })
       .then(async () => {
-        await daemon.drainInbox(sid);
+        // This drain acks the pushed message, and it also takes (and marks
+        // shown) anything that arrived while that turn ran, such as the second
+        // of a burst, whose own push is then skipped as already shown. So
+        // what it returns has to be shown here, or it's acked unseen.
+        const rest = await daemon.drainInbox(sid);
+        if (rest) {
+          log(`muster: auto-advancing ${sid} with mail that arrived during the turn`);
+          await client.session.prompt({ path: { id: sid }, body: { parts: [{ type: "text", text: rest }] } });
+        }
         log(`muster: auto-advanced session ${sid}`);
       })
       .catch((e: unknown) => log(`muster: auto-advance prompt failed: ${String(e)}`));
