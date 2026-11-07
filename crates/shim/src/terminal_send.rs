@@ -59,9 +59,28 @@ fn resolve_targets(
                 .is_some_and(|p| p.eq_ignore_ascii_case(token))
         })
         .collect();
-    let single = agents
-        .iter()
-        .find(|s| s.id.0.as_ref() == token || handle(nicknames, s) == *token);
+    // An exact id names one session; a nickname can name several, since
+    // nicknames repeat across restarts (a ghost row and its live successor
+    // were both `mellow-weevil` on 2026-11-06), and sending to the first could
+    // hand the message to the ghost.
+    let single = match agents.iter().find(|s| s.id.0.as_ref() == token) {
+        Some(session) => Some(session),
+        None => {
+            let named: Vec<_> = agents
+                .iter()
+                .filter(|s| handle(nicknames, s) == *token)
+                .collect();
+            if named.len() > 1 {
+                let ids: Vec<&str> = named.iter().map(|s| s.id.0.as_ref()).collect();
+                return Err(format!(
+                    "`{token}` names {} sessions ({}); use one's id",
+                    named.len(),
+                    ids.join(", ")
+                ));
+            }
+            named.into_iter().next()
+        }
+    };
     match (team.is_empty(), single) {
         (false, Some(_)) => {
             return Err(format!(
@@ -327,6 +346,34 @@ mod tests {
         let mut sessions = roster();
         sessions.push(session("catapp", Some("other"), None));
         assert!(resolve_targets(&sessions, &[], &named("catapp")).is_err());
+    }
+
+    #[test]
+    fn a_nickname_two_sessions_share_is_refused_with_their_ids() {
+        let sessions = vec![
+            session("ghost-0000-0000", None, None),
+            session("live-1111-1111", None, None),
+        ];
+        let nick = |id: &str| {
+            Arc::new(SessionNickname {
+                id: muster_entities::SessionNicknameId(Arc::from(id)),
+                nickname: "mellow-weevil".into(),
+            })
+        };
+        let nicknames = vec![nick("ghost-0000-0000"), nick("live-1111-1111")];
+        let err = resolve_targets(&sessions, &nicknames, &named("mellow-weevil")).unwrap_err();
+        assert!(
+            err.contains("ghost-0000-0000") && err.contains("live-1111-1111"),
+            "{err}"
+        );
+        // Either id still reaches its session.
+        let one = resolve_targets(&sessions, &nicknames, &named("live-1111-1111")).unwrap();
+        assert_eq!(one.len(), 1);
+        assert_eq!(one[0].id.0.as_ref(), "live-1111-1111");
+        // With only one session on that nickname, it resolves to that one.
+        let one = resolve_targets(&sessions, &nicknames[1..], &named("mellow-weevil")).unwrap();
+        assert_eq!(one.len(), 1);
+        assert_eq!(one[0].id.0.as_ref(), "live-1111-1111");
     }
 
     #[test]

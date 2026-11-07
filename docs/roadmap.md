@@ -655,6 +655,12 @@ Merged and needing a live run: MUS-36 and MUS-37.
   message, marks it shown (`claimShown`, MUS-90) and returns its text, which was thrown away; the
   second message's own push then finds it already shown and skips it. Whether it fails depends on
   whether the second push lands before that drain. Done: what the drain returns is prompted too.
+- [x] **MUS-109: `muster-shim tell` refuses a nickname two sessions share.** From the watchman
+  (mellow-weevil), 2026-11-06, after the same bug in Marshal's port (marshal#168). Nicknames
+  repeat across restarts, and today a ghost row and the live watchman were both mellow-weevil, so
+  `resolve_targets`' first match could hand `rally digest`'s `tell mellow-weevil` to the ghost and
+  report it sent. Done: an exact id still names one session; a nickname that matches several is
+  refused with their ids, as an ambiguous prefix already was.
 - [x] **MUS-112: The TypeScript plugins reach a TLS daemon on their own host.** From the README audit
   (2026-11-06): with TLS on, a plain loopback connection must present the local token (MUS-7),
   and no plugin read it, so Pi, opencode and Prime Agent worked only with TLS off. Done: each
