@@ -562,6 +562,30 @@ Merged and needing a live run: MUS-36 and MUS-37.
   what it did, a test shows it rolls back a daemon that fails its health check, and a test shows a
   held wait ends cleanly on SIGTERM. The operator's direct OK is still needed to run it. Related:
   MUS-15, `scripts/restart-preview.sh`.
+- [x] **MUS-100: One error names every missing tool argument.** From the DiscoSim rally
+  (2026-11-06, issues log §1.4). Calls like `broadcast(room, message)` failed one field at a
+  time ("missing `to_room`", then "missing `body`"), costing two or three round trips. Done:
+  each write tool reads its required arguments together (`Required` in `crates/shim/src/tools.rs`)
+  and one error names every missing or mistyped field, including Codex's `asSession`, plus the
+  keys that were given. Common aliases stand in for the field names: `room`/`room_id` for
+  `to_room`, `message`/`text` for `body`, `recipient` for `to`, `current_task`/`status` for
+  `text`, `room` for `join_room`'s `name`, and `ids` or one `message_id` for `message_ids`.
+  The canonical name wins when both are given. The advertised schemas are unchanged.
+- [x] **MUS-106: OpenCode shows the second message of a burst.** Main's run 42317108239 (at
+  22e31eb) failed `opencode × burst-both-delivered`: "never shown: burst-b (the wake showed
+  burst-a, the next delivery point "")", though #182's own run passed it. Cause: after the first
+  push's prompt, `onNotify` drains the inbox to ack it, and that drain also takes the second
+  message, marks it shown (`claimShown`, MUS-90) and returns its text, which was thrown away; the
+  second message's own push then finds it already shown and skips it. Whether it fails depends on
+  whether the second push lands before that drain. Done: what the drain returns is prompted too.
+- [x] **MUS-99: Say what a missing live channel means.** From the DiscoSim rally (2026-11-06,
+  issues log §1.1). Every send returned `live_push: unavailable` because no session ran with the
+  channels flag, which is expected under hook delivery, but nothing told senders why replies came
+  late. Done: the first send in a session that finds no live channel carries a `note` saying the
+  message waits in the inbox and shows at the recipient's next tool call or prompt, and that an
+  idle recipient is woken only when `wake` is `expected`. It is said once per shim, since #62
+  dropped the per-send note to keep tool output small. The statusline's `no live channel` warning
+  is unchanged: it still shows only when no wait hook is wired, the one case where it's a fault.
 - [x] **MUS-102: A lone long DM arrives whole in a hook.** From the DiscoSim rally (2026-11-06,
   issues log §1.3): team summaries arrived cut at 2,000 characters, each needing a resource read.
   Done: a hook shows up to 6,000 characters of one message (`HOOK_BODY_MAX_CHARS`), still within

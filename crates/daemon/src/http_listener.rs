@@ -273,6 +273,14 @@ fn machine_may_act(state_dir: &Path, query: &str, body: &[u8]) -> bool {
         return true;
     };
     let Some(machine) = query.split('&').find_map(|kv| kv.strip_prefix("machine=")) else {
+        // The daemon's own host may act for any session, but only under an id the
+        // daemon stores (MUS-94).
+        if !credentials::safe_session_id(&session) {
+            log::warn!(
+                "[hook] refused a local hook: session id {session:?} isn't one the daemon stores"
+            );
+            return false;
+        }
         if let Err(e) = credentials::claim_session(state_dir, credentials::LOCAL_MACHINE, &session)
         {
             log::warn!("[hook] can't record local session {session}: {e}");
