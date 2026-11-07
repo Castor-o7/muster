@@ -562,6 +562,15 @@ Merged and needing a live run: MUS-36 and MUS-37.
   what it did, a test shows it rolls back a daemon that fails its health check, and a test shows a
   held wait ends cleanly on SIGTERM. The operator's direct OK is still needed to run it. Related:
   MUS-15, `scripts/restart-preview.sh`.
+- [x] **MUS-104: A waiter stands down when its session's id changes.** Reported by cobalt-bream
+  on 2026-11-06: a ghost row, mellow-weevil (64a05eda, pid 0), stayed on the roster, and the
+  daemon logged "64a05eda may take over from 02f2a191" every 3 s. One Claude process (3766675)
+  ran the shim as 02f2a191 while its wait hook, started before a `/clear` or compaction re-minted
+  the id, kept polling as 64a05eda; the parent stayed alive, so the waiter never exited and its
+  polls kept the row fresh. Done: each poll checks Claude's live manifest
+  (`~/.claude/sessions/<pid>.json`, the same source the shim follows, `canonical_session_id`),
+  and a waiter whose id is no longer the session's exits, so the next Stop hook waits under the
+  new id and the old row ages out. With no manifest nothing changes.
 - [x] **MUS-100: One error names every missing tool argument.** From the DiscoSim rally
   (2026-11-06, issues log §1.4). Calls like `broadcast(room, message)` failed one field at a
   time ("missing `to_room`", then "missing `body`"), costing two or three round trips. Done:
@@ -578,6 +587,51 @@ Merged and needing a live run: MUS-36 and MUS-37.
   life: a ghost row, like MUS-104. Done: only wakeable threads are registered again, meaning the
   app-server is up and the reconnect's `thread/list` showed them (MUS-77's `wakeable_sessions`).
   A daemon restart, MUS-76's case, leaves the app-server up, so those threads still come back.
+- [x] **MUS-105: The operator can forget a session.** Requested by Josh on 2026-11-06, after the
+  ghost row mellow-weevil (MUS-104) stayed on the roster with no way to remove it.
+  Done: `muster-daemon forget <id | 8+ char prefix | nickname>` appends to `forget-sessions` in
+  the state directory, like `pause` and `allow`. The running daemon resolves it within 2 s,
+  deletes the session's row (the sweeper then drops its memberships and wake records), logs it,
+  and refuses that id's hooks for 10 minutes (`FORGET_HOLD`) so a stale waiter can't re-register
+  it. A target that names no session, or several, removes nothing. A nickname or prefix is
+  resolved once, at the first refresh, and the line rewritten to `id:<full id>`, so the hold
+  stays on that id and a new session given the freed nickname is never touched.
+- [x] **MUS-106: OpenCode shows the second message of a burst.** Main's run 42317108239 (at
+  22e31eb) failed `opencode × burst-both-delivered`: "never shown: burst-b (the wake showed
+  burst-a, the next delivery point "")", though #182's own run passed it. Cause: after the first
+  push's prompt, `onNotify` drains the inbox to ack it, and that drain also takes the second
+  message, marks it shown (`claimShown`, MUS-90) and returns its text, which was thrown away; the
+  second message's own push then finds it already shown and skips it. Whether it fails depends on
+  whether the second push lands before that drain. Done: what the drain returns is prompted too.
+- [x] **MUS-99: Say what a missing live channel means.** From the DiscoSim rally (2026-11-06,
+  issues log §1.1). Every send returned `live_push: unavailable` because no session ran with the
+  channels flag, which is expected under hook delivery, but nothing told senders why replies came
+  late. Done: the first send in a session that finds no live channel carries a `note` saying the
+  message waits in the inbox and shows at the recipient's next tool call or prompt, and that an
+  idle recipient is woken only when `wake` is `expected`. It is said once per shim, since #62
+  dropped the per-send note to keep tool output small. The statusline's `no live channel` warning
+  is unchanged: it still shows only when no wait hook is wired, the one case where it's a fault.
+- [ ] **MUS-111: `setup.sh --from-source` builds a pinned release, not the default branch.** Filed by
+  robust-warbler: `--from-source` ran `cargo install --locked --git` on the unpinned default branch.
+  Done when: a build takes the latest release's tag by default, looked up once so it's the same
+  release whose SHA256SUMS the download checks (which now downloads from that tag too); `--tag TAG`
+  picks the release for both, and `--rev SHA` (a full hash) builds that commit from source; the dry
+  run says which ref it would build; only with no release at all does it build the default branch,
+  saying it's unpinned; a malformed tag, a short rev, or both together are refused; and
+  `scripts/test-setup.sh` covers each.
+- [ ] **MUS-110: Sign releases, so SHA256SUMS proves who published them.** Filed with MUS-111:
+  SHA256SUMS comes from the same release as the binaries, so it catches a corrupt download but
+  not a release whose assets were replaced. Josh chose on 2026-11-06 to sign locally, so CI holds
+  no key. Done when: `release/allowed_signers` names the release key, and `install-codex.sh` and
+  `setup.sh` carry the same lines and check SHA256SUMS.sig with `ssh-keygen -Y verify -n
+  muster-release` before trusting any checksum, refusing a bad or other key's signature and a
+  SHA256SUMS changed after signing; both refuse an unsigned release, so deleting the signature
+  buys nothing, and only `setup.sh --from-source` builds its tag instead (while there's no key
+  yet, `setup.sh` builds the tag, saying why); `scripts/sign-release.sh <tag> --key <public key>` signs a draft
+  through the key's agent, checks the signature, uploads it, and refuses a published release or
+  another key; release.yml says so; threat-model.md has the note; tests cover each. Built with a
+  placeholder key that fails closed. Left: Josh adds his public key (to release/allowed_signers
+  and both scripts) before signing the first release (MUS-14).
 - [ ] **MUS-30: Decide the future of the TypeScript plugins.** The operator decides
   whether to keep, freeze or remove them. Done when: the decision is recorded here,
   and if they're removed, the repository's `package.json` workspace goes with them.

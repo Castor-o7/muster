@@ -12,6 +12,9 @@
 set -eu
 
 REPO="https://github.com/Castor-o7/muster"
+# The key that signs releases (MUS-110), as release/allowed_signers has it; test-install-codex.sh
+# checks the copies agree. Until the operator adds one, nothing verifies, so nothing installs.
+ALLOWED_SIGNERS=''
 DAEMON="${MUSTER_DAEMON:-}"
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -66,16 +69,39 @@ sha256_of() {
     fi
 }
 
+# Whether $1/SHA256SUMS.sig is the release key's signature of $1/SHA256SUMS (MUS-110). The
+# checksums only catch a corrupt or swapped download; the signature is what says the release is the
+# operator's, so it's checked before any checksum is trusted.
+signed_by_release_key() {
+    command -v ssh-keygen >/dev/null 2>&1 || return 3
+    printf '%s\n' "$ALLOWED_SIGNERS" >"$1/allowed_signers"
+    ssh-keygen -Y verify -f "$1/allowed_signers" -I muster-release -n muster-release \
+        -s "$1/SHA256SUMS.sig" <"$1/SHA256SUMS" >/dev/null 2>&1
+}
+
 echo "Downloading muster-shim ($target)..."
 curl -fSL --proto '=https' --tlsv1.2 -o "$bin" "$base/$asset"
 
-# Check it against the release's SHA256SUMS before running it (MUS-96). Both come from the same
-# release over HTTPS, so this catches a corrupt or swapped download, not a tampered release.
-# Anything short of a match stops here, before the binary runs.
+# Check it against the release's SHA256SUMS before running it (MUS-96), once SHA256SUMS is shown to
+# be signed by the release key (MUS-110). Anything short of both stops here, before the binary runs.
 if ! curl -fsSL --proto '=https' --tlsv1.2 -o "$tmp/SHA256SUMS" "$base/SHA256SUMS"; then
     echo "error: couldn't download SHA256SUMS from the release; not installing." >&2
     exit 1
 fi
+if ! curl -fsSL --proto '=https' --tlsv1.2 -o "$tmp/SHA256SUMS.sig" "$base/SHA256SUMS.sig"; then
+    echo "error: the release has no SHA256SUMS.sig, so it can't be shown to be the operator's; not installing." >&2
+    exit 1
+fi
+sig_status=0
+signed_by_release_key "$tmp" || sig_status=$?
+if [ "$sig_status" = 3 ]; then
+    echo "error: ssh-keygen (OpenSSH 8.1 or later) isn't installed, so the release's signature can't be checked; not installing." >&2
+    exit 1
+elif [ "$sig_status" != 0 ]; then
+    echo "error: SHA256SUMS.sig isn't the release key's signature of SHA256SUMS; not installing." >&2
+    exit 1
+fi
+echo "Checked SHA256SUMS against the release key's signature."
 expected=$(awk -v f="$asset" '{ name = $2; sub(/^\*/, "", name) } name == f { print $1; exit }' "$tmp/SHA256SUMS")
 if [ -z "$expected" ]; then
     echo "error: the release's SHA256SUMS has no entry for $asset; not installing." >&2

@@ -437,6 +437,12 @@ fn register_hook_session(
         log::warn!("[hook] not registering session id {sid:?}: not one the daemon stores");
         return None;
     }
+    // The operator forgot it (MUS-105): a waiter still polling as it mustn't
+    // put the row back while the forget holds.
+    if crate::controls::is_forgotten(sid) {
+        log::debug!("[hook] not registering {sid}: the operator forgot it");
+        return None;
+    }
     let sid = sid.to_string();
     let q = parse_query(query);
     let cwd = body
