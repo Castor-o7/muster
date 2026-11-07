@@ -562,6 +562,13 @@ Merged and needing a live run: MUS-36 and MUS-37.
   what it did, a test shows it rolls back a daemon that fails its health check, and a test shows a
   held wait ends cleanly on SIGTERM. The operator's direct OK is still needed to run it. Related:
   MUS-15, `scripts/restart-preview.sh`.
+- [x] **MUS-106: OpenCode shows the second message of a burst.** Main's run 42317108239 (at
+  22e31eb) failed `opencode × burst-both-delivered`: "never shown: burst-b (the wake showed
+  burst-a, the next delivery point "")", though #182's own run passed it. Cause: after the first
+  push's prompt, `onNotify` drains the inbox to ack it, and that drain also takes the second
+  message, marks it shown (`claimShown`, MUS-90) and returns its text, which was thrown away; the
+  second message's own push then finds it already shown and skips it. Whether it fails depends on
+  whether the second push lands before that drain. Done: what the drain returns is prompted too.
 - [ ] **MUS-30: Decide the future of the TypeScript plugins.** The operator decides
   whether to keep, freeze or remove them. Done when: the decision is recorded here,
   and if they're removed, the repository's `package.json` workspace goes with them.
