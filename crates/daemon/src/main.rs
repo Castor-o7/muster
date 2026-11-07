@@ -50,6 +50,7 @@ usage:
   muster-daemon allow MACHINE         let only listed machines send (and this host)
   muster-daemon disallow MACHINE      take a machine off that list
   muster-daemon senders [--clear]     show the list, or remove it so any machine may send
+  muster-daemon forget SESSION        remove a session from the roster (id, 8+ char prefix or nickname)
   muster-daemon service [--tls] [--apply [--force [--drop-settings]]]
                                       show the systemd or launchd unit that keeps this
                                       daemon running across reboots; --apply writes it.
@@ -226,6 +227,22 @@ fn main() -> Result<()> {
             );
             Ok(())
         }
+        Some("forget") => match args.get(1) {
+            Some(target) if args.len() == 2 && !target.trim().is_empty() => {
+                let dir = daemon::credentials::state_dir()?;
+                daemon::controls::forget(&dir, target)?;
+                println!(
+                    "asked the running daemon to forget {target}: it removes the session's roster row \
+                     within {} s, and refuses its hooks for {} minutes so a stale waiter can't put it back. \
+                     A session that's still alive registers again once that lapses. The daemon's log \
+                     says which session it removed.",
+                    daemon::controls::REFRESH.as_secs(),
+                    daemon::controls::FORGET_HOLD.as_secs() / 60
+                );
+                Ok(())
+            }
+            _ => anyhow::bail!("{USAGE}"),
+        },
         Some(cmd @ ("allow" | "disallow")) => match args.get(1) {
             Some(machine) if args.len() == 2 => {
                 let dir = daemon::credentials::state_dir()?;
