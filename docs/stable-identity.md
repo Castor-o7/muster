@@ -55,6 +55,14 @@ MUS-92). That catches a new session that starts before the old one's socket
 has closed. It still has to turn dead by the rules above. A sibling that's
 still live after 60 seconds keeps its name.
 
+A predecessor that never had a client, and looks live only because it was
+active inside the quiet time, is checked again until the quiet time has
+passed, and never after the swap window (MUS-93). That's a Claude session
+restarted before its MCP shim bound: its row has no client, so only the quiet
+time can tell it's gone. The rule isn't loosened; it's applied again later. A
+sibling that keeps signalling moves its own quiet time on, and keeps its name
+once the window ends.
+
 ## What a takeover does
 
 In one step, the daemon:
