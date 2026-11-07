@@ -30,7 +30,8 @@ check() {
 }
 listening() { ss -Hltn "sport = :$1" | grep -q .; }
 
-# setup.sh builds from source here; this cargo "builds" by copying the release builds, and this
+# setup.sh builds from source here, pinned with --rev to this checkout's commit, so it doesn't ask
+# GitHub for the latest release (MUS-111); this cargo "builds" by copying the release builds, and this
 # claude stands in for Claude Code's CLI, so nothing is fetched and no real Claude config changes.
 mkdir -p "$WORK/fake" "$WORK/home"
 cat >"$WORK/fake/cargo" <<EOF
@@ -47,7 +48,7 @@ chmod +x "$WORK/fake"/*
 # MUSTER_DAEMON_ADDRESS points the doctor at the spare port, so it never reaches the host's daemon.
 HOME="$WORK/home" PATH="$WORK/prefix/bin:$WORK/fake:/usr/bin:/bin" MUSTER_PREFIX="$WORK/prefix" \
     MUSTER_DAEMON_ADDRESS=ws://127.0.0.1:18455 \
-    sh "$REPO/scripts/setup.sh" --daemon --tls --from-source --apply >"$WORK/out" 2>&1
+    sh "$REPO/scripts/setup.sh" --daemon --tls --rev "$(git -C "$REPO" rev-parse HEAD)" --apply >"$WORK/out" 2>&1
 echo "setup.sh exited $?; its output:"
 sed 's/^/  | /' "$WORK/out"
 UNIT="$WORK/home/.config/systemd/user/muster-daemon.service"
