@@ -632,6 +632,13 @@ Merged and needing a live run: MUS-36 and MUS-37.
   `to_room`, `message`/`text` for `body`, `recipient` for `to`, `current_task`/`status` for
   `text`, `room` for `join_room`'s `name`, and `ids` or one `message_id` for `message_ids`.
   The canonical name wins when both are given. The advertised schemas are unchanged.
+- [x] **MUS-108: The Codex bridge doesn't re-register a dead thread.** Found by wise-leopard in
+  Marshal's port of MUS-76 (MAR-7, Castor-o7/marshal#5). The bridge keeps the threads it registered
+  until `thread/closed`, and re-registers any whose session left the roster (MUS-76). A thread
+  whose app-server went away never closes, so it was registered again every 5 s for the bridge's
+  life: a ghost row, like MUS-104. Done: only wakeable threads are registered again, meaning the
+  app-server is up and the reconnect's `thread/list` showed them (MUS-77's `wakeable_sessions`).
+  A daemon restart, MUS-76's case, leaves the app-server up, so those threads still come back.
 - [x] **MUS-105: The operator can forget a session.** Requested by Josh on 2026-11-06, after the
   ghost row mellow-weevil (MUS-104) stayed on the roster with no way to remove it.
   Done: `muster-daemon forget <id | 8+ char prefix | nickname>` appends to `forget-sessions` in

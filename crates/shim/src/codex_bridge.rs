@@ -1260,9 +1260,19 @@ pub async fn run(args: &[String]) -> Result<()> {
         // restart without Postgres, is registered again, so it can be woken
         // before its next hook (MUS-76). Every bridge does this for its own
         // threads, leader or not.
+        // Only threads the bridge could wake: with the app-server down, or a
+        // thread the reconnect's `thread/list` didn't show, the thread may be
+        // dead, and registering it again would make a ghost row (MUS-108).
+        let wakeable = registered.wakeable_sessions();
         let missing = {
             let registered = registered.lock().unwrap();
-            missing_registrations(&registered, &sessions.get(), &reregistered_at, now)
+            missing_registrations(
+                &registered,
+                &sessions.get(),
+                &wakeable,
+                &reregistered_at,
+                now,
+            )
         };
         for registration in missing {
             reregistered_at.insert(registration.session_id.clone(), now);
@@ -1731,11 +1741,13 @@ impl Registered {
     }
 }
 
-/// Registered threads whose session isn't on the roster, and that weren't
-/// registered again within the last `REREGISTER_COOLDOWN`.
+/// Registered threads whose session isn't on the roster, that the bridge can
+/// wake (`wakeable`: the app-server is up and listed them, MUS-108), and that
+/// weren't registered again within the last `REREGISTER_COOLDOWN`.
 fn missing_registrations(
     registered: &HashMap<String, ThreadRegistration>,
     sessions: &[Arc<Session>],
+    wakeable: &HashSet<String>,
     last_attempt: &HashMap<String, Instant>,
     now: Instant,
 ) -> Vec<ThreadRegistration> {
@@ -1743,6 +1755,7 @@ fn missing_registrations(
     registered
         .values()
         .filter(|r| !on_roster.contains(r.session_id.as_str()))
+        .filter(|r| wakeable.contains(&r.session_id))
         .filter(|r| {
             last_attempt
                 .get(&r.session_id)
@@ -2957,18 +2970,64 @@ mod tests {
         ];
         let now = Instant::now();
         let mut attempts = HashMap::new();
+        let all: HashSet<String> = ["kept", "lost"].map(String::from).into();
 
-        let missing = missing_registrations(&registered, &roster, &attempts, now);
+        let missing = missing_registrations(&registered, &roster, &all, &attempts, now);
         assert_eq!(missing, vec![registration("lost")]);
 
         attempts.insert("lost".to_string(), now);
         let soon = now + REREGISTER_COOLDOWN / 2;
-        assert!(missing_registrations(&registered, &roster, &attempts, soon).is_empty());
+        assert!(missing_registrations(&registered, &roster, &all, &attempts, soon).is_empty());
         let later = now + REREGISTER_COOLDOWN;
         assert_eq!(
-            missing_registrations(&registered, &roster, &attempts, later),
+            missing_registrations(&registered, &roster, &all, &attempts, later),
             vec![registration("lost")]
         );
+    }
+
+    /// MUS-108 (found in Marshal's port, MAR-7): a thread the bridge can't wake,
+    /// because the app-server went away or its reconnect didn't list the thread,
+    /// may be dead, so it isn't registered again as a ghost row.
+    #[test]
+    fn a_thread_the_bridge_cant_wake_isnt_registered_again() {
+        let registered: HashMap<String, ThreadRegistration> = ["live", "dead"]
+            .into_iter()
+            .map(|id| (id.to_string(), registration(id)))
+            .collect();
+        let only_live: HashSet<String> = ["live".to_string()].into();
+        let missing = missing_registrations(
+            &registered,
+            &[],
+            &only_live,
+            &HashMap::new(),
+            Instant::now(),
+        );
+        assert_eq!(missing, vec![registration("live")]);
+        assert!(
+            missing_registrations(
+                &registered,
+                &[],
+                &HashSet::new(),
+                &HashMap::new(),
+                Instant::now()
+            )
+            .is_empty(),
+            "app-server down: nothing"
+        );
+    }
+
+    #[test]
+    fn wakeable_needs_the_app_server_up_and_the_thread_listed() {
+        let threads = Registered::default();
+        threads.insert(registration("live"));
+        threads.insert(registration("dead"));
+        assert!(
+            threads.wakeable_sessions().is_empty(),
+            "the app-server is down"
+        );
+        threads.set_app_server_up(true);
+        threads.mark_listed(&["thread-live".to_string()].into());
+        assert_eq!(threads.wakeable_sessions(), ["live".to_string()].into());
     }
 
     fn session(id: &str, host: &str, hook_owned: bool) -> Arc<Session> {
