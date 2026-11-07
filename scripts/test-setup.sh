@@ -76,7 +76,16 @@ case "$(uname -s)/$(uname -m)" in
     *) TARGET="x86_64-unknown-linux-gnu" ;;
 esac
 
-# A fixture release with both binaries and a SHA256SUMS. $1 names it.
+# A throwaway release key, and a copy of setup.sh that trusts only it (MUS-110).
+ssh-keygen -q -t ed25519 -N '' -C test-release -f "$WORK/key"
+ssh-keygen -q -t ed25519 -N '' -C someone-else -f "$WORK/other"
+TRUSTED="muster-release namespaces=\"muster-release\" $(cut -d' ' -f1,2 "$WORK/key.pub")"
+SETUP="$WORK/setup.sh"
+awk -v line="$TRUSTED" '/^ALLOWED_SIGNERS=/ { print "ALLOWED_SIGNERS='"'"'" line "'"'"'"; next } { print }' \
+    "$REPO/scripts/setup.sh" >"$SETUP"
+sign() { rm -f "$FIXTURE/SHA256SUMS.sig"; ssh-keygen -q -Y sign -f "$1" -n muster-release "$FIXTURE/SHA256SUMS" 2>/dev/null; }
+
+# A fixture release with both binaries and a SHA256SUMS, signed with the release key. $1 names it.
 release() {
     FIXTURE="$WORK/release-$1"
     rm -rf "$FIXTURE"; mkdir -p "$FIXTURE"
@@ -84,13 +93,14 @@ release() {
     (cd "$FIXTURE" && sha256sum muster-* >SHA256SUMS)
     echo "https://github.com/Castor-o7/muster/releases/tag/v9.9.9" >"$FIXTURE/LATEST"
     export FIXTURE
+    sign "$WORK/key"
 }
 
 # Runs setup.sh with a fresh HOME and prefix. Leaves $status, $WORK/out and $CALLS behind.
 run() {
     export HOME="$WORK/home"; rm -rf "$HOME" "$WORK/prefix"; mkdir -p "$HOME"
     : >"$CALLS"
-    PATH="$WORK/prefix/bin:$FAKE:$BASE_PATH" MUSTER_PREFIX="$WORK/prefix" sh "$REPO/scripts/setup.sh" "$@" >"$WORK/out" 2>&1
+    PATH="$WORK/prefix/bin:$FAKE:$BASE_PATH" MUSTER_PREFIX="$WORK/prefix" sh "$SETUP" "$@" >"$WORK/out" 2>&1
     status=$?
 }
 called() { grep -q -- "$1" "$CALLS"; }
@@ -104,6 +114,7 @@ check "and says what it would do, from which release" 'said "Dry run" && said "w
 check "and that a build would pin that release's tag" 'said "--git https://github.com/Castor-o7/muster --tag v9.9.9 muster-shim muster-daemon"'
 
 run --daemon --tls --apply
+check "--apply checks the release key's signature" 'said "checked SHA256SUMS against the release key.s signature"'
 check "--apply installs both from the release, checked" '[ $status -eq 0 ] && [ -x "$WORK/prefix/bin/muster-shim" ] && [ -x "$WORK/prefix/bin/muster-daemon" ] && said "checked muster-daemon-$TARGET against SHA256SUMS"'
 check "from the tag it looked up, not whatever latest is by then" 'called "curl https://github.com/Castor-o7/muster/releases/download/v9.9.9/SHA256SUMS" && ! called "latest/download"'
 check "then writes the unit through muster-daemon service --tls --apply" 'called "^muster-daemon service --tls --apply$"'
@@ -127,6 +138,22 @@ check "and warns that the default branch isn't pinned" 'said "builds the default
 check "and still hands over to service and setup" 'called "^muster-daemon service --apply$" && called "^muster-shim setup --apply$"'
 run --daemon
 check "which the dry run says too" 'said "builds the default branch, unpinned: no release was found"'
+
+# MUS-110: an unsigned release is built from its tag instead; a bad signature stops everything.
+release unsigned
+rm "$FIXTURE/SHA256SUMS.sig"
+run --daemon --apply
+check "an unsigned release's binaries aren't installed: its tag is built instead" '[ $status -eq 0 ] && said "has no SHA256SUMS.sig" && called "^cargo install --locked --root $WORK/prefix --git https://github.com/Castor-o7/muster --tag v9.9.9 muster-shim muster-daemon$" && ! called "curl .*muster-shim-$TARGET"'
+release other-key
+sign "$WORK/other"
+run --daemon --apply
+check "a release signed by another key stops everything" '[ $status -ne 0 ] && said "isn.t the release key.s signature" && [ ! -e "$WORK/prefix/bin/muster-daemon" ] && ! called cargo && ! called "muster-shim setup"'
+release good
+PATCHED=$SETUP
+SETUP="$REPO/scripts/setup.sh"
+run --daemon --apply
+check "the real setup.sh, with no release key yet, refuses even a signed release" '[ $status -ne 0 ] && said "isn.t the release key.s signature" && ! called cargo'
+SETUP=$PATCHED
 
 release good
 run --from-source --apply
@@ -152,7 +179,7 @@ echo "the-code" >"$WORK/code"
 run --pair-file "$WORK/code" --apply
 check "a pairing file is passed on as a file" 'called "^muster-shim setup --pair-file $WORK/code --apply$"'
 export HOME="$WORK/home"
-echo "piped-code" | { rm -rf "$WORK/prefix"; : >"$CALLS"; PATH="$WORK/prefix/bin:$FAKE:$BASE_PATH" MUSTER_PREFIX="$WORK/prefix" sh "$REPO/scripts/setup.sh" --pair-file - --apply >"$WORK/out" 2>&1; }
+echo "piped-code" | { rm -rf "$WORK/prefix"; : >"$CALLS"; PATH="$WORK/prefix/bin:$FAKE:$BASE_PATH" MUSTER_PREFIX="$WORK/prefix" sh "$SETUP" --pair-file - --apply >"$WORK/out" 2>&1; }
 check "and --pair-file - passes stdin through to setup" 'called "^muster-shim setup --pair-file - --apply$" && called "^stdin: piped-code$"'
 run ABCD-1234-code
 check "a code on the command line is refused" '[ $status -ne 0 ] && said "never on the command line" && ! called curl'

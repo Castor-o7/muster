@@ -18,7 +18,7 @@
 # prints the commands for that, and running them is the operator's call.
 #
 # Binaries come from the latest release, checked against its SHA256SUMS (as install-codex.sh
-# does, MUS-96), or with `cargo install --locked` when there's no release yet or --from-source is
+# does, MUS-96) once that is shown to be signed by the release key (MUS-110), or with `cargo install --locked` when there's no release yet or --from-source is
 # given. Either way it's pinned to one release (MUS-111): the latest release's tag, looked up
 # once, so the build is of the same release whose SHA256SUMS the download would check, or the
 # release --tag names. --rev SHA builds that full commit from source instead. Only with no
@@ -27,6 +27,9 @@
 set -eu
 
 REPO="https://github.com/Castor-o7/muster"
+# The key that signs releases (MUS-110), as release/allowed_signers has it; test-install-codex.sh
+# checks the copies agree. Until the operator adds one, no release verifies, so none installs.
+ALLOWED_SIGNERS=''
 PREFIX="${MUSTER_PREFIX:-$HOME/.local}"
 apply=0
 daemon=0
@@ -129,14 +132,39 @@ latest_tag() {
     return 0
 }
 
-# Downloads the release's binaries into $1, each checked against its SHA256SUMS. Returns 2 when
-# the release has no SHA256SUMS (there's no release yet), so the caller can build from source;
-# anything else that goes wrong is fatal, since a mismatch must never fall through to an install.
+# Whether $1/SHA256SUMS.sig is the release key's signature of $1/SHA256SUMS (MUS-110). 3 when
+# ssh-keygen isn't here to check it.
+signed_by_release_key() {
+    command -v ssh-keygen >/dev/null 2>&1 || return 3
+    printf '%s\n' "$ALLOWED_SIGNERS" >"$1/allowed_signers"
+    ssh-keygen -Y verify -f "$1/allowed_signers" -I muster-release -n muster-release \
+        -s "$1/SHA256SUMS.sig" <"$1/SHA256SUMS" >/dev/null 2>&1
+}
+
+# Downloads the release's binaries into $1, each checked against its SHA256SUMS, once that's shown
+# to be signed by the release key. Returns 2 when the release has no SHA256SUMS (there's no release
+# yet) or no SHA256SUMS.sig (it isn't signed), so the caller builds the pinned tag from source
+# instead; anything else that goes wrong is fatal, since a bad signature or a mismatch must never
+# fall through to an install.
 fetch_release() {
     dir=$1
     base="$REPO/releases/download/$tag"
     [ -n "$tag" ] || base="$REPO/releases/latest/download"
     curl -fsSL --proto '=https' --tlsv1.2 -o "$dir/SHA256SUMS" "$base/SHA256SUMS" 2>/dev/null || return 2
+    if ! curl -fsSL --proto '=https' --tlsv1.2 -o "$dir/SHA256SUMS.sig" "$base/SHA256SUMS.sig" 2>/dev/null; then
+        echo "warning: the release has no SHA256SUMS.sig, so its binaries can't be shown to be the operator's; building from source instead" >&2
+        return 2
+    fi
+    sig=0
+    signed_by_release_key "$dir" || sig=$?
+    if [ "$sig" = 3 ]; then
+        echo "error: ssh-keygen (OpenSSH 8.1 or later) isn't installed, so the release's signature can't be checked; not installing. --from-source builds it instead." >&2
+        exit 1
+    elif [ "$sig" != 0 ]; then
+        echo "error: SHA256SUMS.sig isn't the release key's signature of SHA256SUMS; not installing." >&2
+        exit 1
+    fi
+    echo "checked SHA256SUMS against the release key's signature"
     for b in $bins; do
         asset="$b-$target"
         expected=$(awk -v f="$asset" '{ name = $2; sub(/^\*/, "", name) } name == f { print $1; exit }' "$dir/SHA256SUMS")
@@ -180,10 +208,10 @@ if [ "$apply" = 0 ]; then
         would "$build"
         echo "  (building $ref_is)"
     elif [ -n "$tag" ]; then
-        would "download $bins for $target from $release_is, check them against its SHA256SUMS, and copy them into $BIN"
-        would "  (or, if it has no SHA256SUMS: $build)"
+        would "download $bins for $target from $release_is, check its SHA256SUMS against the release key's signature and them against it, and copy them into $BIN"
+        would "  (or, if it has no SHA256SUMS or isn't signed: $build)"
     else
-        would "download $bins for $target from the latest release, check them against its SHA256SUMS, and copy them into $BIN"
+        would "download $bins for $target from the latest release, check its SHA256SUMS against the release key's signature and them against it, and copy them into $BIN"
         would "  (or, if there's no release yet: $build, which builds $ref_is)"
     fi
 else
@@ -204,7 +232,7 @@ else
             done
             installed=1
         elif [ "$status" = 2 ]; then
-            echo "no release with SHA256SUMS yet; building from source"
+            echo "no signed release with SHA256SUMS; building from source"
         else
             exit "$status"
         fi
