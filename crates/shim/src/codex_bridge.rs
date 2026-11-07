@@ -3045,6 +3045,7 @@ mod tests {
             last_activity_at: None,
             last_tool: None,
             last_tool_at: None,
+            current_task_at: None,
             operator: Some("operator".into()),
             host: Some(HostInfo {
                 name: host.into(),

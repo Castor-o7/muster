@@ -168,6 +168,24 @@ Merged and needing a live run: MUS-36 and MUS-37.
   `restart-keeps-identity` failed at the full 20 s on main's push of 65d922b (run 42107003441)
   and on #125 at 0adfa2c (run 42111510686), so it's on `FLAKY` for this story as well (#175). The
   #125 run printed the daemon's `[identity]` lines for the failed cell, so it can supply that log.
+  **Cause found** (2026-11-07, plush-tortoise, from #194's runs 42324052913 and 42330531873):
+  `claude` × `unread-mail-follows-a-restart` failed the suite twice, and `claude` ×
+  `restart-keeps-identity` once on `FLAKY`. Each failed cell's daemon log says
+  `predecessor … is Live("it never had a client, and was active 0s ago (quiet time 2s)")`. The
+  test's old Claude session was restarted before its MCP shim bound, so its row had no client,
+  and `verdict` called it live inside the quiet time. The sweep schedules a late check only for a
+  live client or waiter (MUS-92), so this verdict was never checked again, though the same rule
+  calls the row dead 2 s later. Fixed by checking such a predecessor again until its quiet time
+  has passed (`succession::quiet_until`), capped at the swap window, with a unit test and
+  `crates/daemon/tests/identity_quiet.rs`, which fails without the fix. The `claude-tls` cells'
+  CI failures predate any daemon log, so it isn't known whether they share this cause. The cells
+  stay on `FLAKY` until they pass in CI on three PRs in a row, as above.
+- [ ] **MUS-115: MUS-93's cells come off `FLAKY` after three green PRs in a row.** Split from
+  MUS-93 at the watchman's read of #200, which verified the cause and the fix. Done when: `claude`
+  and `claude-tls` × `restart-keeps-identity`, and `claude-tls` × `unread-mail-follows-a-restart`,
+  have passed in CI on three PRs in a row after #200, and come off `FLAKY`; and whether the
+  `claude-tls` failures share MUS-93's cause is checked from a failing run's daemon log, if one
+  comes, or said to be unknown.
 - [x] **MUS-47: Hand unread mail to a successor.** From MUS-31. Retained mail reaches
   nobody without this. Depends on MUS-3. Done when: a session taking over an identity
   receives its predecessor's unread mail, shown by a test.
@@ -562,6 +580,28 @@ Merged and needing a live run: MUS-36 and MUS-37.
   what it did, a test shows it rolls back a daemon that fails its health check, and a test shows a
   held wait ends cleanly on SIGTERM. The operator's direct OK is still needed to run it. Related:
   MUS-15, `scripts/restart-preview.sh`.
+- [x] **MUS-101: The roster shows how old each status is.** From the DiscoSim rally (2026-11-06,
+  issues log §1.5): the watchman's `current_task` still described day 1 at stand-down, and a
+  stale status read the same as a fresh one. Done: `Session` gains `current_task_at` (its own
+  setter, `SetSessionCurrentTaskAt`, allowed through the gate for the caller's own session),
+  set by `set_status`, by the branch-following default (MUS-26) and at registration when the
+  default status is set. `muster://roster` adds `current_task_at` and `current_task_age_s`, and
+  `muster-shim roster` adds `current_task_at` under `declared`. A shim that predates it sends no
+  time, so the age is absent rather than wrong; an older daemon drops the setter harmlessly.
+  Not done: nudging a session whose status is old while it keeps calling tools; the daemon
+  stamping the time itself rather than trusting the shim's clock; the TypeScript plugins setting
+  it (their sessions show no age); and setting the status and its time in one atomic command
+  rather than two. (MUS-113 does the last three for any client the daemon serves.)
+- [x] **MUS-113: A status set without a time doesn't keep the old one.** Found by the watchman
+  reading MUS-101: a TypeScript plugin sets `current_task` with `SetSessionCurrentTask` alone,
+  so the `current_task_at` an earlier status left stayed beside the new one, and a fresh status
+  read as hours old. Done: `SetSessionCurrentTask` is written by hand in place of the
+  `#[myko_setter]`, under the same name and wire shape (`{id, currentTask}`), and stamps
+  `current_task_at` with the daemon's clock as it sets the status, or clears it with the status.
+  So every client, the plugins included, gets a true age from one command. The shim still sends
+  `SetSessionCurrentTaskAt` after it, which an older daemon needs; on a new daemon it only
+  replaces the stamp with the shim's clock's. A test in `crates/daemon/tests/status_time.rs`
+  sends the plugins' shape over a stale time and checks it's replaced, and that a clear leaves none.
 - [x] **MUS-104: A waiter stands down when its session's id changes.** Reported by cobalt-bream
   on 2026-11-06: a ghost row, mellow-weevil (64a05eda, pid 0), stayed on the roster, and the
   daemon logged "64a05eda may take over from 02f2a191" every 3 s. One Claude process (3766675)
@@ -571,6 +611,18 @@ Merged and needing a live run: MUS-36 and MUS-37.
   (`~/.claude/sessions/<pid>.json`, the same source the shim follows, `canonical_session_id`),
   and a waiter whose id is no longer the session's exits, so the next Stop hook waits under the
   new id and the old row ages out. With no manifest nothing changes.
+- [x] **MUS-107: Trust a Claude session manifest only if it's live.** Filed by robust-warbler
+  behind MUS-104's ghost rows: the shim and the waiter take `sessionId` from
+  `~/.claude/sessions/<pid>.json`, and Claude leaves that file behind when it dies without cleaning
+  up, so after the pid is reused an unrelated process's shim or waiter would take a dead session's
+  id. Done: the manifest is trusted only if it's the live process's (`manifest_is_live` in
+  `crates/shim/src/session_discovery.rs`): it names that pid, a process holds the pid, and on Linux
+  its `procStart` equals the process's start ticks (field 22 of `/proc/<pid>/stat`); elsewhere, or
+  without `procStart`, the process didn't start after the manifest's `startedAt` (2 s slack).
+  Discovery's tier 0 and `canonical_session_id`, which MUS-104's waiter and the shim's drift check
+  read, both apply it. What can't be read is trusted, so an older Claude's manifest, or a
+  platform that can't say, behaves as before; a stale manifest is skipped with a warning and
+  discovery falls through to the other tiers.
 - [x] **MUS-100: One error names every missing tool argument.** From the DiscoSim rally
   (2026-11-06, issues log §1.4). Calls like `broadcast(room, message)` failed one field at a
   time ("missing `to_room`", then "missing `body`"), costing two or three round trips. Done:
@@ -603,6 +655,13 @@ Merged and needing a live run: MUS-36 and MUS-37.
   message, marks it shown (`claimShown`, MUS-90) and returns its text, which was thrown away; the
   second message's own push then finds it already shown and skips it. Whether it fails depends on
   whether the second push lands before that drain. Done: what the drain returns is prompted too.
+- [x] **MUS-112: The TypeScript plugins reach a TLS daemon on their own host.** From the README audit
+  (2026-11-06): with TLS on, a plain loopback connection must present the local token (MUS-7),
+  and no plugin read it, so Pi, opencode and Prime Agent worked only with TLS off. Done: each
+  plugin's `local-token.ts` finds `<config dir>/muster/local-token` the way the Rust side does
+  (`XDG_CONFIG_HOME`, `APPDATA` on Windows, else `~/.config`) and adds `?token=` to a loopback
+  address that has none. It never sends the token to another host. Pairing (reaching a daemon
+  on another machine) is still Rust-only, under MUS-30.
 - [x] **MUS-99: Say what a missing live channel means.** From the DiscoSim rally (2026-11-06,
   issues log §1.1). Every send returned `live_push: unavailable` because no session ran with the
   channels flag, which is expected under hook delivery, but nothing told senders why replies came
@@ -611,6 +670,12 @@ Merged and needing a live run: MUS-36 and MUS-37.
   idle recipient is woken only when `wake` is `expected`. It is said once per shim, since #62
   dropped the per-send note to keep tool output small. The statusline's `no live channel` warning
   is unchanged: it still shows only when no wait hook is wired, the one case where it's a fault.
+- [x] **MUS-102: A lone long DM arrives whole in a hook.** From the DiscoSim rally (2026-11-06,
+  issues log §1.3): team summaries arrived cut at 2,000 characters, each needing a resource read.
+  Done: a hook shows up to 6,000 characters of one message (`HOOK_BODY_MAX_CHARS`), still within
+  the 8,000-character batch budget and Claude's 10,000-character hook limit; the live push keeps
+  its 2,000. Not done: a `read_message(id)` tool, and §10.1 (mail marked read that the model
+  never saw), which needs its own look at when a hook's ack fires.
 - [ ] **MUS-111: `setup.sh --from-source` builds a pinned release, not the default branch.** Filed by
   robust-warbler: `--from-source` ran `cargo install --locked --git` on the unpinned default branch.
   Done when: a build takes the latest release's tag by default, looked up once so it's the same
@@ -632,6 +697,14 @@ Merged and needing a live run: MUS-36 and MUS-37.
   another key; release.yml says so; threat-model.md has the note; tests cover each. Built with a
   placeholder key that fails closed. Left: Josh adds his public key (to release/allowed_signers
   and both scripts) before signing the first release (MUS-14).
+- [x] **MUS-114: A resource read right after connecting waits for registration, as a write does.**
+  From CI on 2026-11-06: `scripts/test-restart-file-e2e.sh` failed on #185 and #194, whose diffs couldn't
+  touch it, and in 2 of 15 local runs. The read of `muster://messages?inbox=true&unread=true` was refused
+  with `[unregistered] caller (client …) has no session on the roster`: a fresh shim read before its
+  Session SET landed, and its row from the run before (same session id, a dead connection) let the
+  registration wait pass. Tool calls already wait and retry once (MUS-72, MUS-79); the messages read did
+  neither. Done: both go through one `as_registered`, which holds until the session is on the roster and,
+  on that refusal, sends the session again and retries once.
 - [ ] **MUS-30: Decide the future of the TypeScript plugins.** The operator decides
   whether to keep, freeze or remove them. Done when: the decision is recorded here,
   and if they're removed, the repository's `package.json` workspace goes with them.

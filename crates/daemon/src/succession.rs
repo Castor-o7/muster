@@ -26,7 +26,8 @@
 //!   counts as dead until it's seen again.
 //!
 //! A new session that registers while its predecessor's client dropped only
-//! moments ago, inside the grace, gets a fresh nickname first. The sweeper
+//! moments ago, inside the grace, or while a predecessor that never had a
+//! client is still inside its quiet time (MUS-93), gets a fresh nickname first. The sweeper
 //! checks again each tick for the swap window (10 min), and once the
 //! predecessor counts as dead the new session takes its nickname. Its fresh
 //! nickname stays an alias for it for the alias time (10 min), and its next
@@ -144,6 +145,46 @@ pub struct Facts<'a> {
     pub known: bool,
 }
 
+/// The latest sign of life a row shows: its last activity, tool or connection.
+fn last_signal(row: &Session) -> i64 {
+    [
+        row.last_activity_at,
+        row.last_tool_at,
+        Some(row.connected_at),
+    ]
+    .into_iter()
+    .flatten()
+    .max()
+    .unwrap_or(0)
+}
+
+/// MUS-93: when a predecessor that [`verdict`] calls live only because it
+/// never had a client and was active inside the quiet time would first count
+/// as dead by the same rule, if nothing more is heard from it: its last signal
+/// plus the quiet time. `None` when it's live for any other reason, or not live.
+///
+/// A Claude session restarted before its MCP shim bound leaves such a row. The
+/// rule isn't loosened: the sweeper only applies it again later.
+pub fn quiet_until(f: &Facts, now: i64, cfg: &Config) -> Option<i64> {
+    let dead_at = last_signal(judged_by_quiet_time(f)?) + cfg.quiet_ms;
+    (dead_at > now).then_some(dead_at)
+}
+
+/// A Codex row on the roster, while it can't be told from an idle live thread
+/// (MUS-77).
+fn codex_held(row: &Session) -> bool {
+    row.harness.as_deref() == Some("codex") && !CODEX_PRESENT_ROWS_CAN_BE_DEAD
+}
+
+/// The row, when [`verdict`] judges it by the quiet time alone: it's on the
+/// roster, isn't waiting, isn't a held Codex row, and never had a client. Both
+/// `verdict` and [`quiet_until`] decide that here, so they can't drift apart.
+fn judged_by_quiet_time<'a>(f: &Facts<'a>) -> Option<&'a Session> {
+    let row = f.row?;
+    let never_had_a_client = row.client_id.is_none() && f.client_gone_at.is_none();
+    (!f.waiting && !codex_held(row) && never_had_a_client).then_some(row)
+}
+
 /// Whether a predecessor is dead. Pure, so it can be tested on its own.
 pub fn verdict(f: &Facts, now: i64, cfg: &Config) -> Verdict {
     let Some(row) = f.row else {
@@ -165,20 +206,27 @@ pub fn verdict(f: &Facts, now: i64, cfg: &Config) -> Verdict {
     if row.client_id.is_some() && f.client_live {
         return Verdict::Live("its client is connected".into());
     }
-    if row.harness.as_deref() == Some("codex") && !CODEX_PRESENT_ROWS_CAN_BE_DEAD {
+    if codex_held(row) {
         return Verdict::Live(
             "a Codex row on the roster can't be told from an idle live thread until MUS-77".into(),
         );
     }
-    let last_signal = [
-        row.last_activity_at,
-        row.last_tool_at,
-        Some(row.connected_at),
-    ]
-    .into_iter()
-    .flatten()
-    .max()
-    .unwrap_or(0);
+    let last_signal = last_signal(row);
+    if judged_by_quiet_time(f).is_some() {
+        let quiet_for = now - last_signal;
+        return if quiet_for < cfg.quiet_ms {
+            Verdict::Live(format!(
+                "it never had a client, and was active {}s ago (quiet time {}s)",
+                quiet_for / 1000,
+                cfg.quiet_ms / 1000
+            ))
+        } else {
+            Verdict::Dead(format!(
+                "it never had a client, has no waiter, and has been quiet for {}s",
+                quiet_for / 1000
+            ))
+        };
+    }
     match f.client_gone_at {
         Some(gone_at) => {
             // The hooked_since guard: a session still hooking after its client
@@ -204,25 +252,11 @@ pub fn verdict(f: &Facts, now: i64, cfg: &Config) -> Verdict {
         }
         // Its client is gone, but the sweeper hasn't timed the drop yet (it
         // ticks every few seconds). Pending, so a quick restart is checked
-        // again once the drop is timed.
-        None if row.client_id.is_some() => Verdict::Pending(
+        // again once the drop is timed. (A row that never had a client was
+        // judged by the quiet time above.)
+        None => Verdict::Pending(
             "its client isn't connected, and the daemon hasn't timed the drop yet".into(),
         ),
-        None => {
-            let quiet_for = now - last_signal;
-            if quiet_for < cfg.quiet_ms {
-                Verdict::Live(format!(
-                    "it never had a client, and was active {}s ago (quiet time {}s)",
-                    quiet_for / 1000,
-                    cfg.quiet_ms / 1000
-                ))
-            } else {
-                Verdict::Dead(format!(
-                    "it never had a client, has no waiter, and has been quiet for {}s",
-                    quiet_for / 1000
-                ))
-            }
-        }
     }
 }
 
@@ -378,6 +412,19 @@ fn find_predecessor(
                         cfg.settle_ms / 1000
                     );
                     check_again(before + cfg.settle_ms);
+                }
+                // MUS-93: live only because it never had a client and was
+                // active inside the quiet time. Check again until the quiet
+                // time has passed, a tick after, never past the swap window:
+                // a sibling that keeps signalling moves its own time on, and
+                // keeps its name once the window ends.
+                if let Some(dead_at) = quiet_until(&facts, now, cfg) {
+                    let tick = crate::cleanup::TICK_INTERVAL.as_millis() as i64;
+                    log::info!(
+                        "[identity] {me} may take over from {id} if it stays quiet until {}s from now: {why}",
+                        (dead_at - now) / 1000
+                    );
+                    check_again((dead_at + tick).min(before + cfg.window_ms));
                 }
                 if role {
                     log::info!("[identity] {me} won't take role {key} over: {id} holds it ({why})");
@@ -774,6 +821,7 @@ mod tests {
             last_activity_at: Some(last),
             last_tool: None,
             last_tool_at: None,
+            current_task_at: None,
             operator: Some("op@example.com".into()),
             host: Some(HostInfo {
                 name: "a1".into(),
@@ -878,6 +926,63 @@ mod tests {
             Verdict::Live(_)
         ));
         assert!(dead(verdict(&f, 1_000 + 600_000, &cfg())));
+    }
+
+    /// MUS-93: a row live only because it never had a client and was active
+    /// inside the quiet time says when the same rule would call it dead, and
+    /// that time is the verdict's own boundary. Live for any other reason, it
+    /// says nothing, so nothing is checked again for it.
+    #[test]
+    fn a_quiet_row_says_when_it_would_count_as_dead() {
+        let r = row("claude", None, 1_000);
+        let f = Facts {
+            row: Some(&r),
+            ..Default::default()
+        };
+        let at = quiet_until(&f, 1_000, &cfg()).expect("live only for the quiet time");
+        assert_eq!(at, 1_000 + 600_000);
+        assert!(matches!(verdict(&f, at - 1, &cfg()), Verdict::Live(_)));
+        assert!(dead(verdict(&f, at, &cfg())));
+        // Past it, it isn't waiting on the quiet time any more.
+        assert_eq!(quiet_until(&f, at, &cfg()), None);
+        // A sibling that signals again moves its own time on.
+        let later = row("claude", None, 300_000);
+        let f_later = Facts {
+            row: Some(&later),
+            ..Default::default()
+        };
+        assert_eq!(quiet_until(&f_later, 300_000, &cfg()), Some(900_000));
+        // Live for another reason: a waiter, a client bound or dropped, a
+        // Codex row before MUS-77, or no row at all.
+        let waiting = Facts {
+            row: Some(&r),
+            waiting: true,
+            ..Default::default()
+        };
+        assert_eq!(quiet_until(&waiting, 1_000, &cfg()), None);
+        let bound = row("claude", Some("c1"), 1_000);
+        let connected = Facts {
+            row: Some(&bound),
+            client_live: true,
+            ..Default::default()
+        };
+        assert_eq!(quiet_until(&connected, 1_000, &cfg()), None);
+        let dropped = Facts {
+            row: Some(&r),
+            client_gone_at: Some(1_000),
+            ..Default::default()
+        };
+        assert_eq!(quiet_until(&dropped, 1_000, &cfg()), None);
+        let codex = row("codex", None, 1_000);
+        let codex_f = Facts {
+            row: Some(&codex),
+            ..Default::default()
+        };
+        assert_eq!(
+            quiet_until(&codex_f, 1_000, &cfg()).is_some(),
+            CODEX_PRESENT_ROWS_CAN_BE_DEAD
+        );
+        assert_eq!(quiet_until(&Facts::default(), 1_000, &cfg()), None);
     }
 
     /// Flip with `CODEX_PRESENT_ROWS_CAN_BE_DEAD` once MUS-77 is on main.
