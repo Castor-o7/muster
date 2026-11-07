@@ -562,6 +562,18 @@ Merged and needing a live run: MUS-36 and MUS-37.
   what it did, a test shows it rolls back a daemon that fails its health check, and a test shows a
   held wait ends cleanly on SIGTERM. The operator's direct OK is still needed to run it. Related:
   MUS-15, `scripts/restart-preview.sh`.
+- [x] **MUS-101: The roster shows how old each status is.** From the DiscoSim rally (2026-11-06,
+  issues log §1.5): the watchman's `current_task` still described day 1 at stand-down, and a
+  stale status read the same as a fresh one. Done: `Session` gains `current_task_at` (its own
+  setter, `SetSessionCurrentTaskAt`, allowed through the gate for the caller's own session),
+  set by `set_status`, by the branch-following default (MUS-26) and at registration when the
+  default status is set. `muster://roster` adds `current_task_at` and `current_task_age_s`, and
+  `muster-shim roster` adds `current_task_at` under `declared`. A shim that predates it sends no
+  time, so the age is absent rather than wrong; an older daemon drops the setter harmlessly.
+  Not done: nudging a session whose status is old while it keeps calling tools; the daemon
+  stamping the time itself rather than trusting the shim's clock; the TypeScript plugins setting
+  it (their sessions show no age); and setting the status and its time in one atomic command
+  rather than two.
 - [x] **MUS-104: A waiter stands down when its session's id changes.** Reported by cobalt-bream
   on 2026-11-06: a ghost row, mellow-weevil (64a05eda, pid 0), stayed on the roster, and the
   daemon logged "64a05eda may take over from 02f2a191" every 3 s. One Claude process (3766675)
@@ -580,6 +592,15 @@ Merged and needing a live run: MUS-36 and MUS-37.
   `to_room`, `message`/`text` for `body`, `recipient` for `to`, `current_task`/`status` for
   `text`, `room` for `join_room`'s `name`, and `ids` or one `message_id` for `message_ids`.
   The canonical name wins when both are given. The advertised schemas are unchanged.
+- [x] **MUS-105: The operator can forget a session.** Requested by Josh on 2026-11-06, after the
+  ghost row mellow-weevil (MUS-104) stayed on the roster with no way to remove it.
+  Done: `muster-daemon forget <id | 8+ char prefix | nickname>` appends to `forget-sessions` in
+  the state directory, like `pause` and `allow`. The running daemon resolves it within 2 s,
+  deletes the session's row (the sweeper then drops its memberships and wake records), logs it,
+  and refuses that id's hooks for 10 minutes (`FORGET_HOLD`) so a stale waiter can't re-register
+  it. A target that names no session, or several, removes nothing. A nickname or prefix is
+  resolved once, at the first refresh, and the line rewritten to `id:<full id>`, so the hold
+  stays on that id and a new session given the freed nickname is never touched.
 - [x] **MUS-106: OpenCode shows the second message of a burst.** Main's run 42317108239 (at
   22e31eb) failed `opencode × burst-both-delivered`: "never shown: burst-b (the wake showed
   burst-a, the next delivery point "")", though #182's own run passed it. Cause: after the first
@@ -587,6 +608,13 @@ Merged and needing a live run: MUS-36 and MUS-37.
   message, marks it shown (`claimShown`, MUS-90) and returns its text, which was thrown away; the
   second message's own push then finds it already shown and skips it. Whether it fails depends on
   whether the second push lands before that drain. Done: what the drain returns is prompted too.
+- [x] **MUS-112: The TypeScript plugins reach a TLS daemon on their own host.** From the README audit
+  (2026-11-06): with TLS on, a plain loopback connection must present the local token (MUS-7),
+  and no plugin read it, so Pi, opencode and Prime Agent worked only with TLS off. Done: each
+  plugin's `local-token.ts` finds `<config dir>/muster/local-token` the way the Rust side does
+  (`XDG_CONFIG_HOME`, `APPDATA` on Windows, else `~/.config`) and adds `?token=` to a loopback
+  address that has none. It never sends the token to another host. Pairing (reaching a daemon
+  on another machine) is still Rust-only, under MUS-30.
 - [x] **MUS-99: Say what a missing live channel means.** From the DiscoSim rally (2026-11-06,
   issues log §1.1). Every send returned `live_push: unavailable` because no session ran with the
   channels flag, which is expected under hook delivery, but nothing told senders why replies came
@@ -622,6 +650,14 @@ Merged and needing a live run: MUS-36 and MUS-37.
   another key; release.yml says so; threat-model.md has the note; tests cover each. Built with a
   placeholder key that fails closed. Left: Josh adds his public key (to release/allowed_signers
   and both scripts) before signing the first release (MUS-14).
+- [x] **MUS-114: A resource read right after connecting waits for registration, as a write does.**
+  From CI on 2026-11-06: `scripts/test-restart-file-e2e.sh` failed on #185 and #194, whose diffs couldn't
+  touch it, and in 2 of 15 local runs. The read of `muster://messages?inbox=true&unread=true` was refused
+  with `[unregistered] caller (client …) has no session on the roster`: a fresh shim read before its
+  Session SET landed, and its row from the run before (same session id, a dead connection) let the
+  registration wait pass. Tool calls already wait and retry once (MUS-72, MUS-79); the messages read did
+  neither. Done: both go through one `as_registered`, which holds until the session is on the roster and,
+  on that refusal, sends the session again and retries once.
 - [ ] **MUS-30: Decide the future of the TypeScript plugins.** The operator decides
   whether to keep, freeze or remove them. Done when: the decision is recorded here,
   and if they're removed, the repository's `package.json` workspace goes with them.

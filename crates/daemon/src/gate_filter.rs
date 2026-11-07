@@ -41,6 +41,7 @@ const COMMANDS_AS_CALLER: &[&str] = &[
 const COMMANDS_ON_SESSION: &[&str] = &[
     "SetSessionActivity",
     "SetSessionCurrentTask",
+    "SetSessionCurrentTaskAt",
     "SetSessionGitBranch",
     "SetSessionLastActivityAt",
     "SetSessionLastTool",
