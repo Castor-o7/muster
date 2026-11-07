@@ -1,7 +1,8 @@
 #!/bin/sh
 # muster: set up this machine in one command (MUS-98, the glue for MUS-15).
 #
-#   scripts/setup.sh [--daemon [--tls]] [--pair-file PATH|-] [--from-source] [--prefix DIR] [--apply]
+#   scripts/setup.sh [--daemon [--tls]] [--pair-file PATH|-] [--from-source] [--tag TAG | --rev SHA]
+#                    [--prefix DIR] [--apply]
 #
 # Installs muster-shim (and, with --daemon, muster-daemon) into one place, PREFIX/bin, then hands
 # over to the commands that already know how to wire a machine:
@@ -18,7 +19,10 @@
 #
 # Binaries come from the latest release, checked against its SHA256SUMS (as install-codex.sh
 # does, MUS-96), or with `cargo install --locked` when there's no release yet or --from-source is
-# given. A pairing code is only ever read from a file or stdin (--pair-file PATH, or - for stdin),
+# given. Either way it's pinned to one release (MUS-111): the latest release's tag, looked up
+# once, so the build is of the same release whose SHA256SUMS the download would check, or the
+# release --tag names. --rev SHA builds that full commit from source instead. Only with no
+# release at all does a build take the default branch, and it says so. A pairing code is only ever read from a file or stdin (--pair-file PATH, or - for stdin),
 # never the command line, where shell history and `ps` would keep it.
 set -eu
 
@@ -29,9 +33,11 @@ daemon=0
 tls=0
 from_source=0
 pair_file=""
+tag=""
+rev=""
 
 usage() {
-    echo "usage: setup.sh [--daemon [--tls]] [--pair-file PATH|-] [--from-source] [--prefix DIR] [--apply]"
+    echo "usage: setup.sh [--daemon [--tls]] [--pair-file PATH|-] [--from-source] [--tag TAG | --rev SHA] [--prefix DIR] [--apply]"
 }
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -39,6 +45,12 @@ while [ $# -gt 0 ]; do
         --daemon) daemon=1; shift ;;
         --tls) tls=1; shift ;;
         --from-source) from_source=1; shift ;;
+        --tag)
+            [ $# -ge 2 ] || { usage >&2; exit 1; }
+            tag=$2; shift 2 ;;
+        --rev)
+            [ $# -ge 2 ] || { usage >&2; exit 1; }
+            rev=$2; shift 2 ;;
         --prefix)
             [ $# -ge 2 ] || { usage >&2; exit 1; }
             PREFIX=$2; shift 2 ;;
@@ -55,6 +67,24 @@ done
 if [ "$tls" = 1 ] && [ "$daemon" = 0 ]; then
     echo "error: --tls is for the daemon's unit; add --daemon" >&2
     exit 1
+fi
+# A tag is a plain name and a rev a full commit, so neither can be read as anything else.
+valid_tag() { printf '%s' "$1" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$'; }
+if [ -n "$tag" ] && [ -n "$rev" ]; then
+    echo "error: give --tag or --rev, not both" >&2
+    exit 1
+fi
+if [ -n "$tag" ] && ! valid_tag "$tag"; then
+    echo "error: --tag '$tag' isn't a release tag such as v0.3.0" >&2
+    exit 1
+fi
+if [ -n "$rev" ]; then
+    printf '%s' "$rev" | grep -Eq '^([0-9a-fA-F]{40}|[0-9a-fA-F]{64})$' || {
+        echo "error: --rev needs a full commit hash (40 hex digits), so the build is pinned" >&2
+        exit 1
+    }
+    # A release's binaries are built from its tag, so a commit can only be built.
+    from_source=1
 fi
 if [ -n "$pair_file" ] && [ "$pair_file" != - ] && [ ! -r "$pair_file" ]; then
     echo "error: can't read the pairing file $pair_file" >&2
@@ -73,7 +103,7 @@ case "$(uname -s)/$(uname -m)" in
     *) target="" ;;
 esac
 
-[ "$apply" = 1 ] || echo "Dry run: nothing is downloaded, installed or written. Add --apply to do it."
+[ "$apply" = 1 ] || echo "Dry run: nothing is downloaded, installed or written (it only asks GitHub which release is latest). Add --apply to do it."
 
 # --- 1. Install the binaries into PREFIX/bin ------------------------------------------------------
 
@@ -87,12 +117,25 @@ sha256_of() {
     fi
 }
 
+# The latest release's tag, from where GitHub redirects releases/latest, or nothing when there's no
+# release (MUS-111). It's looked up once, so the download and a build use the same release.
+latest_tag() {
+    url=$(curl -fsS --proto '=https' --tlsv1.2 -o /dev/null -w '%{redirect_url}' "$REPO/releases/latest" 2>/dev/null) || return 0
+    case "$url" in
+        */releases/tag/*)
+            found=${url##*/releases/tag/}
+            valid_tag "$found" && echo "$found" ;;
+    esac
+    return 0
+}
+
 # Downloads the release's binaries into $1, each checked against its SHA256SUMS. Returns 2 when
 # the release has no SHA256SUMS (there's no release yet), so the caller can build from source;
 # anything else that goes wrong is fatal, since a mismatch must never fall through to an install.
 fetch_release() {
     dir=$1
-    base="$REPO/releases/latest/download"
+    base="$REPO/releases/download/$tag"
+    [ -n "$tag" ] || base="$REPO/releases/latest/download"
     curl -fsSL --proto '=https' --tlsv1.2 -o "$dir/SHA256SUMS" "$base/SHA256SUMS" 2>/dev/null || return 2
     for b in $bins; do
         asset="$b-$target"
@@ -115,12 +158,33 @@ if [ "$from_source" = 0 ] && [ -z "$target" ]; then
     echo "no prebuilt binaries for $(uname -s)/$(uname -m); building from source"
     from_source=1
 fi
+# Which release, or commit, this installs (MUS-111).
+release_is="release $tag"
+if [ -z "$tag" ] && [ -z "$rev" ]; then
+    tag=$(latest_tag)
+    release_is="release $tag, the latest"
+fi
+if [ -n "$rev" ]; then
+    ref="--rev $rev"
+    ref_is="commit $rev"
+elif [ -n "$tag" ]; then
+    ref="--tag $tag"
+    ref_is="tag $tag"
+else
+    ref=""
+    ref_is="the default branch, unpinned: no release was found"
+fi
+build="cargo install --locked --root $PREFIX --git $REPO${ref:+ $ref} $bins"
 if [ "$apply" = 0 ]; then
     if [ "$from_source" = 1 ]; then
-        would "cargo install --locked --root $PREFIX --git $REPO $bins"
+        would "$build"
+        echo "  (building $ref_is)"
+    elif [ -n "$tag" ]; then
+        would "download $bins for $target from $release_is, check them against its SHA256SUMS, and copy them into $BIN"
+        would "  (or, if it has no SHA256SUMS: $build)"
     else
         would "download $bins for $target from the latest release, check them against its SHA256SUMS, and copy them into $BIN"
-        would "  (or, if there's no release yet: cargo install --locked --root $PREFIX --git $REPO $bins)"
+        would "  (or, if there's no release yet: $build, which builds $ref_is)"
     fi
 else
     mkdir -p "$BIN"
@@ -147,8 +211,10 @@ else
     fi
     if [ "$installed" = 0 ]; then
         command -v cargo >/dev/null 2>&1 || { echo "error: there's no release to download and no cargo to build with; install Rust from https://rustup.rs" >&2; exit 1; }
-        # shellcheck disable=SC2086 # $bins is a list of crate names
-        cargo install --locked --root "$PREFIX" --git "$REPO" $bins
+        echo "building $ref_is"
+        [ -n "$ref" ] || echo "warning: no release was found, so this builds the default branch, which isn't pinned; give --tag or --rev to pin it" >&2
+        # shellcheck disable=SC2086 # $ref is a flag and its value, and $bins a list of crate names
+        cargo install --locked --root "$PREFIX" --git "$REPO" $ref $bins
     fi
 fi
 
