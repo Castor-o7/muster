@@ -12,7 +12,11 @@ named here are in [roadmap.md](roadmap.md).
 - **Waking a session.** A message that wakes an idle agent spends the operator's
   tokens and starts work nobody asked for.
 - **Credentials.** Pairing tokens, the local token, the gate's TLS key.
-- **Mail.** Message bodies, which can hold code, paths and plans.
+- **Mail.** Message bodies, which can hold code, paths and plans. In memory only,
+  unless the operator keeps the store: in Postgres, or with `MUSTER_PERSIST=file` in
+  `store.jsonl` in the state directory (MUS-17), a `0600` file the daemon refuses to
+  open if it's readable by others. Pairing codes and tokens are redacted from bodies
+  before they're stored (MUS-57).
 - **The daemon's availability.** One misbehaving client shouldn't stop the rest.
 
 ## Who it defends against
@@ -97,6 +101,13 @@ MUS-56 narrows the firewall to listed machines.
 
 ## Known gaps
 
+- **A kept store holds mail at rest, unencrypted** (MUS-17). With `MUSTER_PERSIST=file`,
+  up to 14 days of mail sit in plain text in the state directory, beside the tokens:
+  no new attacker reaches it, but a lost disk or a backup now loses mail too. It's
+  excluded from Time Machine on macOS; other backup and sync tools aren't handled.
+  Mail the sweep deleted stays in the file until the next compaction, at most a day.
+  Lines in it are loaded at boot without the gate's checks, so anyone who can write it
+  can plant mail, which that account could already do through the local token.
 - **The operator's account is one trust zone.** Anything running as the operator
   on the daemon's host can act as any local session and change the controls.
   MUS-39 is the fix.

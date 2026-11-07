@@ -407,6 +407,15 @@ Merged and needing a live run: MUS-36 and MUS-37.
   Linux x86_64 under the names install-codex.sh asks for, with one SHA256SUMS. workflow_dispatch
   is a dry run that only uploads artifacts; a `v*` tag also makes a draft release, which stays
   unpublished until Josh publishes it. Left: a tag and a published release, on Josh's word.
+- [x] **MUS-96: The installer checks its download, and release binaries are stripped.** From
+  MUS-14's review. Done when: `scripts/install-codex.sh` fetches SHA256SUMS from the same release,
+  checks the shim against it with sha256sum (or `shasum -a 256` on macOS), and refuses to run it on
+  a mismatch, a missing entry, a missing SHA256SUMS or no tool to check with; a fixture test
+  shows a tampered shim refused; and the release workflow strips the binaries, keeping its smoke
+  test, SHA-pinned actions and no cache. `scripts/test-install-codex.sh` runs in CI with a fake
+  curl: 9 checks pass, and 7 of them fail against the installer from before. This guards against a
+  corrupt or swapped download, not a tampered release, since both files come from the same
+  release; signing waits for Josh's Apple developer setup.
 - [ ] **MUS-91: Keep `windows-cross-check` from timing out.** It hit its 20-minute limit on #110,
   #113 and #124, and a re-run passed each time. Every time it was the apt step: `mingw-w64` pulls
   278 MB (the i686 and x86_64 toolchains, C and C++), which normally takes 7 s, but the Azure
@@ -427,19 +436,44 @@ Merged and needing a live run: MUS-36 and MUS-37.
   credential, a handshake with the daemon, and Claude Code's MCP server and five hooks
   against `plugins/muster-shim/hooks/hooks.json`. It also flags leftover Marshal wiring.
   Still to do: the one setup command, and the launchd and systemd units.
+  Progress 2026-11-05 (oceanic-gemsbok, MUS-98): `scripts/setup.sh` is the one command. It
+  installs the binaries into one place, with release downloads checked against SHA256SUMS or
+  `cargo install --locked`. It runs `muster-daemon service` with `--daemon`, then `muster-shim
+  setup`, which ends with the doctor. It's a dry run by default and never starts anything. Not
+  ticked: what's left is the operator's run on a clean machine through a reboot, and launchd on a
+  Mac, which nobody has run from setup.sh yet.
+- [x] **MUS-98: `scripts/setup.sh`, one command to set up a machine.** The glue for MUS-15,
+  split from it with sienna-mullet's agreement. Done when: one script installs muster-shim (and
+  muster-daemon with `--daemon`) into one prefix, from the release checked against SHA256SUMS
+  (MUS-96) or `cargo install --locked`, then hands over to `muster-daemon service` (#155) and
+  `muster-shim setup` (#157). It's a dry run unless given `--apply`, never passes `--force` or
+  `--drop-settings`, never starts or restarts a daemon, takes a pairing code only as a file or on
+  stdin, and names other copies on PATH without deleting them. `scripts/test-setup.sh` checks
+  all of that against fakes (17 checks; deliberately breaking setup.sh with `--force` and a
+  `systemctl restart` fails 4 of them). `scripts/test-setup-e2e.sh` runs it on a Linux daemon
+  host: setup.sh installs into a throwaway HOME and prefix, and the unit `service` writes there
+  runs under systemd under a throwaway name on spare ports. The host's own unit is left untouched.
+  Follow-up: add test-setup.sh to ci.yml once the MUS-97 freeze lifts.
 - [ ] **MUS-16: Support addresses beyond one LAN IP.** Done when: a paired laptop
   stays connected when it moves between home and a Tailscale or WireGuard network. Needs a run: the operator, who
   has the laptop.
   Design, with options for the operator: [remote-access.md](remote-access.md) (sienna-mullet,
   2026-11-05). It bears on MUS-56.
-- [ ] **MUS-17: Keep messages across daemon restarts without Postgres.** Check
+- [x] **MUS-17: Keep messages across daemon restarts without Postgres.** Check
   first whether myko allows it. Done when: an unread message survives a daemon
   restart with no Postgres configured.
   *Design approved 2026-11-05 (fiery-snapper, option A: an append-only JSONL
   file in the state directory, compacted; myko allows it through its `Persister`
-  trait and `apply_event_batch`). Decided by Josh on 2026-11-05: opt-in with
-  `MUSTER_PERSIST=file` for this release, and the store excluded from Time
-  Machine by default. See [local-persistence-design.md](local-persistence-design.md).*
+  trait, and replay loads the stores as myko's Postgres consumer does). Decided by
+  Josh on 2026-11-05: opt-in with `MUSTER_PERSIST=file` for this release, and the
+  store excluded from Time Machine by default. See
+  [local-persistence-design.md](local-persistence-design.md).* *Built 2026-11-05:
+  `crates/daemon/src/file_persister.rs`. Conformance cell 5e
+  (`restart-keeps-unread-mail-file`) passes for claude, claude-tls, codex and
+  codex-tls with no Postgres, and `scripts/test-restart-file-e2e.sh` (in CI) checks
+  unread mail, read state and an ad hoc membership across a restart, which the
+  same script without the setting loses. Making it the default waits on Josh,
+  after a release.*
 - [ ] **MUS-18: Extend pairing to Codex.** Codex goes through the Rust shim. Done
   when: Codex can connect through the gate. The Pi, opencode and Prime Agent plugins
   are left out under the language decision.

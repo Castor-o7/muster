@@ -74,6 +74,10 @@ jobs:
         run: cargo build --workspace && ./scripts/test-gate-e2e.sh
       - name: Links between daemons end-to-end (MUS-66)
         run: ./scripts/test-links-e2e.sh
+      # MUS-96: install-codex.sh runs the shim only when it matches the release's SHA256SUMS.
+      # A fake curl serves a local fixture, so nothing is downloaded.
+      - name: Installer checks its download (MUS-96)
+        run: sh scripts/test-install-codex.sh
       # MUS-58: the sweeper starts only once myko has replayed Postgres, so an
       # ad-hoc room membership survives a restart. Uses the job's Postgres
       # service, in a table of its own.
@@ -81,6 +85,9 @@ jobs:
         env:
           RESTART_E2E_POSTGRES_URL: postgres://conformance:conformance@127.0.0.1:5432/conformance
         run: ./scripts/test-restart-e2e.sh
+      # MUS-17: the same with no database and the store in a file.
+      - name: Restart with the store in a file end-to-end (MUS-17)
+        run: ./scripts/test-restart-file-e2e.sh
       - name: Test simulation fixture and scoring contracts
         run: python3 -m unittest discover -s scripts/sandbox -v
       # How much room the job left, kept in the log even when a step failed (MUS-87).

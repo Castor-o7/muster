@@ -7,10 +7,9 @@ Where it fits in the series is in [upstream-pr-strategy.md](upstream-pr-strategy
 
 | | |
 |---|---|
-| Branch | `port/terminal-cmds` at `5044c3e` (Castor-o7/muster, by peppy-skate, review fixes by bright-roller), on `62552e6`, #164's head. Pushed to Castor-o7/marshal when it's sent |
-| Contents | 3 commits, 6 files, +660 −14. `100d7ea`: the terminal commands (Muster's `9fdf775`) without `idempotency_key`, which arrives with Durability. `da4b719`: the plugin README fix (Muster's `abb4c94`). `5044c3e`: the review fixes (the roster's `recorded` wording, the too-short refusal, and tests for the label and the per-recipient lines) |
-| Opens | after #164 merges, since the roster's `wake` field comes from #164 |
-| Checked | at `5044c3e` on Murph: workspace tests (205) green, `clippy --workspace --all-targets -D warnings` and `fmt` clean, and the Muster-name grep finds 0 (bright-roller). At `da4b719`, the sandbox unittest passed too (peppy-skate). It rebases cleanly onto #164's evidence and comment commits, since it doesn't touch those files |
+| Branch | **`port/terminal-cmds-v3` at `3af92d7`** on Castor-o7/marshal (ultra-dune, 2026-11-05): one commit on upstream `9b00c6f` (v0.58.0), cherry-picked from `481f18a`, `2211da4` and `4a53e00`. It replaces the older `port/terminal-cmds` cut (`5044c3e` on `62552e6`) |
+| Contents | 1 commit, 5 files, +663 −9: `crates/shim/src/terminal_send.rs`, `roster_read.rs`, `main.rs` (subcommands and `usage()`), `README.md`, and `plugins/marshal-shim/README.md` |
+| Checked | at `3af92d7`: a clean clone passes 257/0 for daemon, shim and entities; clippy and fmt are clean; native Windows is green (Castor-o7/marshal run 42114245402, windows-native-wake); there are no Muster names. The lamplighter re-verified the branch, diff and log |
 
 ---
 
@@ -58,12 +57,9 @@ a Marshal user who doesn't run them sees no change.
   in `<project>/.mcp.json`, with the status line and the hooks in
   `settings.json`. The README also said sessions have no nickname; they do,
   and peers can be addressed by nickname or `session_id`.
-- **Internal tidy-up:** the shim's address lookup moves into one
-  `daemon_address()` that the three myko paths share (the MCP server, terminal
-  send and the roster), and `tools::await_command` becomes `pub(crate)`.
-  The statusline's reachability check keeps its own lookup in `channels.rs`,
-  which reads the environment first and has no default, so an unconfigured
-  machine isn't warned. Behaviour is unchanged.
+- **`--help`:** `marshal-shim --help` lists `tell`, `all` and `roster`. Both
+  new paths reach the daemon through the shim's existing `daemon_address()`, so
+  nothing else in the shim changes.
 
 ## What changes by default
 
@@ -73,11 +69,9 @@ removed. Sessions see the labelled message like any other direct mail.
 
 ## Overlaps
 
-- **#135 (lobo235)** adds `--help` and `--version` to the daemon, shim and
-  TUI, and edits the same argument match in `shim/src/main.rs`. The two don't
-  conflict in intent. Whichever lands second takes the other's arms, and we're
-  happy to rebase onto #135.
-- **Depends on #164**, whose roster `wake` field this prints.
+- Built on `main` at v0.58.0, so it already includes #135's `--help`/`--version`:
+  `tell`, `all` and `roster` are added to the shim's `usage()` text.
+- Uses the roster `wake` field that #164 added.
 
 ## Evidence
 
@@ -88,9 +82,12 @@ removed. Sessions see the labelled message like any other direct mail.
   - 1 checks the label.
   - 2 check the line printed for each recipient: each send outcome, a failed
     send, and a recipient with no team, host or stored nickname.
+- On this exact head: a clean clone passes
+  `cargo test -p marshal-daemon -p marshal-shim -p marshal-entities` (257 passed,
+  0 failed); `clippy -D warnings` and `fmt` are clean; native Windows CI is green on
+  the fork. No version bump.
 - The same commands have run in Muster, a fork of Marshal, since 2026-11-03.
   Operators message every session from a terminal with them, and scripts read
   the roster.
-- **Zoo:** not needed. Nothing agent-facing changes unless someone runs the
-  commands, and a terminal message is ordinary direct mail with a label. The
-  operator can ask for a run if upstream wants one.
+- **Zoo:** not run. Nothing agent-facing changes unless someone runs the
+  commands, and a terminal message is ordinary direct mail with a label.
