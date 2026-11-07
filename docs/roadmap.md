@@ -586,6 +586,14 @@ Merged and needing a live run: MUS-36 and MUS-37.
   idle recipient is woken only when `wake` is `expected`. It is said once per shim, since #62
   dropped the per-send note to keep tool output small. The statusline's `no live channel` warning
   is unchanged: it still shows only when no wait hook is wired, the one case where it's a fault.
+- [ ] **MUS-111: `setup.sh --from-source` builds a pinned release, not the default branch.** Filed by
+  robust-warbler: `--from-source` ran `cargo install --locked --git` on the unpinned default branch.
+  Done when: a build takes the latest release's tag by default, looked up once so it's the same
+  release whose SHA256SUMS the download checks (which now downloads from that tag too); `--tag TAG`
+  picks the release for both, and `--rev SHA` (a full hash) builds that commit from source; the dry
+  run says which ref it would build; only with no release at all does it build the default branch,
+  saying it's unpinned; a malformed tag, a short rev, or both together are refused; and
+  `scripts/test-setup.sh` covers each.
 - [ ] **MUS-30: Decide the future of the TypeScript plugins.** The operator decides
   whether to keep, freeze or remove them. Done when: the decision is recorded here,
   and if they're removed, the repository's `package.json` workspace goes with them.
