@@ -139,20 +139,31 @@ check "and still hands over to service and setup" 'called "^muster-daemon servic
 run --daemon
 check "which the dry run says too" 'said "builds the default branch, unpinned: no release was found"'
 
-# MUS-110: an unsigned release is built from its tag instead; a bad signature stops everything.
+# MUS-110: with a release key, an unsigned release stops everything unless the operator asks for
+# --from-source, since deleting SHA256SUMS.sig mustn't buy an unsigned build; a bad signature always
+# stops everything.
+BUILD_TAG="^cargo install --locked --root $WORK/prefix --git https://github.com/Castor-o7/muster --tag v9.9.9 muster-shim muster-daemon$"
 release unsigned
 rm "$FIXTURE/SHA256SUMS.sig"
 run --daemon --apply
-check "an unsigned release's binaries aren't installed: its tag is built instead" '[ $status -eq 0 ] && said "has no SHA256SUMS.sig" && called "^cargo install --locked --root $WORK/prefix --git https://github.com/Castor-o7/muster --tag v9.9.9 muster-shim muster-daemon$" && ! called "curl .*muster-shim-$TARGET"'
+check "with a release key, an unsigned release is refused, not built" '[ $status -ne 0 ] && said "has no SHA256SUMS.sig" && said "Pass --from-source" && ! called cargo && [ ! -e "$WORK/prefix/bin/muster-daemon" ] && ! called "muster-shim setup"'
+run --daemon --from-source --apply
+check "but --from-source builds its tag" '[ $status -eq 0 ] && called "$BUILD_TAG" && ! called "curl .*/download/"'
 release other-key
 sign "$WORK/other"
 run --daemon --apply
 check "a release signed by another key stops everything" '[ $status -ne 0 ] && said "isn.t the release key.s signature" && [ ! -e "$WORK/prefix/bin/muster-daemon" ] && ! called cargo && ! called "muster-shim setup"'
-release good
+# With no release key yet (the real script's placeholder), no release's binaries are installed,
+# signed or not: the pinned tag is built, saying why.
 PATCHED=$SETUP
 SETUP="$REPO/scripts/setup.sh"
+release good
 run --daemon --apply
-check "the real setup.sh, with no release key yet, refuses even a signed release" '[ $status -ne 0 ] && said "isn.t the release key.s signature" && ! called cargo'
+check "with no release key yet, a signed release's tag is built, not its binaries" '[ $status -eq 0 ] && said "no release key in this script yet" && called "$BUILD_TAG" && ! called "curl .*muster-shim-$TARGET" && ! called "SHA256SUMS.sig"'
+release unsigned
+rm "$FIXTURE/SHA256SUMS.sig"
+run --daemon --apply
+check "and so is an unsigned one's" '[ $status -eq 0 ] && called "$BUILD_TAG" && ! called "curl .*muster-shim-$TARGET"'
 SETUP=$PATCHED
 
 release good

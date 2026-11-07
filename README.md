@@ -46,8 +46,8 @@ Install the binaries, run the daemon, then wire the harnesses you use.
 Or let `scripts/setup.sh` (MUS-98) do the first steps in one command. It installs the binaries
 into one place, `~/.local/bin` (`--prefix` to change it), from the latest release checked
 against its `SHA256SUMS` and that against the release key's signature (MUS-110), or with
-`cargo install --locked` of the release's tag while there's no signed release (`--tag` or
-`--rev` to pick, MUS-111). With
+`cargo install --locked` of the release's tag while there's no release or no release key yet,
+or with `--from-source` (`--tag` or `--rev` to pick, MUS-111). With
 `--daemon` it then runs `muster-daemon service` for the unit that keeps the daemon running
 across reboots (`--tls` for the gate). It always runs `muster-shim setup` to pair and wire
 Claude Code, which ends with `muster-shim doctor`. Like those two, it's a dry run until you

@@ -600,8 +600,9 @@ Merged and needing a live run: MUS-36 and MUS-37.
   no key. Done when: `release/allowed_signers` names the release key, and `install-codex.sh` and
   `setup.sh` carry the same lines and check SHA256SUMS.sig with `ssh-keygen -Y verify -n
   muster-release` before trusting any checksum, refusing a bad or other key's signature and a
-  SHA256SUMS changed after signing; `install-codex.sh` refuses an unsigned release and `setup.sh`
-  builds its pinned tag instead; `scripts/sign-release.sh <tag> --key <public key>` signs a draft
+  SHA256SUMS changed after signing; both refuse an unsigned release, so deleting the signature
+  buys nothing, and only `setup.sh --from-source` builds its tag instead (while there's no key
+  yet, `setup.sh` builds the tag, saying why); `scripts/sign-release.sh <tag> --key <public key>` signs a draft
   through the key's agent, checks the signature, uploads it, and refuses a published release or
   another key; release.yml says so; threat-model.md has the note; tests cover each. Built with a
   placeholder key that fails closed. Left: Josh adds his public key (to release/allowed_signers

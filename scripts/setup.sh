@@ -142,18 +142,23 @@ signed_by_release_key() {
 }
 
 # Downloads the release's binaries into $1, each checked against its SHA256SUMS, once that's shown
-# to be signed by the release key. Returns 2 when the release has no SHA256SUMS (there's no release
-# yet) or no SHA256SUMS.sig (it isn't signed), so the caller builds the pinned tag from source
-# instead; anything else that goes wrong is fatal, since a bad signature or a mismatch must never
-# fall through to an install.
+# to be signed by the release key. Returns 2 when there's no release yet (no SHA256SUMS), or no
+# release key yet (the placeholder), so the caller builds the pinned tag from source instead.
+# Anything else is fatal, so a bad signature or a mismatch never falls through to an install, and
+# nor does a missing signature: deleting SHA256SUMS.sig mustn't buy an unsigned build. Only
+# --from-source, given by the operator, builds a release the key hasn't signed.
 fetch_release() {
     dir=$1
     base="$REPO/releases/download/$tag"
     [ -n "$tag" ] || base="$REPO/releases/latest/download"
     curl -fsSL --proto '=https' --tlsv1.2 -o "$dir/SHA256SUMS" "$base/SHA256SUMS" 2>/dev/null || return 2
-    if ! curl -fsSL --proto '=https' --tlsv1.2 -o "$dir/SHA256SUMS.sig" "$base/SHA256SUMS.sig" 2>/dev/null; then
-        echo "warning: the release has no SHA256SUMS.sig, so its binaries can't be shown to be the operator's; building from source instead" >&2
+    if [ -z "$ALLOWED_SIGNERS" ]; then
+        echo "warning: there's no release key in this script yet (MUS-110), so no release's binaries can be verified; building the pinned tag from source instead" >&2
         return 2
+    fi
+    if ! curl -fsSL --proto '=https' --tlsv1.2 -o "$dir/SHA256SUMS.sig" "$base/SHA256SUMS.sig" 2>/dev/null; then
+        echo "error: the release has no SHA256SUMS.sig, so its binaries can't be shown to be the operator's; not installing. Pass --from-source to build its tag instead." >&2
+        exit 1
     fi
     sig=0
     signed_by_release_key "$dir" || sig=$?
@@ -209,7 +214,7 @@ if [ "$apply" = 0 ]; then
         echo "  (building $ref_is)"
     elif [ -n "$tag" ]; then
         would "download $bins for $target from $release_is, check its SHA256SUMS against the release key's signature and them against it, and copy them into $BIN"
-        would "  (or, if it has no SHA256SUMS or isn't signed: $build)"
+        would "  (or, if it has no SHA256SUMS, or there's no release key yet: $build)"
     else
         would "download $bins for $target from the latest release, check its SHA256SUMS against the release key's signature and them against it, and copy them into $BIN"
         would "  (or, if there's no release yet: $build, which builds $ref_is)"
