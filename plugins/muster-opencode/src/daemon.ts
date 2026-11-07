@@ -44,6 +44,7 @@ import {
   type SessionNicknameItem,
 } from "./entities.js";
 import type { Identity } from "./identity.js";
+import { withLocalToken } from "./local-token.js";
 
 const LIVENESS_INTERVAL_MS = 5_000;
 const INBOX_PULL_LIMIT = 20;
@@ -191,7 +192,8 @@ export class MusterDaemon {
       this.nicknames = items;
     });
 
-    this.client.setAddress(withMykoPath(this.cfg.address));
+    // With TLS on, a loopback connection needs the host's local token (MUS-7).
+    this.client.setAddress(withMykoPath(withLocalToken(this.cfg.address)));
   }
 
   onNotify(handler: NotifyHandler): void {

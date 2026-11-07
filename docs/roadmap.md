@@ -578,6 +578,13 @@ Merged and needing a live run: MUS-36 and MUS-37.
   message, marks it shown (`claimShown`, MUS-90) and returns its text, which was thrown away; the
   second message's own push then finds it already shown and skips it. Whether it fails depends on
   whether the second push lands before that drain. Done: what the drain returns is prompted too.
+- [x] **MUS-112: The TypeScript plugins reach a TLS daemon on their own host.** From the README audit
+  (2026-11-06): with TLS on, a plain loopback connection must present the local token (MUS-7),
+  and no plugin read it, so Pi, opencode and Prime Agent worked only with TLS off. Done: each
+  plugin's `local-token.ts` finds `<config dir>/muster/local-token` the way the Rust side does
+  (`XDG_CONFIG_HOME`, `APPDATA` on Windows, else `~/.config`) and adds `?token=` to a loopback
+  address that has none. It never sends the token to another host. Pairing (reaching a daemon
+  on another machine) is still Rust-only, under MUS-30.
 - [ ] **MUS-30: Decide the future of the TypeScript plugins.** The operator decides
   whether to keep, freeze or remove them. Done when: the decision is recorded here,
   and if they're removed, the repository's `package.json` workspace goes with them.
