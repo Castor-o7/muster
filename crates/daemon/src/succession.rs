@@ -166,13 +166,23 @@ fn last_signal(row: &Session) -> i64 {
 /// A Claude session restarted before its MCP shim bound leaves such a row. The
 /// rule isn't loosened: the sweeper only applies it again later.
 pub fn quiet_until(f: &Facts, now: i64, cfg: &Config) -> Option<i64> {
+    let dead_at = last_signal(judged_by_quiet_time(f)?) + cfg.quiet_ms;
+    (dead_at > now).then_some(dead_at)
+}
+
+/// A Codex row on the roster, while it can't be told from an idle live thread
+/// (MUS-77).
+fn codex_held(row: &Session) -> bool {
+    row.harness.as_deref() == Some("codex") && !CODEX_PRESENT_ROWS_CAN_BE_DEAD
+}
+
+/// The row, when [`verdict`] judges it by the quiet time alone: it's on the
+/// roster, isn't waiting, isn't a held Codex row, and never had a client. Both
+/// `verdict` and [`quiet_until`] decide that here, so they can't drift apart.
+fn judged_by_quiet_time<'a>(f: &Facts<'a>) -> Option<&'a Session> {
     let row = f.row?;
-    let unobservable = !f.waiting
-        && row.client_id.is_none()
-        && f.client_gone_at.is_none()
-        && !(row.harness.as_deref() == Some("codex") && !CODEX_PRESENT_ROWS_CAN_BE_DEAD);
-    let dead_at = last_signal(row) + cfg.quiet_ms;
-    (unobservable && dead_at > now).then_some(dead_at)
+    let never_had_a_client = row.client_id.is_none() && f.client_gone_at.is_none();
+    (!f.waiting && !codex_held(row) && never_had_a_client).then_some(row)
 }
 
 /// Whether a predecessor is dead. Pure, so it can be tested on its own.
@@ -196,12 +206,27 @@ pub fn verdict(f: &Facts, now: i64, cfg: &Config) -> Verdict {
     if row.client_id.is_some() && f.client_live {
         return Verdict::Live("its client is connected".into());
     }
-    if row.harness.as_deref() == Some("codex") && !CODEX_PRESENT_ROWS_CAN_BE_DEAD {
+    if codex_held(row) {
         return Verdict::Live(
             "a Codex row on the roster can't be told from an idle live thread until MUS-77".into(),
         );
     }
     let last_signal = last_signal(row);
+    if judged_by_quiet_time(f).is_some() {
+        let quiet_for = now - last_signal;
+        return if quiet_for < cfg.quiet_ms {
+            Verdict::Live(format!(
+                "it never had a client, and was active {}s ago (quiet time {}s)",
+                quiet_for / 1000,
+                cfg.quiet_ms / 1000
+            ))
+        } else {
+            Verdict::Dead(format!(
+                "it never had a client, has no waiter, and has been quiet for {}s",
+                quiet_for / 1000
+            ))
+        };
+    }
     match f.client_gone_at {
         Some(gone_at) => {
             // The hooked_since guard: a session still hooking after its client
@@ -227,25 +252,11 @@ pub fn verdict(f: &Facts, now: i64, cfg: &Config) -> Verdict {
         }
         // Its client is gone, but the sweeper hasn't timed the drop yet (it
         // ticks every few seconds). Pending, so a quick restart is checked
-        // again once the drop is timed.
-        None if row.client_id.is_some() => Verdict::Pending(
+        // again once the drop is timed. (A row that never had a client was
+        // judged by the quiet time above.)
+        None => Verdict::Pending(
             "its client isn't connected, and the daemon hasn't timed the drop yet".into(),
         ),
-        None => {
-            let quiet_for = now - last_signal;
-            if quiet_for < cfg.quiet_ms {
-                Verdict::Live(format!(
-                    "it never had a client, and was active {}s ago (quiet time {}s)",
-                    quiet_for / 1000,
-                    cfg.quiet_ms / 1000
-                ))
-            } else {
-                Verdict::Dead(format!(
-                    "it never had a client, has no waiter, and has been quiet for {}s",
-                    quiet_for / 1000
-                ))
-            }
-        }
     }
 }
 
