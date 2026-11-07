@@ -585,6 +585,22 @@ Merged and needing a live run: MUS-36 and MUS-37.
   (`XDG_CONFIG_HOME`, `APPDATA` on Windows, else `~/.config`) and adds `?token=` to a loopback
   address that has none. It never sends the token to another host. Pairing (reaching a daemon
   on another machine) is still Rust-only, under MUS-30.
+- [x] **MUS-99: Say what a missing live channel means.** From the DiscoSim rally (2026-11-06,
+  issues log §1.1). Every send returned `live_push: unavailable` because no session ran with the
+  channels flag, which is expected under hook delivery, but nothing told senders why replies came
+  late. Done: the first send in a session that finds no live channel carries a `note` saying the
+  message waits in the inbox and shows at the recipient's next tool call or prompt, and that an
+  idle recipient is woken only when `wake` is `expected`. It is said once per shim, since #62
+  dropped the per-send note to keep tool output small. The statusline's `no live channel` warning
+  is unchanged: it still shows only when no wait hook is wired, the one case where it's a fault.
+- [ ] **MUS-111: `setup.sh --from-source` builds a pinned release, not the default branch.** Filed by
+  robust-warbler: `--from-source` ran `cargo install --locked --git` on the unpinned default branch.
+  Done when: a build takes the latest release's tag by default, looked up once so it's the same
+  release whose SHA256SUMS the download checks (which now downloads from that tag too); `--tag TAG`
+  picks the release for both, and `--rev SHA` (a full hash) builds that commit from source; the dry
+  run says which ref it would build; only with no release at all does it build the default branch,
+  saying it's unpinned; a malformed tag, a short rev, or both together are refused; and
+  `scripts/test-setup.sh` covers each.
 - [ ] **MUS-30: Decide the future of the TypeScript plugins.** The operator decides
   whether to keep, freeze or remove them. Done when: the decision is recorded here,
   and if they're removed, the repository's `package.json` workspace goes with them.
