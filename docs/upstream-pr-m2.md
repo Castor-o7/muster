@@ -32,8 +32,10 @@ a Marshal user who doesn't run them sees no change.
 ## What it adds
 
 - **Terminal send.**
-  - The terminal registers a short-lived session of kind `terminal`, under
-    one id kept per machine.
+  - The terminal registers a short-lived session of kind `terminal`, under a
+    fresh id for each run, so two runs at once can't remove each other's
+    sender (fixed in 8d53df3 after the watchman's read; the first cut kept one
+    id per machine).
   - It sends each recipient a direct message, so an idle session wakes for
     it, the same as for any direct mail.
   - It prints one line per recipient, then removes its own roster row.
