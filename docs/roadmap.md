@@ -562,6 +562,15 @@ Merged and needing a live run: MUS-36 and MUS-37.
   what it did, a test shows it rolls back a daemon that fails its health check, and a test shows a
   held wait ends cleanly on SIGTERM. The operator's direct OK is still needed to run it. Related:
   MUS-15, `scripts/restart-preview.sh`.
+- [x] **MUS-100: One error names every missing tool argument.** From the DiscoSim rally
+  (2026-11-06, issues log §1.4). Calls like `broadcast(room, message)` failed one field at a
+  time ("missing `to_room`", then "missing `body`"), costing two or three round trips. Done:
+  each write tool reads its required arguments together (`Required` in `crates/shim/src/tools.rs`)
+  and one error names every missing or mistyped field, including Codex's `asSession`, plus the
+  keys that were given. Common aliases stand in for the field names: `room`/`room_id` for
+  `to_room`, `message`/`text` for `body`, `recipient` for `to`, `current_task`/`status` for
+  `text`, `room` for `join_room`'s `name`, and `ids` or one `message_id` for `message_ids`.
+  The canonical name wins when both are given. The advertised schemas are unchanged.
 - [x] **MUS-106: OpenCode shows the second message of a burst.** Main's run 42317108239 (at
   22e31eb) failed `opencode × burst-both-delivered`: "never shown: burst-b (the wake showed
   burst-a, the next delivery point "")", though #182's own run passed it. Cause: after the first
