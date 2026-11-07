@@ -125,6 +125,8 @@ jobs:
         with:
           name: muster-release
           path: dist
+      # The draft has no SHA256SUMS.sig: the release key isn't in CI. The operator signs the draft
+      # with scripts/sign-release.sh, then publishes it (MUS-110); the installers refuse it until then.
       - name: Create a draft release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -135,4 +137,4 @@ jobs:
             --draft \
             --verify-tag \
             --title "muster $TAG" \
-            --notes "Prebuilt muster-shim and muster-daemon for macOS (Apple silicon) and Linux (x86_64, glibc 2.35+ with OpenSSL 3). Check downloads against SHA256SUMS: \`sha256sum -c SHA256SUMS --ignore-missing\`."
+            --notes "Prebuilt muster-shim and muster-daemon for macOS (Apple silicon) and Linux (x86_64, glibc 2.35+ with OpenSSL 3). SHA256SUMS is signed by the release key in release/allowed_signers (MUS-110): check it with \`ssh-keygen -Y verify -f allowed_signers -I muster-release -n muster-release -s SHA256SUMS.sig < SHA256SUMS\`, then the downloads with \`sha256sum -c SHA256SUMS --ignore-missing\`."
