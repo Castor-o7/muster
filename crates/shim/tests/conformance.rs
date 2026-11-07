@@ -25,6 +25,8 @@
 //! to fail and is reported as such; if one starts passing, the suite fails so
 //! the list gets updated.
 
+mod common;
+
 use std::{
     collections::BTreeMap,
     io::{BufRead, BufReader, Read, Write},
@@ -425,7 +427,7 @@ struct Mcp {
 
 impl Mcp {
     fn start(daemon: &Daemon, session_id: &str) -> Self {
-        let mut child = Command::new(SHIM)
+        let mut child = common::shim()
             .env_remove("MUSTER_BASE_URL")
             .env_remove("MYKO_ADDRESS")
             .env("XDG_CONFIG_HOME", daemon.config_dir())
@@ -650,7 +652,7 @@ impl FakeClaude {
     }
 
     fn hook(&self, event: &str) -> Command {
-        let mut cmd = Command::new(SHIM);
+        let mut cmd = common::shim();
         cmd.args(["claude-hook", event])
             .env_remove("MUSTER_DAEMON_ADDRESS")
             .env_remove("MYKO_ADDRESS")
@@ -997,7 +999,7 @@ impl FakeCodex {
     /// Run a Codex command hook and return what it injected.
     fn run_hook(&self, event: &str, fixture: &str) -> Option<String> {
         let input = codex_fixture(fixture, &self.thread_id, &self.cwd).to_string();
-        let mut child = Command::new(SHIM)
+        let mut child = common::shim()
             .args(["codex-hook", event, &self.hook_base])
             .env_remove("MUSTER_DAEMON_ADDRESS")
             .env_remove("MYKO_ADDRESS")
@@ -1041,7 +1043,7 @@ impl FakeHarness for FakeCodex {
         let app = FakeAppServer::start(self.thread_id.clone(), self.cwd.clone());
         let ready = daemon.dir.path().join("bridge.ready");
         let log = std::fs::File::create(daemon.dir.path().join("bridge.log")).unwrap();
-        let bridge = Command::new(SHIM)
+        let bridge = common::shim()
             .args([
                 "codex-bridge",
                 "--endpoint",
@@ -1118,7 +1120,7 @@ impl FakeHarness for FakeCodex {
         // idle Codex thread, as far as the daemon can tell.
         let id = uuid::Uuid::new_v4().to_string();
         let input = codex_fixture("user-prompt-submit", &id, &self.cwd).to_string();
-        let mut child = Command::new(SHIM)
+        let mut child = common::shim()
             .args(["codex-hook", "session-start", &self.hook_base])
             .env_remove("MUSTER_DAEMON_ADDRESS")
             .env_remove("MYKO_ADDRESS")
@@ -1377,7 +1379,7 @@ impl Cell {
     /// A sender session, registered as a Claude session's hook would, with
     /// its MCP shim.
     fn sender(daemon: &Daemon, sender_id: &str) -> Mcp {
-        let mut hook = Command::new(SHIM)
+        let mut hook = common::shim()
             .args(["claude-hook", "session-start"])
             .env("XDG_CONFIG_HOME", daemon.config_dir())
             .env("HOME", daemon.dir.path().join("home"))

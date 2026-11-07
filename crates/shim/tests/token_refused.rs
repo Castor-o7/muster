@@ -6,14 +6,14 @@
 //! gate does for a missing or wrong token (`gate.rs`, "missing or wrong local
 //! token").
 
+mod common;
+
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
-
-const SHIM: &str = env!("CARGO_BIN_EXE_muster-shim");
 
 /// A gate that refuses every handshake for its token. Returns its address.
 fn refusing_gate() -> String {
@@ -48,7 +48,7 @@ struct Shim {
 
 impl Shim {
     fn start(gate: &str, home: &std::path::Path) -> Shim {
-        let mut child = Command::new(SHIM)
+        let mut child = common::shim()
             .env_clear()
             .env("PATH", std::env::var_os("PATH").unwrap_or_default())
             .env("HOME", home)

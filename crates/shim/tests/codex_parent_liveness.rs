@@ -1,7 +1,9 @@
 #![cfg(unix)]
 
+mod common;
+
 use std::{
-    process::{Command, Stdio},
+    process::Stdio,
     thread,
     time::{Duration, Instant},
 };
@@ -9,7 +11,7 @@ use std::{
 #[test]
 fn codex_bridge_exits_when_its_launcher_disappears() {
     let (reader, writer) = std::os::unix::net::UnixStream::pair().expect("parent liveness pipe");
-    let mut command = Command::new(env!("CARGO_BIN_EXE_muster-shim"));
+    let mut command = common::shim();
     command
         .args([
             "codex-bridge",
