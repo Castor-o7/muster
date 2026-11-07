@@ -562,6 +562,18 @@ Merged and needing a live run: MUS-36 and MUS-37.
   what it did, a test shows it rolls back a daemon that fails its health check, and a test shows a
   held wait ends cleanly on SIGTERM. The operator's direct OK is still needed to run it. Related:
   MUS-15, `scripts/restart-preview.sh`.
+- [x] **MUS-101: The roster shows how old each status is.** From the DiscoSim rally (2026-11-06,
+  issues log §1.5): the watchman's `current_task` still described day 1 at stand-down, and a
+  stale status read the same as a fresh one. Done: `Session` gains `current_task_at` (its own
+  setter, `SetSessionCurrentTaskAt`, allowed through the gate for the caller's own session),
+  set by `set_status`, by the branch-following default (MUS-26) and at registration when the
+  default status is set. `muster://roster` adds `current_task_at` and `current_task_age_s`, and
+  `muster-shim roster` adds `current_task_at` under `declared`. A shim that predates it sends no
+  time, so the age is absent rather than wrong; an older daemon drops the setter harmlessly.
+  Not done: nudging a session whose status is old while it keeps calling tools; the daemon
+  stamping the time itself rather than trusting the shim's clock; the TypeScript plugins setting
+  it (their sessions show no age); and setting the status and its time in one atomic command
+  rather than two.
 - [x] **MUS-104: A waiter stands down when its session's id changes.** Reported by cobalt-bream
   on 2026-11-06: a ghost row, mellow-weevil (64a05eda, pid 0), stayed on the roster, and the
   daemon logged "64a05eda may take over from 02f2a191" every 3 s. One Claude process (3766675)
