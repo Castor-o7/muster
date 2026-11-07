@@ -570,7 +570,55 @@ Merged and needing a live run: MUS-36 and MUS-37.
   default status is set. `muster://roster` adds `current_task_at` and `current_task_age_s`, and
   `muster-shim roster` adds `current_task_at` under `declared`. A shim that predates it sends no
   time, so the age is absent rather than wrong; an older daemon drops the setter harmlessly.
-  Not done: nudging a session whose status is old while it keeps calling tools.
+  Not done: nudging a session whose status is old while it keeps calling tools; the daemon
+  stamping the time itself rather than trusting the shim's clock; the TypeScript plugins setting
+  it (their sessions show no age); and setting the status and its time in one atomic command
+  rather than two.
+- [x] **MUS-100: One error names every missing tool argument.** From the DiscoSim rally
+  (2026-11-06, issues log §1.4). Calls like `broadcast(room, message)` failed one field at a
+  time ("missing `to_room`", then "missing `body`"), costing two or three round trips. Done:
+  each write tool reads its required arguments together (`Required` in `crates/shim/src/tools.rs`)
+  and one error names every missing or mistyped field, including Codex's `asSession`, plus the
+  keys that were given. Common aliases stand in for the field names: `room`/`room_id` for
+  `to_room`, `message`/`text` for `body`, `recipient` for `to`, `current_task`/`status` for
+  `text`, `room` for `join_room`'s `name`, and `ids` or one `message_id` for `message_ids`.
+  The canonical name wins when both are given. The advertised schemas are unchanged.
+- [x] **MUS-106: OpenCode shows the second message of a burst.** Main's run 42317108239 (at
+  22e31eb) failed `opencode × burst-both-delivered`: "never shown: burst-b (the wake showed
+  burst-a, the next delivery point "")", though #182's own run passed it. Cause: after the first
+  push's prompt, `onNotify` drains the inbox to ack it, and that drain also takes the second
+  message, marks it shown (`claimShown`, MUS-90) and returns its text, which was thrown away; the
+  second message's own push then finds it already shown and skips it. Whether it fails depends on
+  whether the second push lands before that drain. Done: what the drain returns is prompted too.
+- [x] **MUS-99: Say what a missing live channel means.** From the DiscoSim rally (2026-11-06,
+  issues log §1.1). Every send returned `live_push: unavailable` because no session ran with the
+  channels flag, which is expected under hook delivery, but nothing told senders why replies came
+  late. Done: the first send in a session that finds no live channel carries a `note` saying the
+  message waits in the inbox and shows at the recipient's next tool call or prompt, and that an
+  idle recipient is woken only when `wake` is `expected`. It is said once per shim, since #62
+  dropped the per-send note to keep tool output small. The statusline's `no live channel` warning
+  is unchanged: it still shows only when no wait hook is wired, the one case where it's a fault.
+- [ ] **MUS-111: `setup.sh --from-source` builds a pinned release, not the default branch.** Filed by
+  robust-warbler: `--from-source` ran `cargo install --locked --git` on the unpinned default branch.
+  Done when: a build takes the latest release's tag by default, looked up once so it's the same
+  release whose SHA256SUMS the download checks (which now downloads from that tag too); `--tag TAG`
+  picks the release for both, and `--rev SHA` (a full hash) builds that commit from source; the dry
+  run says which ref it would build; only with no release at all does it build the default branch,
+  saying it's unpinned; a malformed tag, a short rev, or both together are refused; and
+  `scripts/test-setup.sh` covers each.
+- [ ] **MUS-110: Sign releases, so SHA256SUMS proves who published them.** Filed with MUS-111:
+  SHA256SUMS comes from the same release as the binaries, so it catches a corrupt download but
+  not a release whose assets were replaced. Josh chose on 2026-11-06 to sign locally, so CI holds
+  no key. Done when: `release/allowed_signers` names the release key, and `install-codex.sh` and
+  `setup.sh` carry the same lines and check SHA256SUMS.sig with `ssh-keygen -Y verify -n
+  muster-release` before trusting any checksum, refusing a bad or other key's signature and a
+  SHA256SUMS changed after signing; both refuse an unsigned release, so deleting the signature
+  buys nothing, and only `setup.sh --from-source` builds its tag instead (while there's no key
+  yet, `setup.sh` builds the tag, saying why); `scripts/sign-release.sh <tag> --key <public key>` signs a draft
+  through the key's agent, checks the signature, uploads it, and refuses a published release or
+  another key; release.yml says so; threat-model.md has the note; tests cover each. Built with a
+  placeholder key that fails closed. Left: Josh adds his public key (to release/allowed_signers
+  and both scripts) before signing the first release (MUS-14).
 - [ ] **MUS-30: Decide the future of the TypeScript plugins.** The operator decides
   whether to keep, freeze or remove them. Done when: the decision is recorded here,
   and if they're removed, the repository's `package.json` workspace goes with them.

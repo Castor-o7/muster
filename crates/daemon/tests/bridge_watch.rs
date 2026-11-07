@@ -1,12 +1,13 @@
 //! `/hook/bridge-watch` (MUS-77): a Codex app-server bridge saying it can wake a thread, so the
 //! roster shows the wake path (`waiting`) and a send to it says `expected`.
 //!
-//! One test, because the operator's pause is process-wide.
+//! One test, because the operator's pause is process-wide. It also covers MUS-94: each
+//! bridge, and a held `/hook/wait`, has a wake-path record of its own.
 
 use std::sync::Arc;
 
 use muster_entities::{
-    GetAllWakeWatchers, SendMessage, Session, SessionId, WakeStatus, WakeWatcher,
+    GetAllSessions, GetAllWakeWatchers, SendMessage, Session, SessionId, WakeStatus, WakeWatcher,
 };
 use myko::{
     command::{CommandContext, CommandHandler},
@@ -84,13 +85,21 @@ fn watch(ctx: &Arc<MykoServerContext>, sid: &str, watching: bool) -> String {
         .body
 }
 
+/// A watch from the bridge process named `bridge`.
+fn watch_as(ctx: &Arc<MykoServerContext>, bridge: &str, sid: &str, watching: bool) -> String {
+    let body = format!(r#"{{"session_id":"{sid}","watching":{watching},"bridge":"{bridge}"}}"#);
+    daemon::hooks::dispatch("/hook/bridge-watch", "harness=codex", body.as_bytes(), ctx)
+        .expect("a known route")
+        .body
+}
+
 fn watched(ctx: &MykoServerContext, sid: &str) -> bool {
     let now = chrono::Utc::now().timestamp_millis();
     cmd_ctx(ctx, "c-sender")
         .exec_query(GetAllWakeWatchers {})
         .unwrap_or_default()
         .iter()
-        .any(|w: &Arc<WakeWatcher>| w.id.0.as_ref() == sid && w.until > now)
+        .any(|w: &Arc<WakeWatcher>| w.session() == sid && w.until > now)
 }
 
 fn send_wake(ctx: &MykoServerContext, to: &str) -> WakeStatus {
@@ -139,4 +148,117 @@ fn a_bridge_watched_thread_shows_its_wake_path_until_the_bridge_stops() {
     muster_entities::controls::set_wakes_paused(false);
     assert_eq!(watch(&ctx, "thread-1", true), "watching");
     assert!(watched(&ctx, "thread-1"));
+    assert_eq!(watch(&ctx, "thread-1", false), "not watching");
+
+    // MUS-94: wake leadership passes from bridge A to bridge B. B watches first, then A's
+    // late unwatch arrives. B's record stays.
+    set(&ctx, &session("thread-2", None));
+    assert_eq!(watch_as(&ctx, "bridge-a", "thread-2", true), "watching");
+    assert_eq!(watch_as(&ctx, "bridge-b", "thread-2", true), "watching");
+    assert_eq!(
+        watch_as(&ctx, "bridge-a", "thread-2", false),
+        "not watching"
+    );
+    assert!(
+        watched(&ctx, "thread-2"),
+        "a stale leader's unwatch must leave the new leader's record"
+    );
+    assert_eq!(send_wake(&ctx, "thread-2"), WakeStatus::Expected);
+    assert_eq!(
+        watch_as(&ctx, "bridge-b", "thread-2", false),
+        "not watching"
+    );
+    assert!(!watched(&ctx, "thread-2"));
+
+    // MUS-94: a held /hook/wait and a bridge for the same session. The bridge's
+    // `watching:false` leaves the held wait's record, and the wait's end leaves the bridge's.
+    set(&ctx, &session("both", None));
+    let internal = cmd_ctx(&ctx, "c-daemon");
+    daemon::hooks::mark_waiting_now(&internal, "both");
+    assert_eq!(watch_as(&ctx, "bridge-a", "both", true), "watching");
+    assert_eq!(watch_as(&ctx, "bridge-a", "both", false), "not watching");
+    assert!(
+        watched(&ctx, "both"),
+        "a bridge's watching:false must leave a held wait's record"
+    );
+    assert_eq!(watch_as(&ctx, "bridge-a", "both", true), "watching");
+    daemon::hooks::end_wait(&internal, "both");
+    assert!(
+        watched(&ctx, "both"),
+        "a held wait's end must leave the bridge's record"
+    );
+
+    // A bridge name that's too long or has other characters gets the shared record.
+    let long = "x".repeat(65);
+    for bad in [long.as_str(), "a/b", "a b"] {
+        assert_eq!(watch_as(&ctx, bad, "thread-2", true), "watching");
+        let ids: Vec<String> = internal
+            .exec_query(GetAllWakeWatchers {})
+            .unwrap_or_default()
+            .iter()
+            .filter(|w| w.session() == "thread-2")
+            .map(|w| w.id.0.to_string())
+            .collect();
+        assert_eq!(
+            ids,
+            vec![WakeWatcher::bridge_id("thread-2", "bridge")],
+            "for {bad:?}"
+        );
+        assert_eq!(watch_as(&ctx, bad, "thread-2", false), "not watching");
+    }
+
+    // A session can't squat on another session's bridge record (MUS-94): it can't register
+    // under the record's id, and a wait under that id neither replaces nor ends it.
+    assert_eq!(watch_as(&ctx, "bridge-b", "thread-2", true), "watching");
+    let squat = WakeWatcher::bridge_id("thread-2", "bridge-b");
+    let register = format!(r#"{{"session_id":"{squat}","cwd":"/repo"}}"#);
+    daemon::hooks::dispatch(
+        "/hook/session-register",
+        "harness=claude",
+        register.as_bytes(),
+        &ctx,
+    )
+    .expect("a known route");
+    let squatter_on_roster = internal
+        .exec_query(GetAllSessions {})
+        .unwrap_or_default()
+        .iter()
+        .any(|s| s.id.0.as_ref() == squat);
+    assert!(!squatter_on_roster, "an id with '#' must not register");
+    let begun = daemon::hooks::begin_wait("harness=claude", register.as_bytes(), &ctx);
+    assert!(begun.is_none(), "an id with '#' can't hold a wait");
+    daemon::hooks::mark_waiting_now(&internal, &squat);
+    daemon::hooks::end_wait(&internal, &squat);
+    let record = internal
+        .exec_query(GetAllWakeWatchers {})
+        .unwrap_or_default()
+        .into_iter()
+        .find(|w| w.id.0.as_ref() == squat)
+        .expect("the bridge's record is still there");
+    assert_eq!(
+        record.session(),
+        "thread-2",
+        "and still wakes its own session"
+    );
+    assert_eq!(send_wake(&ctx, "thread-2"), WakeStatus::Expected);
+    assert_eq!(
+        watch_as(&ctx, "bridge-b", "thread-2", false),
+        "not watching"
+    );
+
+    // When the session ends, every wake path to it goes.
+    daemon::hooks::mark_waiting_now(&internal, "both");
+    let ended = r#"{"session_id":"both"}"#;
+    daemon::hooks::dispatch("/hook/session-end", "", ended.as_bytes(), &ctx)
+        .expect("a known route");
+    let left: Vec<Arc<WakeWatcher>> = internal
+        .exec_query(GetAllWakeWatchers {})
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|w| w.session() == "both")
+        .collect();
+    assert!(
+        left.is_empty(),
+        "an ended session keeps no wake path: {left:?}"
+    );
 }

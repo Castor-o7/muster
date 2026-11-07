@@ -52,10 +52,12 @@ fn view(
                 .find(|n| n.id.0.as_ref() == id)
                 .map(|n| n.nickname.clone())
                 .unwrap_or_else(|| muster_entities::nickname(id));
+            // A session can have more than one wake path (MUS-94); the latest counts.
             let waiting_until = watchers
                 .iter()
-                .find(|w| w.id.0.as_ref() == id && w.until > now_ms)
-                .map(|w| w.until);
+                .filter(|w| w.session() == id && w.until > now_ms)
+                .map(|w| w.until)
+                .max();
             json!({
                 "session_id": id,
                 "nickname": nickname,
@@ -190,6 +192,7 @@ mod tests {
             Arc::new(WakeWatcher {
                 id: WakeWatcherId(Arc::from("a")),
                 until,
+                session_id: None,
             })
         };
         let v = view(&[session()], &[], &[watcher(101)], &[], 100);

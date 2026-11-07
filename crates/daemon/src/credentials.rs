@@ -438,16 +438,22 @@ const BINDINGS_FILE: &str = "session-bindings";
 /// for a new session can't both win.
 static BINDINGS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// Whether a session id is one the daemon stores: 1 to 128 characters from
+/// `[A-Za-z0-9._-]`. It can sit on one line of the bindings file, and it can't
+/// contain the `#` that keys a Codex bridge's wake-path record (MUS-94), so no
+/// session can register an id that names another session's record.
+pub fn safe_session_id(session: &str) -> bool {
+    (1..=128).contains(&session.len())
+        && session
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+}
+
 /// Whether `machine` may act for `session`. The first paired machine to use a
 /// session owns it from then on. An id that can't be stored safely on one line
 /// is refused.
 pub fn claim_session(dir: &Path, machine: &str, session: &str) -> io::Result<bool> {
-    let safe = !session.is_empty()
-        && session.len() <= 128
-        && session
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'));
-    if !safe {
+    if !safe_session_id(session) {
         return Ok(false);
     }
     let _guard = BINDINGS_LOCK.lock().unwrap_or_else(|e| e.into_inner());

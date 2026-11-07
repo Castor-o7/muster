@@ -197,8 +197,11 @@ fn sweep_wake_watchers(ctx: &MykoServerContext) {
         .into_iter()
         .map(|(id, _)| id)
         .collect();
-    for (id, _) in watchers.entries().materialize().get() {
-        if !live.contains(&id)
+    for (id, item) in watchers.entries().materialize().get() {
+        // A bridge's record names its session; a held wait's is keyed by it (MUS-94).
+        let session = downcast_item::<WakeWatcher>(&item)
+            .map_or_else(|| id.clone(), |w| Arc::from(w.session()));
+        if !live.contains(&session)
             && let Err(e) = ctx.del_by_id(WakeWatcher::ENTITY_NAME_STATIC, &id)
         {
             log::warn!("[cleanup] removing wake watcher {id} failed: {e}");
@@ -337,10 +340,12 @@ fn sweep_once(ctx: &MykoServerContext, state: &mut SweepState) {
                 .materialize()
                 .get()
                 .into_iter()
-                .filter_map(|(id, item)| {
+                .filter_map(|(_, item)| {
+                    // Keyed by the session each record wakes, which isn't always the
+                    // record's id (MUS-94).
                     downcast_item::<WakeWatcher>(&item)
                         .filter(|w| w.until > now_ms)
-                        .map(|_| id)
+                        .map(|w| Arc::from(w.session()))
                 })
                 .collect()
         })
@@ -872,6 +877,7 @@ mod tests {
         let watcher = WakeWatcher {
             id: muster_entities::WakeWatcherId(Arc::from(id)),
             until,
+            session_id: None,
         };
         let ev = MEvent::from_item(&watcher, MEventType::SET, &Uuid::new_v4().to_string());
         ctx.apply_event_batch(vec![ev])
