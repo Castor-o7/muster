@@ -180,6 +180,12 @@ Merged and needing a live run: MUS-36 and MUS-37.
   `crates/daemon/tests/identity_quiet.rs`, which fails without the fix. The `claude-tls` cells'
   CI failures predate any daemon log, so it isn't known whether they share this cause. The cells
   stay on `FLAKY` until they pass in CI on three PRs in a row, as above.
+- [ ] **MUS-115: MUS-93's cells come off `FLAKY` after three green PRs in a row.** Split from
+  MUS-93 at the watchman's read of #200, which verified the cause and the fix. Done when: `claude`
+  and `claude-tls` × `restart-keeps-identity`, and `claude-tls` × `unread-mail-follows-a-restart`,
+  have passed in CI on three PRs in a row after #200, and come off `FLAKY`; and whether the
+  `claude-tls` failures share MUS-93's cause is checked from a failing run's daemon log, if one
+  comes, or said to be unknown.
 - [x] **MUS-47: Hand unread mail to a successor.** From MUS-31. Retained mail reaches
   nobody without this. Depends on MUS-3. Done when: a session taking over an identity
   receives its predecessor's unread mail, shown by a test.
