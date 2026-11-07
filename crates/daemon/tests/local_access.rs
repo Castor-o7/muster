@@ -52,7 +52,8 @@ fn post(target: &str, extra_headers: &str) -> String {
     )
 }
 
-fn start_hook_listener() -> SocketAddr {
+/// The listener's address, and its state dir, removed when the test drops it.
+fn start_hook_listener() -> (SocketAddr, tempfile::TempDir) {
     muster_entities::link();
     daemon::link();
     let blackhole: Arc<dyn Persister> = Arc::new(BlackholePersister);
@@ -62,10 +63,9 @@ fn start_hook_listener() -> SocketAddr {
     let ctx = server.ctx();
     let _server: &'static MykoServer = Box::leak(Box::new(server));
     let addr: SocketAddr = format!("127.0.0.1:{}", pick_free_port()).parse().unwrap();
-    let state_dir = std::env::temp_dir().join(format!("muster-local-access-{}", addr.port()));
-    std::fs::create_dir_all(&state_dir).unwrap();
+    let state = tempfile::tempdir().unwrap();
     let access = Arc::new(daemon::http_listener::Access {
-        state_dir,
+        state_dir: state.path().to_path_buf(),
         local_token: TOKEN.to_string(),
     });
     thread::spawn(move || {
@@ -78,12 +78,12 @@ fn start_hook_listener() -> SocketAddr {
         });
     });
     wait_listening(addr);
-    addr
+    (addr, state)
 }
 
 #[test]
 fn hook_listener_refuses_browsers_and_admits_the_local_token() {
-    let addr = start_hook_listener();
+    let (addr, _state) = start_hook_listener();
     // A page's fetch or form post names its origin.
     assert!(
         status_of(
@@ -126,7 +126,8 @@ fn hook_listener_refuses_browsers_and_admits_the_local_token() {
     );
 }
 
-fn start_local_gate() -> SocketAddr {
+/// The gate's address, and its state dir, removed when the test drops it.
+fn start_local_gate() -> (SocketAddr, tempfile::TempDir) {
     // A stand-in for myko: answers any upgrade with 101.
     let upstream = StdListener::bind("127.0.0.1:0").unwrap();
     let upstream_addr = upstream.local_addr().unwrap();
@@ -140,9 +141,8 @@ fn start_local_gate() -> SocketAddr {
         }
     });
     let addr: SocketAddr = format!("127.0.0.1:{}", pick_free_port()).parse().unwrap();
-    let state_dir: PathBuf =
-        std::env::temp_dir().join(format!("muster-local-gate-{}", addr.port()));
-    std::fs::create_dir_all(&state_dir).unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let state_dir: PathBuf = state.path().to_path_buf();
     thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -163,7 +163,7 @@ fn start_local_gate() -> SocketAddr {
         });
     });
     wait_listening(addr);
-    addr
+    (addr, state)
 }
 
 fn upgrade(target: &str, extra_headers: &str) -> String {
@@ -175,7 +175,7 @@ fn upgrade(target: &str, extra_headers: &str) -> String {
 
 #[test]
 fn local_gate_refuses_browsers_and_admits_the_local_token() {
-    let addr = start_local_gate();
+    let (addr, _state) = start_local_gate();
     // A page's WebSocket carries its origin, token or not.
     assert!(
         status_of(
