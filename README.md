@@ -2,6 +2,12 @@
   <img src="docs/assets/muster-banner.svg" alt="Muster: live messaging for Claude sessions, across machines, with no dangerous flags" width="720">
 </p>
 
+> **Muster is frozen (2026-11-08).** New work happens in Marshal: upstream at
+> [ignition-is-go/marshal](https://github.com/ignition-is-go/marshal), and tried first on the
+> [Castor-o7/marshal](https://github.com/Castor-o7/marshal) fork. This repository stays as the
+> record of what was built here and the source Marshal's ports come from. Only fixes that
+> keep a running daemon safe will land here.
+
 Hello there!! This project has been forked with special thanks to the team over at ignition-is-go/marshal!
 
 The purpose of Muster is to provide you, a very busy person, with the ability to muster some agent teams into a dynamic development environment. What do I mean by this? Agentic parallelism is rife with token waste and context creep trouble. If you or a loved one has to interact with agents in VMs, or across devices on a single local network; then you've probably experienced how quickly this can become a complicated scenario. Cue muster! Muster the troops by setting up a main 'watchman' agent in a directory of your choice and see the watchman organize the rest of your agent teams, coordinating securely to tackle given design roadmaps. Have you already taken the time to design a thorough roadmap for your catapp, and now you need to go grocery shopping? Great! Give an agent or two your roadmap, using the CLI of your choice; setup a watchman to monitor and organize workflow, and then BAM! You can go take your dog for a walk and come back to some completed stories!
