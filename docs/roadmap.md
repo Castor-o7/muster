@@ -1,5 +1,9 @@
 # Muster roadmap
 
+**Frozen 2026-11-08 by the operator.** No new stories are claimed here. Open stories carry
+on as Marshal stories (project MAR) where they still matter; the plan is the
+[Castor fork's roadmap](https://github.com/Castor-o7/marshal/blob/main/docs/roadmap.md).
+
 Goal: Claude sessions on different machines message each other live, including
 waking idle sessions, without `--dangerously-load-development-channels`, and
 Muster is secure and portable enough to run unattended.
