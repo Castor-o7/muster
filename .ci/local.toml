@@ -1,8 +1,10 @@
 # Muster's CI, run on Murph by ci-local (Castor-o7/rally RAL-144, docs/ci-local.md there).
-# One entry per job in .github/workflows/ci.yml, which now runs only by hand. Each posts
-# `local/<job>`; `check` is the one main's ruleset requires.
+# One entry per job in .github/workflows/ci.yml, which still runs on GitHub too. Each posts
+# `local/<job>`, alongside Actions' `check`, which stays the one main's ruleset requires.
 
 workflows = ["ci.yml"]
+# Josh, 2026-11-11: run both. Muster is public, so GitHub's standard runners bill nothing.
+hosted_runs = "public repository: GitHub's standard hosted runners bill nothing"
 
 # The workspace checks and the end-to-end scripts.
 [jobs.tests]
@@ -66,7 +68,7 @@ cargo build --workspace && cargo test -p muster-shim --test conformance -- --ign
 needs = ["tests", "conformance"]
 
 [jobs.macos]
-manual = "macOS (MUS-13): run the workflow by hand; hosted macOS bills nothing on a public repo"
+manual = "macOS (MUS-13): runs on GitHub's hosted macOS, which bills nothing on a public repo"
 
 # muster-shim's #[cfg(windows)] code, cross-compiled.
 [jobs.windows-cross-check]

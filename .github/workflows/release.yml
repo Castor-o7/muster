@@ -4,20 +4,14 @@ name: Release
 # needs a Rust toolchain to install. scripts/install-codex.sh fetches
 # releases/latest/download/muster-shim-<target>, so the assets are raw binaries with those names.
 #
-# Run by hand only (Castor-o7/rally RAL-144: no workflow runs on its own; hosted runners bill
-# nothing on this public repository):
-# - `gh workflow run release.yml --ref <branch or tag>` builds everything and uploads it as a
-#   workflow artifact only: a dry run that touches no release and no tag.
-# - `gh workflow run release.yml --ref v1.2.3 -f draft_release=true`, on a `v*` tag, does the same,
-#   then creates a DRAFT release with the files attached (what pushing the tag used to do). Nothing
+# - workflow_dispatch builds everything and uploads it as a workflow artifact only: a dry run that
+#   touches no release and no tag.
+# - Pushing a `v*` tag does the same, then creates a DRAFT release with the files attached. Nothing
 #   is public until someone publishes the draft by hand.
 on:
+  push:
+    tags: ["v*"]
   workflow_dispatch:
-    inputs:
-      draft_release:
-        description: "On a v* tag: also create a draft release with the files"
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -121,7 +115,7 @@ jobs:
 
   release:
     needs: package
-    if: inputs.draft_release && startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

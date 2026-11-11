@@ -1,9 +1,10 @@
 name: CI
 
-# CI runs on Murph now (Castor-o7/rally RAL-144): ci-local runs these jobs from .ci/local.toml
-# and posts `local/<job>`. This workflow stays only to be run by hand (the macOS job above all).
 on:
-  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
 
 env:
   CARGO_TERM_COLOR: always
