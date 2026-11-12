@@ -26,6 +26,9 @@ command -v nc >/dev/null || { echo "the end-to-end scripts need nc (openbsd-netc
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+# The end-to-end scripts run ./target/debug/<binary>, but ci-local builds into $CARGO_TARGET_DIR
+# under ~/.cache/ci (kept between runs). The checkout is fresh each run, so point ./target there.
+ln -sfn "$CARGO_TARGET_DIR" target
 cargo build --workspace && ./scripts/test-gate-e2e.sh
 ./scripts/test-links-e2e.sh
 sh scripts/test-install-codex.sh
